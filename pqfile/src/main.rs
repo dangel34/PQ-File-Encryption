@@ -54,11 +54,11 @@ fn inspect(input: &std::path::Path) -> Result<(), PqfileError> {
     let mut reader = BufReader::new(file);
     let header = format::PqfHeader::read(&mut reader)?;
 
-    println!("Magic:             PQFL");
-    println!("Version:           {:#04x}", format::VERSION);
-    println!("KEM variant:       {}", format::KEM_VARIANT);
+    println!("Magic:              PQFL");
+    println!("Version:            {:#04x}", format::VERSION);
+    println!("KEM variant:        {}", format::KEM_VARIANT);
     println!(
-        "Nonce:             {}",
+        "Nonce:              {}",
         header
             .nonce
             .iter()

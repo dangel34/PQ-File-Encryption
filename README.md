@@ -218,7 +218,6 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | rand_core          | 0.6     | CryptoRngCore trait used by ml-kem              |
 | zeroize            | 1       | Overwrite secret bytes in memory on drop        |
 | pem                | 3       | PEM encoding and decoding for key files         |
-| base64             | 0.22    | Base64 utilities                                |
 | clap               | 4       | Command-line argument parsing with derive macros|
 | thiserror          | 1       | Ergonomic custom error type derivation          |
 
