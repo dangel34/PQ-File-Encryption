@@ -1,0 +1,41 @@
+[package]
+name = "pqfile"
+version = "0.1.0"
+edition = "2021"
+description = "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
+license = "MIT"
+
+[[bin]]
+name = "pqfile"
+path = "src/main.rs"
+
+[dependencies]
+ml-kem = { version = "0.2", features = ["deterministic", "zeroize"] }
+chacha20poly1305 = "0.10"
+rand = "0.8"
+rand_core = "0.6"
+zeroize = { version = "1", features = ["derive"] }
+pem = "3"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[package.metadata.deb]
+maintainer = "Derek <cheery.09.purine@icloud.com>"
+copyright = "2025"
+license-file = ["LICENSE", "0"]
+extended-description = "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+  ["target/release/pqfile", "usr/bin/", "755"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/pqfile", dest = "/usr/bin/pqfile", mode = "755" },
+]
