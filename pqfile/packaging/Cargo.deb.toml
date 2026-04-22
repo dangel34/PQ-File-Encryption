@@ -1,0 +1,16 @@
+[package.metadata.deb]
+maintainer = "Derek <derek@nappi.work>"
+copyright = "2025"
+license-file = ["LICENSE", "0"]
+extended-description = "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+  ["target/release/pqfile", "usr/bin/", "755"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/pqfile", dest = "/usr/bin/pqfile", mode = "755" },
+]

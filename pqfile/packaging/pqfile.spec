@@ -1,0 +1,23 @@
+Name:           pqfile
+Version:        0.1.0
+Release:        1%{?dist}
+Summary:        Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305
+
+License:        MIT
+URL:            https://github.com/example/pqfile
+
+%description
+pqfile is a command-line tool for quantum-resistant file encryption
+and decryption using hybrid encryption: ML-KEM-768 key encapsulation
+(NIST FIPS 203) combined with ChaCha20-Poly1305 authenticated
+symmetric encryption.
+
+%install
+install -D -m 755 %{_builddir}/pqfile %{buildroot}%{_bindir}/pqfile
+
+%files
+%{_bindir}/pqfile
+
+%changelog
+* Tue Apr 22 2025 Derek <derek@nappi.work> - 0.1.0-1
+- Initial release
