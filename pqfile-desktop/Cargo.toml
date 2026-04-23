@@ -1,0 +1,12 @@
+[package]
+name = "pqfile-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pqfile-gui"
+path = "src/main.rs"
+
+[dependencies]
+pqfile-gui = { path = "../pqfile-gui" }
+eframe = "0.29"
