@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 use chacha20poly1305::{
@@ -18,8 +17,21 @@ use crate::error::PqfileError;
 use crate::format::{KEM_CT_LEN, NONCE_LEN, PqfHeader};
 
 pub fn encrypt(pubkey_path: &Path, input_path: &Path) -> Result<(), PqfileError> {
-    let pem_data = fs::read_to_string(pubkey_path)?;
-    let pem = pem::parse(&pem_data).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+    let pubkey_pem = fs::read_to_string(pubkey_path)?;
+    let plaintext = fs::read(input_path)?;
+    let output = encrypt_bytes(&pubkey_pem, &plaintext)?;
+
+    let output_path = {
+        let mut s = input_path.as_os_str().to_owned();
+        s.push(".pqf");
+        std::path::PathBuf::from(s)
+    };
+    fs::write(&output_path, output)?;
+    Ok(())
+}
+
+pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, PqfileError> {
+    let pem = pem::parse(pubkey_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
 
     type EkType = EncapsulationKey<MlKem768Params>;
     let raw = pem.contents();
@@ -39,30 +51,19 @@ pub fn encrypt(pubkey_path: &Path, input_path: &Path) -> Result<(), PqfileError>
     let mut nonce_bytes = [0u8; NONCE_LEN];
     rng.fill_bytes(&mut nonce_bytes);
 
-    let plaintext = fs::read(input_path)?;
     let original_size = plaintext.len() as u64;
 
     let key = Key::from_slice(ss_bytes.as_ref());
     let nonce = Nonce::from_slice(&nonce_bytes);
     let cipher = ChaCha20Poly1305::new(key);
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_ref())
+        .encrypt(nonce, plaintext)
         .map_err(|_| PqfileError::KemEncapsulation)?;
 
-    let output_path = {
-        let mut s = input_path.as_os_str().to_owned();
-        s.push(".pqf");
-        std::path::PathBuf::from(s)
-    };
+    let header = PqfHeader { kem_ciphertext: kem_ct, nonce: nonce_bytes, original_size };
+    let mut output = Vec::new();
+    header.write(&mut output)?;
+    output.extend_from_slice(&ciphertext);
 
-    let mut out_file = fs::File::create(&output_path)?;
-    let header = PqfHeader {
-        kem_ciphertext: kem_ct,
-        nonce: nonce_bytes,
-        original_size,
-    };
-    header.write(&mut out_file)?;
-    out_file.write_all(&ciphertext)?;
-
-    Ok(())
+    Ok(output)
 }

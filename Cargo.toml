@@ -1,0 +1,3 @@
+[workspace]
+members = ["pqfile", "pqfile-gui"]
+resolver = "2"
