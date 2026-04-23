@@ -51,15 +51,18 @@ PQ-File-Encryption/
 │   └── packaging/
 │       ├── Cargo.deb.toml  Debian package metadata
 │       └── pqfile.spec     RPM spec for Fedora/RHEL
-└── pqfile-gui/             Native desktop + web GUI
-    ├── Cargo.toml          crate-type = ["cdylib", "rlib"]
-    ├── index.html          Canvas page for the web build
+├── pqfile-gui/             Shared GUI logic + WASM web app
+│   ├── Cargo.toml          crate-type = ["cdylib", "rlib"]
+│   ├── index.html          Canvas page for trunk/WASM builds
+│   └── src/
+│       └── lib.rs          App logic and WASM entry point
+└── pqfile-desktop/         Native desktop binary
+    ├── Cargo.toml          Depends on pqfile-gui and eframe
     └── src/
-        ├── main.rs         Native desktop entry point
-        └── lib.rs          Shared app logic + WASM entry point
+        └── main.rs         Native entry point (12 lines)
 ```
 
-The `pqfile` crate is both a library (exposing `encrypt_bytes`, `decrypt_bytes`, `keygen_bytes`) and a CLI binary. The `pqfile-gui` crate compiles to a native binary via `src/main.rs` and to a WASM module via `src/lib.rs`, both sharing the same GUI code.
+The `pqfile` crate is both a library (exposing `encrypt_bytes`, `decrypt_bytes`, `keygen_bytes`) and a CLI binary. The `pqfile-gui` crate is a lib-only crate: it compiles to a `cdylib` for WASM deployment and an `rlib` for the native binary to link against. The `pqfile-desktop` crate is the native binary; it contains only the entry point and links against `pqfile-gui`. This separation follows the official eframe template pattern and avoids build artifact conflicts between the lib and binary targets.
 
 ---
 
@@ -334,17 +337,24 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | clap             | 4       | Command-line argument parsing with derive macros |
 | thiserror        | 1       | Ergonomic custom error type derivation           |
 
-### pqfile-gui (GUI)
+### pqfile-gui (shared GUI logic and WASM lib)
 
-| Crate                | Version | Purpose                                    |
-|----------------------|---------|--------------------------------------------|
-| eframe               | 0.29    | egui native and WebGL/WASM app framework   |
-| rfd                  | 0.14    | Native and async (WASM) file dialogs       |
-| wasm-bindgen         | 0.2     | Rust/WASM bindings (WASM only)             |
-| wasm-bindgen-futures | 0.4     | Async bridge for WASM (WASM only)          |
+| Crate                | Version | Purpose                                        |
+|----------------------|---------|------------------------------------------------|
+| eframe               | 0.29    | egui app framework (native via rlib, WASM via cdylib) |
+| rfd                  | 0.14    | Native sync and WASM async file dialogs        |
+| wasm-bindgen         | 0.2     | Rust/WASM bindings (WASM only)                 |
+| wasm-bindgen-futures | 0.4     | Async bridge for WASM (WASM only)              |
 | web-sys              | 0.3     | Browser DOM APIs for file download (WASM only) |
-| js-sys               | 0.3     | JavaScript types for WASM (WASM only)      |
-| getrandom            | 0.2     | JS entropy source for WASM crypto (WASM only) |
+| js-sys               | 0.3     | JavaScript types for WASM (WASM only)          |
+| getrandom            | 0.2     | JS entropy source for WASM crypto (WASM only)  |
+
+### pqfile-desktop (native binary)
+
+| Crate      | Version | Purpose                                  |
+|------------|---------|------------------------------------------|
+| pqfile-gui | local   | Shared GUI app logic (linked as rlib)    |
+| eframe     | 0.29    | Native window creation and event loop    |
 
 ---
 
