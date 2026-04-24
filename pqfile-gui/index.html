@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Post-quantum file encryption using ML-KEM-768 + ChaCha20-Poly1305. All encryption runs in your browser — no files are uploaded." />
+  <meta name="theme-color" content="#1a1a2e" />
   <title>pqfile — Quantum-Resistant File Encryption</title>
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
     html, body {
       margin: 0;
       padding: 0;
@@ -12,6 +15,39 @@
       height: 100%;
       overflow: hidden;
       background: #1a1a2e;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #e0e0e0;
+    }
+    #loader {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25rem;
+      background: #1a1a2e;
+      z-index: 10;
+      transition: opacity 0.25s ease;
+    }
+    #loader.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top-color: #7c9adf;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loader-label {
+      margin: 0;
+      font-size: 0.85rem;
+      opacity: 0.5;
+      letter-spacing: 0.02em;
     }
     canvas {
       display: block;
@@ -21,6 +57,20 @@
   </style>
 </head>
 <body>
+  <div id="loader">
+    <div class="spinner"></div>
+    <p class="loader-label">Loading pqfile…</p>
+  </div>
   <canvas id="pqfile_canvas"></canvas>
+  <script>
+    // Hide the loading overlay once eframe has sized the canvas.
+    const canvas = document.getElementById('pqfile_canvas');
+    const loader = document.getElementById('loader');
+    new ResizeObserver(() => {
+      if (canvas.width > 0) {
+        loader.classList.add('hidden');
+      }
+    }).observe(canvas);
+  </script>
 </body>
 </html>

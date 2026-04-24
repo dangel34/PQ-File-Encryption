@@ -58,10 +58,10 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
     let cipher = ChaCha20Poly1305::new(key);
     let ciphertext = cipher
         .encrypt(nonce, plaintext)
-        .map_err(|_| PqfileError::KemEncapsulation)?;
+        .map_err(|_| PqfileError::EncryptionFailure)?;
 
     let header = PqfHeader { kem_ciphertext: kem_ct, nonce: nonce_bytes, original_size };
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(1115 + plaintext.len() + 16);
     header.write(&mut output)?;
     output.extend_from_slice(&ciphertext);
 
