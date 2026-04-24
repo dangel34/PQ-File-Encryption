@@ -20,6 +20,9 @@ pub enum PqfileError {
     #[error("KEM decapsulation error")]
     KemDecapsulation,
 
+    #[error("encryption failure")]
+    EncryptionFailure,
+
     #[error("decryption failure: authentication tag mismatch")]
     DecryptionFailure,
 
