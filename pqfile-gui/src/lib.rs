@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, Color32, Margin, RichText, Rounding, Stroke, Vec2};
 use pqfile::{decrypt, encrypt, format, keygen};
+use zeroize::Zeroizing;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -125,7 +126,7 @@ type Pending = Arc<Mutex<Option<PickedFile>>>;
 
 struct FileInput {
     name: String,
-    data: Option<Vec<u8>>,
+    data: Option<Zeroizing<Vec<u8>>>,
     path: Option<PathBuf>,
     pending: Pending,
 }
@@ -147,7 +148,7 @@ impl FileInput {
             && let Some(f) = g.take()
         {
             self.name = f.name;
-            self.data = Some(f.data);
+            self.data = Some(Zeroizing::new(f.data));
             self.path = f.path;
         }
     }
@@ -557,7 +558,7 @@ impl PqfileApp {
 
             let loaded = FileInput {
                 name,
-                data: Some(data),
+                data: Some(Zeroizing::new(data)),
                 path,
                 pending: Arc::new(Mutex::new(None)),
             };
@@ -641,7 +642,7 @@ impl PqfileApp {
                             kv_row(ui, "Symmetric cipher",  "ChaCha20-Poly1305  (RFC 8439)", dark);
                             kv_row(ui, "AEAD mode",         "STREAM  (64 KB chunks)", dark);
                             kv_row(ui, "Randomness",        "OS CSPRNG  (OsRng)", dark);
-                            kv_row(ui, "File format",       ".pqf  (v0x03, 1111-byte header)", dark);
+                            kv_row(ui, "File format",       ".pqf  (v0x03, 1110-byte header)", dark);
                         });
 
                         ui.add_space(10.0);
@@ -754,8 +755,17 @@ impl PqfileApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         let dir = std::path::Path::new(&self.keygen_dir);
+                        let priv_path = dir.join("privkey.pem");
                         let r1 = std::fs::write(dir.join("pubkey.pem"), pub_pem.as_bytes());
-                        let r2 = std::fs::write(dir.join("privkey.pem"), priv_pem.as_bytes());
+                        let r2 = std::fs::write(&priv_path, priv_pem.as_bytes());
+                        #[cfg(unix)]
+                        if r2.is_ok() {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = std::fs::set_permissions(
+                                &priv_path,
+                                std::fs::Permissions::from_mode(0o600),
+                            );
+                        }
                         self.keygen_status = match (r1, r2) {
                             (Ok(()), Ok(())) => OpStatus::Ok(format!(
                                 "Keys saved to {}",
@@ -849,7 +859,7 @@ impl PqfileApp {
 
             match (pub_pem, plain) {
                 (Some(pub_pem), Some(plain)) => {
-                    match encrypt::encrypt_bytes(&pub_pem, &plain) {
+                    match encrypt::encrypt_bytes(&pub_pem, plain.as_slice()) {
                         Ok(pqf) => {
                             let out_name = format!("{plain_name}.pqf");
                             let out_path = plain_path.map(|p| {
@@ -933,7 +943,7 @@ impl PqfileApp {
 
             match (priv_pem, pqf) {
                 (Some(priv_pem), Some(pqf)) => {
-                    match decrypt::decrypt_bytes(&priv_pem, &pqf) {
+                    match decrypt::decrypt_bytes(&priv_pem, pqf.as_slice()) {
                         Ok(plain) => {
                             let out_name = PathBuf::from(&pqf_name)
                                 .file_stem()
@@ -1370,27 +1380,58 @@ fn trigger_update_install(version: String, result: Arc<Mutex<Option<Result<(), S
 #[cfg(not(target_arch = "wasm32"))]
 fn do_install(version: &str) -> Result<(), String> {
     use std::io::Read;
+    use sha2::{Digest, Sha256};
 
     let asset = platform_asset_name()
         .ok_or_else(|| "No prebuilt release for this platform/architecture.".to_owned())?;
 
+    // Download the checksum manifest first.
+    let checksum_url = format!(
+        "https://github.com/{GITHUB_REPO}/releases/download/v{version}/checksums.sha256"
+    );
+    let checksum_body = ureq::get(&checksum_url)
+        .set("User-Agent", &format!("pqfile/{APP_VERSION}"))
+        .call()
+        .map_err(|e| format!("Could not fetch checksums: {e}"))?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+
+    // Parse the expected hash for this platform's asset.
+    let expected_hash = checksum_body
+        .lines()
+        .find_map(|line| {
+            let (hash, name) = line.split_once("  ")?;
+            if name.trim() == asset { Some(hash.to_owned()) } else { None }
+        })
+        .ok_or_else(|| format!("No checksum entry for {asset} in release manifest."))?;
+
+    // Download the binary.
     let url = format!(
         "https://github.com/{GITHUB_REPO}/releases/download/v{version}/{asset}"
     );
-
-    let response = ureq::get(&url)
+    let mut bytes = Vec::new();
+    ureq::get(&url)
         .set("User-Agent", &format!("pqfile/{APP_VERSION}"))
         .call()
-        .map_err(|e| e.to_string())?;
-
-    let mut bytes = Vec::new();
-    response
+        .map_err(|e| e.to_string())?
         .into_reader()
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
 
+    // Verify SHA-256 before touching the filesystem.
+    let actual_hash = format!("{:x}", Sha256::digest(&bytes));
+    if actual_hash != expected_hash {
+        return Err(format!(
+            "Checksum mismatch — download may be corrupted.\nExpected: {expected_hash}\nGot:      {actual_hash}"
+        ));
+    }
+
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let temp_path = current_exe.with_extension("update_tmp");
+    let temp_path = {
+        let mut s = current_exe.as_os_str().to_owned();
+        s.push(".update_tmp");
+        std::path::PathBuf::from(s)
+    };
 
     std::fs::write(&temp_path, &bytes).map_err(|e| e.to_string())?;
 

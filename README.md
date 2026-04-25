@@ -142,6 +142,14 @@ pqfile encrypt -r /path/to/keys/pubkey.pem secret.txt
 
 Produces `secret.txt.pqf` alongside the original file. The original is not removed. The output path is always the input path with `.pqf` appended.
 
+Multiple files can be encrypted in a single command:
+
+```
+pqfile encrypt -r /path/to/keys/pubkey.pem file1.txt file2.pdf report.docx
+```
+
+Each input produces a corresponding `.pqf` output. A status line is printed for each file.
+
 ### Decrypt a file
 
 ```
@@ -149,6 +157,12 @@ pqfile decrypt -k /path/to/keys/privkey.pem secret.txt.pqf
 ```
 
 Produces `secret.txt` (the `.pqf` extension is stripped). If the file has been tampered with, the command exits with an authentication tag mismatch error and writes no output.
+
+Multiple files can be decrypted in a single command:
+
+```
+pqfile decrypt -k /path/to/keys/privkey.pem file1.txt.pqf file2.pdf.pqf
+```
 
 ### Inspect a .pqf file
 
@@ -237,12 +251,16 @@ After running `trunk build --release` inside `pqfile-gui/`, the `dist/` folder c
 
 ### GitHub Pages
 
+The release workflow deploys the web app to GitHub Pages automatically on every version tag push. No manual deployment step is needed. Enable Pages in your repository settings by going to **Settings → Pages → Source → GitHub Actions** and then push a version tag.
+
+If you want to deploy a custom build manually (e.g. to a different repository):
+
 ```
 # From pqfile-gui/
 trunk build --release --public-url /your-repo-name/
 ```
 
-Push the `dist/` folder to the `gh-pages` branch, or configure Pages to serve from it.
+Then push the contents of `pqfile-gui/dist/` to whatever host you are using.
 
 ### Cloudflare Pages / Netlify / Vercel
 
@@ -344,6 +362,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | UnsupportedKem      | KEM variant field is not 768                          |
 | KemEncapsulation    | ML-KEM encapsulation failed                           |
 | KemDecapsulation    | ML-KEM decapsulation failed                           |
+| EncryptionFailure   | ChaCha20-Poly1305 encryption failed                   |
 | DecryptionFailure   | ChaCha20-Poly1305 authentication tag mismatch         |
 | InvalidPem          | PEM file could not be parsed                          |
 | InvalidKeyLength    | Decoded key bytes are the wrong length                |
@@ -373,7 +392,9 @@ All errors are reported to stderr with a descriptive message. The process exits 
 |----------------------|---------|------------------------------------------------|
 | eframe               | 0.29    | egui app framework (native via rlib, WASM via cdylib) |
 | rfd                  | 0.14    | Native sync and WASM async file dialogs        |
+| zeroize              | 1       | Overwrite decrypted file bytes in memory on drop |
 | ureq                 | 2       | HTTP client for update checks (native only)    |
+| sha2                 | 0.10    | SHA-256 checksum verification during self-update (native only) |
 | wasm-bindgen         | 0.2     | Rust/WASM bindings (WASM only)                 |
 | wasm-bindgen-futures | 0.4     | Async bridge for WASM (WASM only)              |
 | web-sys              | 0.3     | Browser DOM APIs for file download (WASM only) |

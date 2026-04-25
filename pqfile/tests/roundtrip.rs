@@ -48,7 +48,7 @@ fn tamper_detection() {
     let (pub_pem, priv_pem) = keygen::keygen_bytes().unwrap();
     let mut pqf = encrypt::encrypt_bytes(&pub_pem, original).unwrap();
 
-    // Flip a byte in the middle of the payload (past the 1111-byte header).
+    // Flip a byte in the middle of the payload (past the 1110-byte header).
     let tamper_pos = pqf.len() / 2;
     pqf[tamper_pos] ^= 0xff;
 

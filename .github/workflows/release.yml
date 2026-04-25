@@ -148,6 +148,28 @@ jobs:
         with:
           path: artifacts
 
+      - name: Rename artifacts to platform-specific names
+        run: |
+          mv artifacts/pqfile-linux-x86_64/pqfile           artifacts/pqfile-linux-x86_64/pqfile-linux-x86_64
+          mv artifacts/pqfile-macos-x86_64/pqfile           artifacts/pqfile-macos-x86_64/pqfile-macos-x86_64
+          mv artifacts/pqfile-windows-x86_64.exe/pqfile.exe artifacts/pqfile-windows-x86_64.exe/pqfile-windows-x86_64.exe
+          mv artifacts/pqfile-desktop-linux-x86_64/pqfile-desktop              artifacts/pqfile-desktop-linux-x86_64/pqfile-desktop-linux-x86_64
+          mv artifacts/pqfile-desktop-macos-x86_64/pqfile-desktop              artifacts/pqfile-desktop-macos-x86_64/pqfile-desktop-macos-x86_64
+          mv artifacts/pqfile-desktop-windows-x86_64.exe/pqfile-desktop.exe   artifacts/pqfile-desktop-windows-x86_64.exe/pqfile-desktop-windows-x86_64.exe
+
+      - name: Generate SHA-256 checksums
+        run: |
+          sha256sum \
+            artifacts/pqfile-linux-x86_64/pqfile-linux-x86_64 \
+            artifacts/pqfile-macos-x86_64/pqfile-macos-x86_64 \
+            artifacts/pqfile-windows-x86_64.exe/pqfile-windows-x86_64.exe \
+            artifacts/pqfile-desktop-linux-x86_64/pqfile-desktop-linux-x86_64 \
+            artifacts/pqfile-desktop-macos-x86_64/pqfile-desktop-macos-x86_64 \
+            artifacts/pqfile-desktop-windows-x86_64.exe/pqfile-desktop-windows-x86_64.exe \
+            artifacts/pqfile-web/pqfile-web.tar.gz \
+            | awk '{n=split($2,a,"/"); print $1 "  " a[n]}' \
+            > checksums.sha256
+
       - name: Display artifact tree
         run: find artifacts -type f
 
@@ -159,10 +181,11 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
-            artifacts/pqfile-linux-x86_64/pqfile
-            artifacts/pqfile-macos-x86_64/pqfile
-            artifacts/pqfile-windows-x86_64.exe/pqfile.exe
-            artifacts/pqfile-desktop-linux-x86_64/pqfile-desktop
-            artifacts/pqfile-desktop-macos-x86_64/pqfile-desktop
-            artifacts/pqfile-desktop-windows-x86_64.exe/pqfile-desktop.exe
+            artifacts/pqfile-linux-x86_64/pqfile-linux-x86_64
+            artifacts/pqfile-macos-x86_64/pqfile-macos-x86_64
+            artifacts/pqfile-windows-x86_64.exe/pqfile-windows-x86_64.exe
+            artifacts/pqfile-desktop-linux-x86_64/pqfile-desktop-linux-x86_64
+            artifacts/pqfile-desktop-macos-x86_64/pqfile-desktop-macos-x86_64
+            artifacts/pqfile-desktop-windows-x86_64.exe/pqfile-desktop-windows-x86_64.exe
             artifacts/pqfile-web/pqfile-web.tar.gz
+            checksums.sha256

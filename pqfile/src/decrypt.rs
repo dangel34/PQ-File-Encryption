@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Cursor;
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 use aead::{stream::DecryptorBE32, Payload};
@@ -11,19 +11,49 @@ use ml_kem::{
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
-use crate::format::{CHUNK_SIZE, KEM_CT_LEN, PqfHeader};
+use crate::format::{CHUNK_SIZE, HEADER_SIZE, KEM_CT_LEN, PqfHeader};
 
-pub fn decrypt(privkey_path: &Path, input_path: &Path) -> Result<(), PqfileError> {
-    let privkey_pem = fs::read_to_string(privkey_path)?;
-    let pqf_data = fs::read(input_path)?;
-    let plaintext = decrypt_bytes(&privkey_pem, &pqf_data)?;
-    let output_path = input_path.with_extension("");
-    fs::write(&output_path, &plaintext)?;
-    Ok(())
+/// Decrypt `input_path` to `output_path` using streaming AEAD with an atomic write.
+/// On failure the incomplete output is removed; the input is never modified.
+pub fn decrypt_file(priv_pem: &str, input_path: &Path, output_path: &Path) -> Result<(), PqfileError> {
+    let tmp_path = {
+        let mut s = output_path.as_os_str().to_owned();
+        s.push(".tmp");
+        std::path::PathBuf::from(s)
+    };
+
+    let mut reader = BufReader::new(fs::File::open(input_path)?);
+    let outcome = {
+        let mut writer = BufWriter::new(fs::File::create(&tmp_path)?);
+        let r = decrypt_stream(priv_pem, &mut reader, &mut writer, |_, _| {});
+        if r.is_ok()
+            && let Err(e) = writer.flush()
+        {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e.into());
+        }
+        r
+    };
+
+    match outcome {
+        Ok(()) => Ok(fs::rename(&tmp_path, output_path)?),
+        Err(e) => {
+            let _ = fs::remove_file(&tmp_path);
+            Err(e)
+        }
+    }
 }
 
-pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8]) -> Result<Vec<u8>, PqfileError> {
-    let pem = pem::parse(privkey_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+/// Core streaming decrypt. Reads a `.pqf` stream from `reader` and writes
+/// plaintext to `writer`. `on_progress(bytes_written, original_size)` is
+/// called after each chunk.
+pub fn decrypt_stream<R: Read, W: Write>(
+    priv_pem: &str,
+    reader: &mut R,
+    writer: &mut W,
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<(), PqfileError> {
+    let pem = pem::parse(priv_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
 
     type DkType = DecapsulationKey<MlKem768Params>;
     let raw = pem.contents();
@@ -32,11 +62,8 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8]) -> Result<Vec<u8>, Pqfi
         .map_err(|_| PqfileError::InvalidKeyLength { expected: 2400, got: raw.len() })?;
     let dk = DkType::from_bytes(&encoded);
 
-    let mut cursor = Cursor::new(pqf_data);
-    let header = PqfHeader::read(&mut cursor)?;
-
-    // Re-serialize the header to reconstruct the same AAD used during encryption.
-    let mut aad = Vec::with_capacity(1110);
+    let header = PqfHeader::read(reader)?;
+    let mut aad = Vec::with_capacity(HEADER_SIZE);
     header.write(&mut aad)?;
 
     let ct_slice = &header.kem_ciphertext[..];
@@ -47,33 +74,62 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8]) -> Result<Vec<u8>, Pqfi
     let mut ss_bytes = Zeroizing::new([0u8; 32]);
     ss_bytes.copy_from_slice(ss.as_slice());
 
-    let payload = &pqf_data[cursor.position() as usize..];
-
     let key = Key::from_slice(ss_bytes.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
     let stream_nonce = aead::generic_array::GenericArray::clone_from_slice(&header.nonce);
     let mut dec = DecryptorBE32::<ChaCha20Poly1305>::from_aead(cipher, &stream_nonce);
 
-    // Each encrypted chunk is CHUNK_SIZE plaintext + 16-byte tag.
+    let original_size = header.original_size;
     let chunk_ct_len = CHUNK_SIZE + 16;
-    let mut plaintext = Vec::with_capacity(header.original_size as usize);
-    let mut offset = 0usize;
 
-    while payload.len().saturating_sub(offset) > chunk_ct_len {
-        let ct_chunk = &payload[offset..offset + chunk_ct_len];
-        let pt = dec
-            .decrypt_next(Payload { msg: ct_chunk, aad: &aad })
+    if original_size == 0 {
+        // Empty plaintext: one empty last chunk = 16-byte tag only.
+        let mut buf = vec![0u8; 16];
+        reader.read_exact(&mut buf)?;
+        dec.decrypt_last(Payload { msg: &buf, aad: &aad })
             .map_err(|_| PqfileError::DecryptionFailure)?;
-        plaintext.extend_from_slice(&pt);
-        offset += chunk_ct_len;
+        on_progress(0, 0);
+        return Ok(());
     }
 
-    // Final (or only) chunk — consumes the decryptor.
-    let last_ct = &payload[offset..];
-    let last_pt = dec
-        .decrypt_last(Payload { msg: last_ct, aad: &aad })
-        .map_err(|_| PqfileError::DecryptionFailure)?;
-    plaintext.extend_from_slice(&last_pt);
+    // Number of encrypted chunks, and size of the final (possibly partial) chunk.
+    let num_chunks = original_size.div_ceil(CHUNK_SIZE as u64);
+    let last_plain_size = {
+        let r = original_size % CHUNK_SIZE as u64;
+        if r == 0 { CHUNK_SIZE as u64 } else { r }
+    };
+    let last_ct_size = last_plain_size as usize + 16;
 
-    Ok(plaintext)
+    let mut buf = vec![0u8; chunk_ct_len];
+    let mut plain_done: u64 = 0;
+
+    // All intermediate chunks — decrypt_next takes &mut self.
+    for _ in 0..(num_chunks - 1) {
+        reader.read_exact(&mut buf)?;
+        let pt = dec
+            .decrypt_next(Payload { msg: &buf, aad: &aad })
+            .map_err(|_| PqfileError::DecryptionFailure)?;
+        writer.write_all(&pt)?;
+        plain_done += pt.len() as u64;
+        on_progress(plain_done, original_size);
+    }
+
+    // Final chunk — decrypt_last consumes dec, so it must be outside the loop.
+    reader.read_exact(&mut buf[..last_ct_size])?;
+    let pt = dec
+        .decrypt_last(Payload { msg: &buf[..last_ct_size], aad: &aad })
+        .map_err(|_| PqfileError::DecryptionFailure)?;
+    writer.write_all(&pt)?;
+    plain_done += pt.len() as u64;
+    on_progress(plain_done, original_size);
+
+    Ok(())
+}
+
+/// In-memory wrapper used by the GUI and WASM target.
+pub fn decrypt_bytes(priv_pem: &str, pqf_data: &[u8]) -> Result<Vec<u8>, PqfileError> {
+    let mut reader = io::Cursor::new(pqf_data);
+    let mut output = Vec::new();
+    decrypt_stream(priv_pem, &mut reader, &mut output, |_, _| {})?;
+    Ok(output)
 }

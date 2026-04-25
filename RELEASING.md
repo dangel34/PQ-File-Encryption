@@ -31,6 +31,17 @@ The release workflow needs to create releases and push to Pages. This is usually
 3. Make sure **Read and write permissions** is selected.
 4. Click **Save**.
 
+### Allow tag deployments to the GitHub Pages environment
+
+By default, the `github-pages` environment only allows deployments from the default branch. Since the release workflow fires on a version tag (not a branch), you must explicitly allow this.
+
+1. In **Settings**, go to **Environments** in the left sidebar.
+2. Click **github-pages**.
+3. Under **Deployment branches and tags**, open the dropdown and select **All branches and tags**.
+4. Click **Save protection rules**.
+
+If you skip this step, the `deploy-pages` job will fail with: *"Tag 'vX.Y.Z' is not allowed to deploy to github-pages due to environment protection rules."* The other release jobs are not affected, but your Pages site will not be updated. You can fix this after a failed run by changing the setting and re-running just the `deploy-pages` job from the Actions tab — no need to re-push the tag.
+
 ---
 
 ## Step 1 — Push your code to GitHub
@@ -80,16 +91,16 @@ Open `pqfile/Cargo.toml` and `pqfile-gui/Cargo.toml`. Both should have the versi
 
 ```toml
 [package]
-version = "1.0.0"
+version = "1.0.1"
 ```
 
-They are currently both set to `1.0.0`. If that's the version you want, no change is needed. The version in these files is what gets baked into the compiled binaries and what the in-app update checker compares against.
+They are currently both set to `1.0.1`. If that's the version you want, no change is needed. The version in these files is what gets baked into the compiled binaries and what the in-app update checker compares against.
 
 If you need to change the version, edit both files, then commit and push:
 
 ```bash
 git add pqfile/Cargo.toml pqfile-gui/Cargo.toml Cargo.lock
-git commit -m "chore: bump version to 1.0.0"
+git commit -m "chore: bump version to 1.0.1"
 git push origin main
 ```
 
@@ -102,19 +113,19 @@ Wait for CI to go green again before continuing.
 Tags are what trigger the release workflow. The tag name **must start with `v`** — that is what `release.yml` listens for.
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
-The `git tag` command creates the tag on your current local commit. The `git push origin v1.0.0` sends it to GitHub, which immediately triggers the release workflow. Tags are not pushed by `git push` alone — you have to push them explicitly like this.
+The `git tag` command creates the tag on your current local commit. The `git push origin v1.0.1` sends it to GitHub, which immediately triggers the release workflow. Tags are not pushed by `git push` alone — you have to push them explicitly like this.
 
-To confirm the tag was pushed, go to your repository on GitHub, click the **Code** tab, then click the **Tags** link (near the branch dropdown). You should see `v1.0.0` listed.
+To confirm the tag was pushed, go to your repository on GitHub, click the **Code** tab, then click the **Tags** link (near the branch dropdown). You should see `v1.0.1` listed.
 
 ---
 
 ## Step 5 — Watch the release workflow
 
-Go to the **Actions** tab. You should now see a new workflow run named `Release` with the tag `v1.0.0`. Click it to open it.
+Go to the **Actions** tab. You should now see a new workflow run named `Release` with the tag `v1.0.1`. Click it to open it.
 
 The workflow has five jobs that run in a specific order:
 
@@ -156,20 +167,21 @@ While the workflow is running, each job shows a spinning indicator. A green chec
 
 Once all jobs are green, go to the **Releases** page of your repository (on the right side of the Code tab, under **Releases**, or navigate to `github.com/dangel34/PQ-File-Encryption/releases`).
 
-You should see a release named **pqfile v1.0.0** with:
+You should see a release named **pqfile v1.0.1** with:
 
 - Auto-generated release notes listing commits since the last release (on first release, this will list all commits)
-- Seven downloadable files attached:
+- Eight downloadable files attached:
 
 | File | What it is |
 |------|-----------|
-| `pqfile` (from linux artifact) | CLI binary for Linux |
-| `pqfile` (from macos artifact) | CLI binary for macOS |
-| `pqfile.exe` | CLI binary for Windows |
-| `pqfile-desktop` (from linux artifact) | Desktop GUI for Linux |
-| `pqfile-desktop` (from macos artifact) | Desktop GUI for macOS |
-| `pqfile-desktop.exe` | Desktop GUI for Windows |
+| `pqfile-linux-x86_64` | CLI binary for Linux |
+| `pqfile-macos-x86_64` | CLI binary for macOS |
+| `pqfile-windows-x86_64.exe` | CLI binary for Windows |
+| `pqfile-desktop-linux-x86_64` | Desktop GUI for Linux |
+| `pqfile-desktop-macos-x86_64` | Desktop GUI for macOS |
+| `pqfile-desktop-windows-x86_64.exe` | Desktop GUI for Windows |
 | `pqfile-web.tar.gz` | WASM web app (self-contained, can be served anywhere) |
+| `checksums.sha256` | SHA-256 hashes for all six binaries and the web archive |
 
 Download one or two of the binaries and confirm they work correctly on your machine.
 
@@ -183,10 +195,10 @@ If you pushed a tag too early (before CI was green, or with the wrong version nu
 
 ```bash
 # Delete the tag locally
-git tag -d v1.0.0
+git tag -d v1.0.1
 
 # Delete the tag on GitHub
-git push origin --delete v1.0.0
+git push origin --delete v1.0.1
 ```
 
 Then go to the **Releases** page on GitHub and delete any draft or partial release that was created. After that, fix whatever was wrong, push, wait for CI, and re-tag.
@@ -222,7 +234,7 @@ This project follows [Semantic Versioning](https://semver.org):
 
 | Change | Version bump | Example |
 |--------|-------------|---------|
-| Breaking change to `.pqf` format or key format | Major | `0.x.y` → `1.0.0` |
+| Breaking change to `.pqf` format or key format | Major | `0.x.y` → `1.0.1` |
 | New feature, backward-compatible | Minor | `1.0.x` → `1.1.0` |
 | Bug fix, documentation, dependency update | Patch | `1.1.0` → `1.1.1` |
 
@@ -238,7 +250,7 @@ When a user clicks **Check for Updates** in the Settings tab, `pqfile-desktop` c
 GET https://api.github.com/repos/dangel34/PQ-File-Encryption/releases/latest
 ```
 
-It reads `tag_name` from the response (e.g. `"v1.0.0"`), strips the `v`, and compares it to the version baked into the running binary (`CARGO_PKG_VERSION`). If the release version is newer, the app shows "Update available: v1.0.0".
+It reads `tag_name` from the response (e.g. `"v1.0.1"`), strips the `v`, and compares it to the version baked into the running binary (`CARGO_PKG_VERSION`). If the release version is newer, the app shows "Update available: v1.0.1".
 
 When the user clicks **Download & Install**, the app downloads the platform-specific binary directly from:
 

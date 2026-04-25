@@ -1,14 +1,13 @@
-mod decrypt;
-mod encrypt;
-mod error;
-mod format;
-mod keygen;
-
+use std::fs;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use error::PqfileError;
+use pqfile::decrypt;
+use pqfile::encrypt;
+use pqfile::error::PqfileError;
+use pqfile::format;
+use pqfile::keygen;
 
 #[derive(Parser)]
 #[command(name = "pqfile", about = "Quantum-resistant file encryption (ML-KEM-768 + ChaCha20-Poly1305)")]
@@ -19,20 +18,26 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Generate a new ML-KEM-768 key pair and write PEM files to a directory.
     Keygen {
         #[arg(long, value_name = "DIR")]
         out: PathBuf,
     },
+    /// Encrypt one or more files using a recipient's public key.
     Encrypt {
         #[arg(short = 'r', value_name = "PUBKEY")]
         recipient: PathBuf,
-        input: PathBuf,
+        #[arg(required = true, value_name = "INPUT")]
+        inputs: Vec<PathBuf>,
     },
+    /// Decrypt one or more .pqf files using a private key.
     Decrypt {
         #[arg(short = 'k', value_name = "PRIVKEY")]
         key: PathBuf,
-        input: PathBuf,
+        #[arg(required = true, value_name = "INPUT")]
+        inputs: Vec<PathBuf>,
     },
+    /// Display the header metadata of a .pqf file without decrypting it.
     Inspect {
         input: PathBuf,
     },
@@ -48,8 +53,28 @@ fn run() -> Result<(), PqfileError> {
             println!("fingerprint: {fingerprint}");
             Ok(())
         }
-        Command::Encrypt { recipient, input } => encrypt::encrypt(&recipient, &input),
-        Command::Decrypt { key, input } => decrypt::decrypt(&key, &input),
+        Command::Encrypt { recipient, inputs } => {
+            let pub_pem = fs::read_to_string(&recipient)?;
+            for input in &inputs {
+                let output = {
+                    let mut s = input.as_os_str().to_owned();
+                    s.push(".pqf");
+                    PathBuf::from(s)
+                };
+                encrypt::encrypt_file(&pub_pem, input, &output)?;
+                println!("Encrypted  {} → {}", input.display(), output.display());
+            }
+            Ok(())
+        }
+        Command::Decrypt { key, inputs } => {
+            let priv_pem = fs::read_to_string(&key)?;
+            for input in &inputs {
+                let output = input.with_extension("");
+                decrypt::decrypt_file(&priv_pem, input, &output)?;
+                println!("Decrypted  {} → {}", input.display(), output.display());
+            }
+            Ok(())
+        }
         Command::Inspect { input } => inspect(&input),
     }
 }

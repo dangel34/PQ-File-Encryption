@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile-desktop"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "eframe",
  "pqfile-gui",
@@ -2733,10 +2733,12 @@ dependencies = [
  "js-sys",
  "pqfile",
  "rfd",
+ "sha2",
  "ureq",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "zeroize",
 ]
 
 [[package]]

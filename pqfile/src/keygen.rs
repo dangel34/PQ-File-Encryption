@@ -15,8 +15,14 @@ const PRIV_TAG: &str = "ML-KEM-768 PRIVATE KEY";
 /// Generate a key pair, write PEM files to `out_dir`, and return the public-key fingerprint.
 pub fn keygen(out_dir: &Path) -> Result<String, PqfileError> {
     let (pub_pem, priv_pem) = keygen_bytes()?;
+    let priv_path = out_dir.join("privkey.pem");
     fs::write(out_dir.join("pubkey.pem"), pub_pem.as_bytes())?;
-    fs::write(out_dir.join("privkey.pem"), priv_pem.as_bytes())?;
+    fs::write(&priv_path, priv_pem.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&priv_path, fs::Permissions::from_mode(0o600))?;
+    }
     pubkey_fingerprint(&pub_pem)
 }
 
