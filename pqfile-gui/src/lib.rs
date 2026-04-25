@@ -112,7 +112,7 @@ enum UpdateStatus {
     Downloading,
     RestartRequired,
     InstallFailed(String),
-    Failed,
+    Failed(String),
 }
 
 struct PickedFile {
@@ -208,7 +208,7 @@ pub struct PqfileApp {
 
     update_status: UpdateStatus,
     #[cfg(not(target_arch = "wasm32"))]
-    update_result: Arc<Mutex<Option<Result<String, ()>>>>,
+    update_result: Arc<Mutex<Option<Result<String, String>>>>,
     #[cfg(not(target_arch = "wasm32"))]
     install_result: Arc<Mutex<Option<Result<(), String>>>>,
 }
@@ -485,7 +485,7 @@ impl PqfileApp {
                                 UpdateStatus::Available(latest)
                             }
                         }
-                        Err(()) => UpdateStatus::Failed,
+                        Err(e) => UpdateStatus::Failed(e),
                     };
                     return true;
                 }
@@ -1243,13 +1243,10 @@ impl PqfileApp {
                             .color(c_red(dark)),
                     );
                 }
-                UpdateStatus::Failed => {
+                UpdateStatus::Failed(e) => {
+                    let e = e.clone();
                     ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("Could not reach update server.")
-                            .size(12.0)
-                            .color(c_red(dark)),
-                    );
+                    ui.label(RichText::new(e).size(12.0).color(c_red(dark)));
                 }
             }
         });
@@ -1325,30 +1322,40 @@ impl PqfileApp {
 // ── Update check (native only) ─────────────────────────────────────────────
 
 #[cfg(not(target_arch = "wasm32"))]
-fn trigger_update_check(result: Arc<Mutex<Option<Result<String, ()>>>>) {
+fn trigger_update_check(result: Arc<Mutex<Option<Result<String, String>>>>) {
     std::thread::spawn(move || {
-        let url = format!(
-            "https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-        );
-        let outcome = ureq::get(&url)
-            .set("User-Agent", &format!("pqfile/{APP_VERSION}"))
-            .set("Accept", "application/vnd.github.v3+json")
-            .call()
-            .ok()
-            .and_then(|r| r.into_string().ok())
-            .and_then(|s| parse_tag_name(&s));
-
-        *result.lock().unwrap() = Some(outcome.ok_or(()));
+        let outcome = fetch_latest_version();
+        *result.lock().unwrap() = Some(outcome);
     });
 }
 
-/// Minimal JSON extraction of `"tag_name": "vX.Y.Z"` without a full parser.
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_latest_version() -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+    let response = ureq::get(&url)
+        .set("User-Agent", &format!("pqfile/{APP_VERSION}"))
+        .set("Accept", "application/vnd.github.v3+json")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(404, _) => "No releases published yet.".to_owned(),
+            ureq::Error::Status(code, _) => format!("Server returned {code}."),
+            e => format!("Network error: {e}"),
+        })?;
+    let body = response.into_string().map_err(|e| e.to_string())?;
+    parse_tag_name(&body).ok_or_else(|| "Could not parse release info.".to_owned())
+}
+
+/// Extracts the version from `"tag_name": "vX.Y.Z"` (with or without space after colon).
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_tag_name(json: &str) -> Option<String> {
-    let key = "\"tag_name\":\"";
-    let start = json.find(key)? + key.len();
-    let end = start + json[start..].find('"')?;
-    Some(json[start..end].trim_start_matches('v').to_owned())
+    let key_pos = json.find("\"tag_name\"")?;
+    let after_key = &json[key_pos + 10..]; // skip past "tag_name"
+    let colon = after_key.find(':')?;
+    let after_colon = &after_key[colon + 1..];
+    let open_quote = after_colon.find('"')?;
+    let value = &after_colon[open_quote + 1..];
+    let close_quote = value.find('"')?;
+    Some(value[..close_quote].trim_start_matches('v').to_owned())
 }
 
 // ── Self-update (native only) ──────────────────────────────────────────────
