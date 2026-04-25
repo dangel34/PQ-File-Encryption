@@ -18,7 +18,7 @@ Edit `pqfile/Cargo.toml` and `pqfile-gui/Cargo.toml`. Both should use the same v
 
 ```toml
 [package]
-version = "0.2.0"
+version = "1.0.0"
 ```
 
 Commit the bump:

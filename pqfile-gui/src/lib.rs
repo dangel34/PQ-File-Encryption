@@ -143,12 +143,12 @@ impl Default for FileInput {
 
 impl FileInput {
     fn poll(&mut self) {
-        if let Ok(mut g) = self.pending.try_lock() {
-            if let Some(f) = g.take() {
-                self.name = f.name;
-                self.data = Some(f.data);
-                self.path = f.path;
-            }
+        if let Ok(mut g) = self.pending.try_lock()
+            && let Some(f) = g.take()
+        {
+            self.name = f.name;
+            self.data = Some(f.data);
+            self.path = f.path;
         }
     }
     fn loaded(&self) -> bool { self.data.is_some() }
@@ -475,34 +475,34 @@ impl PqfileApp {
         // Drain update-check result on native.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Ok(mut g) = self.update_result.try_lock() {
-                if let Some(result) = g.take() {
-                    self.update_status = match result {
-                        Ok(latest) => {
-                            if latest == APP_VERSION {
-                                UpdateStatus::UpToDate
-                            } else {
-                                UpdateStatus::Available(latest)
-                            }
+            if let Ok(mut g) = self.update_result.try_lock()
+                && let Some(result) = g.take()
+            {
+                self.update_status = match result {
+                    Ok(latest) => {
+                        if latest == APP_VERSION {
+                            UpdateStatus::UpToDate
+                        } else {
+                            UpdateStatus::Available(latest)
                         }
-                        Err(e) => UpdateStatus::Failed(e),
-                    };
-                    return true;
-                }
+                    }
+                    Err(e) => UpdateStatus::Failed(e),
+                };
+                return true;
             }
         }
 
         // Drain install result on native.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Ok(mut g) = self.install_result.try_lock() {
-                if let Some(result) = g.take() {
-                    self.update_status = match result {
-                        Ok(()) => UpdateStatus::RestartRequired,
-                        Err(e) => UpdateStatus::InstallFailed(e),
-                    };
-                    return true;
-                }
+            if let Ok(mut g) = self.install_result.try_lock()
+                && let Some(result) = g.take()
+            {
+                self.update_status = match result {
+                    Ok(()) => UpdateStatus::RestartRequired,
+                    Err(e) => UpdateStatus::InstallFailed(e),
+                };
+                return true;
             }
         }
 
@@ -709,10 +709,9 @@ impl PqfileApp {
                                 .fill(c_surface0(dark)),
                         )
                         .clicked()
+                        && let Some(p) = rfd::FileDialog::new().pick_folder()
                     {
-                        if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                            self.keygen_dir = p.to_string_lossy().into_owned();
-                        }
+                        self.keygen_dir = p.to_string_lossy().into_owned();
                     }
                 });
             });
@@ -1593,14 +1592,14 @@ fn pick_file(pending: Pending, filter_name: &'static str, filter_exts: &'static 
         if !filter_exts.is_empty() {
             d = d.add_filter(filter_name, filter_exts);
         }
-        if let Some(path) = d.pick_file() {
-            if let Ok(data) = std::fs::read(&path) {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                *pending.lock().unwrap() = Some(PickedFile { name, data, path: Some(path) });
-            }
+        if let Some(path) = d.pick_file()
+            && let Ok(data) = std::fs::read(&path)
+        {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            *pending.lock().unwrap() = Some(PickedFile { name, data, path: Some(path) });
         }
     });
 
