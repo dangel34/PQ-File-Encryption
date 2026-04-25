@@ -3,10 +3,15 @@ use std::io::{Read, Write};
 use crate::error::PqfileError;
 
 pub const MAGIC: &[u8; 4] = b"PQFL";
-pub const VERSION: u8 = 0x01;
+pub const VERSION: u8 = 0x03;
 pub const KEM_VARIANT: u16 = 768;
 pub const KEM_CT_LEN: usize = 1088;
-pub const NONCE_LEN: usize = 12;
+/// Stream nonce for StreamBE32<ChaCha20Poly1305>: 12-byte cipher nonce minus 5-byte overhead = 7 bytes.
+pub const NONCE_LEN: usize = 7;
+/// Plaintext chunk size fed to each STREAM AEAD call.
+pub const CHUNK_SIZE: usize = 65536;
+/// Fixed header size in bytes: 4+1+2+1088+7+8 = 1110.
+pub const HEADER_SIZE: usize = 4 + 1 + 2 + KEM_CT_LEN + NONCE_LEN + 8;
 
 pub struct PqfHeader {
     pub kem_ciphertext: [u8; KEM_CT_LEN],
@@ -55,10 +60,6 @@ impl PqfHeader {
         r.read_exact(&mut size_bytes)?;
         let original_size = u64::from_le_bytes(size_bytes);
 
-        Ok(PqfHeader {
-            kem_ciphertext,
-            nonce,
-            original_size,
-        })
+        Ok(PqfHeader { kem_ciphertext, nonce, original_size })
     }
 }

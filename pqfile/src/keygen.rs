@@ -4,6 +4,7 @@ use std::path::Path;
 use ml_kem::{EncodedSizeUser, KemCore, MlKem768};
 use pem::Pem;
 use rand::rngs::OsRng;
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
@@ -11,11 +12,12 @@ use crate::error::PqfileError;
 const PUB_TAG: &str = "ML-KEM-768 PUBLIC KEY";
 const PRIV_TAG: &str = "ML-KEM-768 PRIVATE KEY";
 
-pub fn keygen(out_dir: &Path) -> Result<(), PqfileError> {
+/// Generate a key pair, write PEM files to `out_dir`, and return the public-key fingerprint.
+pub fn keygen(out_dir: &Path) -> Result<String, PqfileError> {
     let (pub_pem, priv_pem) = keygen_bytes()?;
     fs::write(out_dir.join("pubkey.pem"), pub_pem.as_bytes())?;
     fs::write(out_dir.join("privkey.pem"), priv_pem.as_bytes())?;
-    Ok(())
+    pubkey_fingerprint(&pub_pem)
 }
 
 pub fn keygen_bytes() -> Result<(String, String), PqfileError> {
@@ -29,4 +31,11 @@ pub fn keygen_bytes() -> Result<(String, String), PqfileError> {
     let priv_pem = pem::encode(&Pem::new(PRIV_TAG, (*priv_bytes).clone()));
 
     Ok((pub_pem, priv_pem))
+}
+
+/// Compute a short fingerprint of a public key PEM: first 8 bytes of SHA-256(raw key), hex-encoded.
+pub fn pubkey_fingerprint(pub_pem: &str) -> Result<String, PqfileError> {
+    let pem = pem::parse(pub_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+    let hash = Sha256::digest(pem.contents());
+    Ok(hash[..8].iter().map(|b| format!("{b:02x}")).collect())
 }

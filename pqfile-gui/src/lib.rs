@@ -10,7 +10,9 @@ use wasm_bindgen::prelude::*;
 
 // ── Version ────────────────────────────────────────────────────────────────
 
-const APP_VERSION: &str = "0.1.0";
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(not(target_arch = "wasm32"))]
+const GITHUB_REPO: &str = "dangel34/PQ-File-Encryption";
 
 // ── Catppuccin Mocha (dark) ────────────────────────────────────────────────
 
@@ -39,7 +41,6 @@ const L_GREEN: Color32    = Color32::from_rgb(64,  160, 43);
 const L_RED: Color32      = Color32::from_rgb(210, 15,  57);
 
 // ── Per-theme colour helpers ───────────────────────────────────────────────
-// Each takes dark: bool from ui.visuals().dark_mode or self.settings.dark_mode.
 
 fn c_bg(d: bool)       -> Color32 { if d { D_BASE }     else { L_BASE } }
 fn c_chrome(d: bool)   -> Color32 { if d { D_MANTLE }   else { L_MANTLE } }
@@ -98,6 +99,20 @@ enum OpStatus {
     None,
     Ok(String),
     Err(String),
+}
+
+#[derive(Default)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+enum UpdateStatus {
+    #[default]
+    Idle,
+    Checking,
+    UpToDate,
+    Available(String),
+    Downloading,
+    RestartRequired,
+    InstallFailed(String),
+    Failed,
 }
 
 struct PickedFile {
@@ -177,6 +192,7 @@ pub struct PqfileApp {
     #[cfg(not(target_arch = "wasm32"))]
     keygen_dir: String,
     keygen_status: OpStatus,
+    keygen_fingerprint: String,
 
     encrypt_pubkey: FileInput,
     encrypt_plain: FileInput,
@@ -189,6 +205,12 @@ pub struct PqfileApp {
     inspect_pqf: FileInput,
     inspect_result: String,
     inspect_status: OpStatus,
+
+    update_status: UpdateStatus,
+    #[cfg(not(target_arch = "wasm32"))]
+    update_result: Arc<Mutex<Option<Result<String, ()>>>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    install_result: Arc<Mutex<Option<Result<(), String>>>>,
 }
 
 impl Default for PqfileApp {
@@ -200,6 +222,7 @@ impl Default for PqfileApp {
             #[cfg(not(target_arch = "wasm32"))]
             keygen_dir: String::new(),
             keygen_status: OpStatus::None,
+            keygen_fingerprint: String::new(),
             encrypt_pubkey: FileInput::default(),
             encrypt_plain: FileInput::default(),
             encrypt_status: OpStatus::None,
@@ -209,6 +232,11 @@ impl Default for PqfileApp {
             inspect_pqf: FileInput::default(),
             inspect_result: String::new(),
             inspect_status: OpStatus::None,
+            update_status: UpdateStatus::Idle,
+            #[cfg(not(target_arch = "wasm32"))]
+            update_result: Arc::new(Mutex::new(None)),
+            #[cfg(not(target_arch = "wasm32"))]
+            install_result: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -272,7 +300,6 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     v.widgets.hovered.rounding = r;
     v.widgets.active.rounding = r;
 
-    // silence unused warnings from destructuring
     let _ = overlay;
 
     ctx.set_visuals(v);
@@ -291,6 +318,7 @@ impl eframe::App for PqfileApp {
         if self.poll_files() {
             ctx.request_repaint();
         }
+        self.handle_dropped_files(ctx);
 
         let dark = self.settings.dark_mode;
         let chrome = c_chrome(dark);
@@ -331,6 +359,26 @@ impl eframe::App for PqfileApp {
             .show(ctx, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.label(RichText::new(format!("v{APP_VERSION}")).size(11.0).color(c_overlay(dark)));
+                    // Update badge
+                    match &self.update_status {
+                        UpdateStatus::Available(ver) => {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(format!("↑ v{ver} available"))
+                                    .size(11.0)
+                                    .color(c_accent(dark)),
+                            );
+                        }
+                        UpdateStatus::RestartRequired => {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new("↻ restart to apply update")
+                                    .size(11.0)
+                                    .color(c_green(dark)),
+                            );
+                        }
+                        _ => {}
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new("ML-KEM-768 · ChaCha20-Poly1305")
@@ -350,6 +398,29 @@ impl eframe::App for PqfileApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(bg))
             .show(ctx, |ui| {
+                // Drop zone hint overlay when files are being hovered
+                let hovered = ctx.input(|i| !i.raw.hovered_files.is_empty());
+                if hovered {
+                    let rect = ui.ctx().screen_rect();
+                    ui.painter().rect_filled(
+                        rect,
+                        Rounding::same(0.0),
+                        Color32::from_rgba_premultiplied(
+                            c_accent(dark).r(),
+                            c_accent(dark).g(),
+                            c_accent(dark).b(),
+                            30,
+                        ),
+                    );
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Drop files here",
+                        egui::FontId::proportional(22.0),
+                        c_accent(dark),
+                    );
+                }
+
                 // Tab strip
                 egui::Frame::none()
                     .fill(chrome)
@@ -390,7 +461,8 @@ impl PqfileApp {
         self.decrypt_privkey.poll();
         self.decrypt_pqf.poll();
         self.inspect_pqf.poll();
-        [
+
+        let file_pending = [
             &self.encrypt_pubkey,
             &self.encrypt_plain,
             &self.decrypt_privkey,
@@ -398,7 +470,119 @@ impl PqfileApp {
             &self.inspect_pqf,
         ]
         .iter()
-        .any(|f| f.pending.try_lock().map(|g| g.is_some()).unwrap_or(false))
+        .any(|f| f.pending.try_lock().map(|g| g.is_some()).unwrap_or(false));
+
+        // Drain update-check result on native.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Ok(mut g) = self.update_result.try_lock() {
+                if let Some(result) = g.take() {
+                    self.update_status = match result {
+                        Ok(latest) => {
+                            if latest == APP_VERSION {
+                                UpdateStatus::UpToDate
+                            } else {
+                                UpdateStatus::Available(latest)
+                            }
+                        }
+                        Err(()) => UpdateStatus::Failed,
+                    };
+                    return true;
+                }
+            }
+        }
+
+        // Drain install result on native.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Ok(mut g) = self.install_result.try_lock() {
+                if let Some(result) = g.take() {
+                    self.update_status = match result {
+                        Ok(()) => UpdateStatus::RestartRequired,
+                        Err(e) => UpdateStatus::InstallFailed(e),
+                    };
+                    return true;
+                }
+            }
+        }
+
+        file_pending
+    }
+}
+
+// ── Drag-and-drop ──────────────────────────────────────────────────────────
+
+impl PqfileApp {
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if dropped.is_empty() {
+            return;
+        }
+
+        for file in dropped {
+            let data: Option<Vec<u8>> = if let Some(bytes) = file.bytes.as_ref() {
+                Some(bytes.to_vec())
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    file.path.as_ref().and_then(|p| std::fs::read(p).ok())
+                }
+                #[cfg(target_arch = "wasm32")]
+                { None }
+            };
+
+            let data = match data {
+                Some(d) => d,
+                None => continue,
+            };
+
+            let name = if !file.name.is_empty() {
+                file.name.clone()
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    file.path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                }
+                #[cfg(target_arch = "wasm32")]
+                { String::new() }
+            };
+
+            let path = file.path.clone();
+            let is_pem = name.ends_with(".pem");
+            let is_pqf = name.ends_with(".pqf");
+
+            let loaded = FileInput {
+                name,
+                data: Some(data),
+                path,
+                pending: Arc::new(Mutex::new(None)),
+            };
+
+            match self.tab {
+                Tab::Encrypt => {
+                    if is_pem {
+                        self.encrypt_pubkey = loaded;
+                    } else {
+                        self.encrypt_plain = loaded;
+                    }
+                }
+                Tab::Decrypt => {
+                    if is_pem {
+                        self.decrypt_privkey = loaded;
+                    } else if is_pqf {
+                        self.decrypt_pqf = loaded;
+                    }
+                }
+                Tab::Inspect if is_pqf => {
+                    self.inspect_pqf = loaded;
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -455,8 +639,9 @@ impl PqfileApp {
                         card(ui, c_card(dark), c_surface1(dark), |ui| {
                             kv_row(ui, "Key encapsulation", "ML-KEM-768  (NIST FIPS 203)", dark);
                             kv_row(ui, "Symmetric cipher",  "ChaCha20-Poly1305  (RFC 8439)", dark);
+                            kv_row(ui, "AEAD mode",         "STREAM  (64 KB chunks)", dark);
                             kv_row(ui, "Randomness",        "OS CSPRNG  (OsRng)", dark);
-                            kv_row(ui, "File format",       ".pqf  (1115-byte header + AEAD)", dark);
+                            kv_row(ui, "File format",       ".pqf  (v0x03, 1111-byte header)", dark);
                         });
 
                         ui.add_space(10.0);
@@ -464,7 +649,7 @@ impl PqfileApp {
                         card(ui, c_card(dark), c_surface1(dark), |ui| {
                             bullet(ui, "All operations run locally — no data is uploaded", dark);
                             bullet(ui, "Keys and shared secrets zeroized after use", dark);
-                            bullet(ui, "AEAD authentication prevents silent corruption", dark);
+                            bullet(ui, "Header + payload fully authenticated (STREAM AEAD)", dark);
                             bullet(ui, "Fresh nonce and KEM encapsulation per file", dark);
                         });
 
@@ -563,16 +748,24 @@ impl PqfileApp {
         {
             match keygen::keygen_bytes() {
                 Ok((pub_pem, priv_pem)) => {
+                    let fp = keygen::pubkey_fingerprint(&pub_pem)
+                        .unwrap_or_else(|_| "unknown".to_owned());
+                    self.keygen_fingerprint = fp.clone();
+
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         let dir = std::path::Path::new(&self.keygen_dir);
                         let r1 = std::fs::write(dir.join("pubkey.pem"), pub_pem.as_bytes());
                         let r2 = std::fs::write(dir.join("privkey.pem"), priv_pem.as_bytes());
                         self.keygen_status = match (r1, r2) {
-                            (Ok(()), Ok(())) => {
-                                OpStatus::Ok(format!("Keys saved to  {}", dir.display()))
+                            (Ok(()), Ok(())) => OpStatus::Ok(format!(
+                                "Keys saved to {}",
+                                dir.display()
+                            )),
+                            (Err(e), _) | (_, Err(e)) => {
+                                self.keygen_fingerprint.clear();
+                                OpStatus::Err(e.to_string())
                             }
-                            (Err(e), _) | (_, Err(e)) => OpStatus::Err(e.to_string()),
                         };
                     }
                     #[cfg(target_arch = "wasm32")]
@@ -583,11 +776,35 @@ impl PqfileApp {
                             OpStatus::Ok("pubkey.pem and privkey.pem downloaded.".to_owned());
                     }
                 }
-                Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),
+                Err(e) => {
+                    self.keygen_fingerprint.clear();
+                    self.keygen_status = OpStatus::Err(e.to_string());
+                }
             }
         }
 
         show_status(ui, &self.keygen_status, dark);
+
+        if !self.keygen_fingerprint.is_empty() {
+            ui.add_space(6.0);
+            card(ui, c_card(dark), c_surface1(dark), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Fingerprint")
+                            .size(12.5)
+                            .color(c_subtext(dark)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(&self.keygen_fingerprint)
+                                .monospace()
+                                .size(12.5)
+                                .color(c_text(dark)),
+                        );
+                    });
+                });
+            });
+        }
     }
 }
 
@@ -597,7 +814,7 @@ impl PqfileApp {
     fn show_encrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
         tab_heading(ui, "Encrypt File", dark);
         ui.label(
-            RichText::new("Encrypt a file using a recipient's public key.")
+            RichText::new("Encrypt a file using a recipient's public key. You can also drag and drop files onto this tab.")
                 .size(13.0)
                 .color(c_subtext(dark)),
         );
@@ -646,11 +863,11 @@ impl PqfileApp {
                             #[cfg(target_arch = "wasm32")]
                             let confirm = false;
                             self.encrypt_status = save_result(&out_name, &pqf, out_path, confirm);
-                            if self.settings.auto_clear {
-                                if matches!(self.encrypt_status, OpStatus::Ok(_)) {
-                                    self.encrypt_pubkey.clear();
-                                    self.encrypt_plain.clear();
-                                }
+                            if self.settings.auto_clear
+                                && matches!(self.encrypt_status, OpStatus::Ok(_))
+                            {
+                                self.encrypt_pubkey.clear();
+                                self.encrypt_plain.clear();
                             }
                         }
                         Err(e) => self.encrypt_status = OpStatus::Err(e.to_string()),
@@ -665,7 +882,7 @@ impl PqfileApp {
         if !ready {
             ui.add_space(4.0);
             ui.label(
-                RichText::new("Load a public key and a file to continue.")
+                RichText::new("Load a public key and a file to continue (or drag and drop).")
                     .size(12.0)
                     .color(c_overlay(dark)),
             );
@@ -681,7 +898,7 @@ impl PqfileApp {
     fn show_decrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
         tab_heading(ui, "Decrypt File", dark);
         ui.label(
-            RichText::new("Decrypt a .pqf file using your private key.")
+            RichText::new("Decrypt a .pqf file using your private key. You can also drag and drop files onto this tab.")
                 .size(13.0)
                 .color(c_subtext(dark)),
         );
@@ -730,11 +947,11 @@ impl PqfileApp {
                             let confirm = false;
                             self.decrypt_status =
                                 save_result(&out_name, &plain, out_path, confirm);
-                            if self.settings.auto_clear {
-                                if matches!(self.decrypt_status, OpStatus::Ok(_)) {
-                                    self.decrypt_privkey.clear();
-                                    self.decrypt_pqf.clear();
-                                }
+                            if self.settings.auto_clear
+                                && matches!(self.decrypt_status, OpStatus::Ok(_))
+                            {
+                                self.decrypt_privkey.clear();
+                                self.decrypt_pqf.clear();
                             }
                         }
                         Err(e) => self.decrypt_status = OpStatus::Err(e.to_string()),
@@ -749,7 +966,7 @@ impl PqfileApp {
         if !ready {
             ui.add_space(4.0);
             ui.label(
-                RichText::new("Load a private key and a .pqf file to continue.")
+                RichText::new("Load a private key and a .pqf file to continue (or drag and drop).")
                     .size(12.0)
                     .color(c_overlay(dark)),
             );
@@ -773,14 +990,7 @@ impl PqfileApp {
 
         section_label(ui, "FILE", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
-            file_row(
-                ui,
-                "Encrypted file (.pqf)",
-                &mut self.inspect_pqf,
-                "PQF",
-                &["pqf"],
-                dark,
-            );
+            file_row(ui, "Encrypted file (.pqf)", &mut self.inspect_pqf, "PQF", &["pqf"], dark);
         });
         ui.add_space(14.0);
 
@@ -912,6 +1122,155 @@ impl PqfileApp {
 
         ui.add_space(10.0);
 
+        // Updates
+        section_label(ui, "UPDATES", dark);
+        let mut install_ver: Option<String> = None;
+        let mut restart_now = false;
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            let row_w = ui.available_width();
+            ui.allocate_ui(egui::vec2(row_w, 26.0), |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!("Current version: {APP_VERSION}"))
+                            .size(13.0)
+                            .color(c_text(dark)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let busy = matches!(
+                                self.update_status,
+                                UpdateStatus::Checking | UpdateStatus::Downloading
+                            );
+                            if ui
+                                .add_enabled(
+                                    !busy,
+                                    egui::Button::new(
+                                        RichText::new(if busy { "Please wait…" } else { "Check for Updates" })
+                                            .size(13.0)
+                                            .color(c_text(dark)),
+                                    )
+                                    .fill(c_surface0(dark)),
+                                )
+                                .clicked()
+                            {
+                                self.update_status = UpdateStatus::Checking;
+                                trigger_update_check(Arc::clone(&self.update_result));
+                            }
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            ui.label(
+                                RichText::new("Web — always current")
+                                    .size(12.0)
+                                    .color(c_subtext(dark)),
+                            );
+                        }
+                    });
+                });
+            });
+
+            match &self.update_status {
+                UpdateStatus::Idle => {}
+                UpdateStatus::Checking => {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Checking for updates…").size(12.0).color(c_subtext(dark)));
+                }
+                UpdateStatus::UpToDate => {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("You are on the latest version ({APP_VERSION})."))
+                            .size(12.0)
+                            .color(c_green(dark)),
+                    );
+                }
+                UpdateStatus::Available(ver) => {
+                    let ver = ver.clone();
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("Update available: v{ver}"))
+                                .size(12.0)
+                                .color(c_accent(dark)),
+                        );
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            ui.add_space(8.0);
+                            if ui
+                                .button(
+                                    RichText::new("Download & Install")
+                                        .size(12.0)
+                                        .color(c_text(dark)),
+                                )
+                                .clicked()
+                            {
+                                install_ver = Some(ver);
+                            }
+                        }
+                    });
+                }
+                UpdateStatus::Downloading => {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Downloading update…")
+                            .size(12.0)
+                            .color(c_subtext(dark)),
+                    );
+                }
+                UpdateStatus::RestartRequired => {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("Update installed. Restart to apply.")
+                                .size(12.0)
+                                .color(c_green(dark)),
+                        );
+                        ui.add_space(8.0);
+                        if ui
+                            .button(RichText::new("Restart Now").size(12.0).color(c_text(dark)))
+                            .clicked()
+                        {
+                            restart_now = true;
+                        }
+                    });
+                }
+                UpdateStatus::InstallFailed(e) => {
+                    let e = e.clone();
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("Update failed: {e}"))
+                            .size(12.0)
+                            .color(c_red(dark)),
+                    );
+                }
+                UpdateStatus::Failed => {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Could not reach update server.")
+                            .size(12.0)
+                            .color(c_red(dark)),
+                    );
+                }
+            }
+        });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ver) = install_ver {
+            self.update_status = UpdateStatus::Downloading;
+            trigger_update_install(ver, Arc::clone(&self.install_result));
+        }
+
+        if restart_now {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let exe = std::env::current_exe().unwrap_or_default();
+                let _ = std::process::Command::new(exe).spawn();
+            }
+            std::process::exit(0);
+        }
+
+        ui.add_space(10.0);
+
         // Security note
         section_label(ui, "SECURITY", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
@@ -957,9 +1316,117 @@ impl PqfileApp {
                 self.inspect_result.clear();
                 self.inspect_status = OpStatus::None;
                 self.keygen_status = OpStatus::None;
+                self.keygen_fingerprint.clear();
             }
         });
     }
+}
+
+// ── Update check (native only) ─────────────────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+fn trigger_update_check(result: Arc<Mutex<Option<Result<String, ()>>>>) {
+    std::thread::spawn(move || {
+        let url = format!(
+            "https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        );
+        let outcome = ureq::get(&url)
+            .set("User-Agent", &format!("pqfile/{APP_VERSION}"))
+            .set("Accept", "application/vnd.github.v3+json")
+            .call()
+            .ok()
+            .and_then(|r| r.into_string().ok())
+            .and_then(|s| parse_tag_name(&s));
+
+        *result.lock().unwrap() = Some(outcome.ok_or(()));
+    });
+}
+
+/// Minimal JSON extraction of `"tag_name": "vX.Y.Z"` without a full parser.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_tag_name(json: &str) -> Option<String> {
+    let key = "\"tag_name\":\"";
+    let start = json.find(key)? + key.len();
+    let end = start + json[start..].find('"')?;
+    Some(json[start..end].trim_start_matches('v').to_owned())
+}
+
+// ── Self-update (native only) ──────────────────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+fn trigger_update_install(version: String, result: Arc<Mutex<Option<Result<(), String>>>>) {
+    std::thread::spawn(move || {
+        let outcome = do_install(&version);
+        *result.lock().unwrap() = Some(outcome);
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn do_install(version: &str) -> Result<(), String> {
+    use std::io::Read;
+
+    let asset = platform_asset_name()
+        .ok_or_else(|| "No prebuilt release for this platform/architecture.".to_owned())?;
+
+    let url = format!(
+        "https://github.com/{GITHUB_REPO}/releases/download/v{version}/{asset}"
+    );
+
+    let response = ureq::get(&url)
+        .set("User-Agent", &format!("pqfile/{APP_VERSION}"))
+        .call()
+        .map_err(|e| e.to_string())?;
+
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+
+    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let temp_path = current_exe.with_extension("update_tmp");
+
+    std::fs::write(&temp_path, &bytes).map_err(|e| e.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+    }
+
+    replace_exe(&current_exe, &temp_path)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_exe(current: &std::path::Path, new: &std::path::Path) -> Result<(), String> {
+    // Windows locks running executables, so rename the current one out of the
+    // way first, then move the new one into position.
+    let old = current.with_extension("old");
+    std::fs::rename(current, &old).map_err(|e| e.to_string())?;
+    std::fs::rename(new, current).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_exe(current: &std::path::Path, new: &std::path::Path) -> Result<(), String> {
+    std::fs::rename(new, current).map_err(|e| e.to_string())
+}
+
+/// Maps the current platform to the GitHub release asset filename.
+/// Returns None for unsupported platforms (ARM Linux, 32-bit, etc.).
+#[cfg(not(target_arch = "wasm32"))]
+fn platform_asset_name() -> Option<&'static str> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return Some("pqfile-desktop-linux-x86_64");
+
+    #[cfg(all(target_os = "macos", any(target_arch = "x86_64", target_arch = "aarch64")))]
+    return Some("pqfile-desktop-macos-x86_64"); // aarch64 runs via Rosetta 2
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    return Some("pqfile-desktop-windows-x86_64.exe");
+
+    #[allow(unreachable_code)]
+    None
 }
 
 // ── UI helpers ─────────────────────────────────────────────────────────────

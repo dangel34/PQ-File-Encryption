@@ -1,10 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use chacha20poly1305::{
-    aead::{Aead, KeyInit},
-    ChaCha20Poly1305, Key, Nonce,
-};
+use aead::{stream::EncryptorBE32, Payload};
+use chacha20poly1305::{aead::KeyInit, ChaCha20Poly1305, Key};
 use ml_kem::{
     kem::{EncapsulationKey, Encapsulate},
     Encoded, EncodedSizeUser, MlKem768Params,
@@ -14,7 +12,7 @@ use rand_core::RngCore;
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
-use crate::format::{KEM_CT_LEN, NONCE_LEN, PqfHeader};
+use crate::format::{CHUNK_SIZE, KEM_CT_LEN, NONCE_LEN, PqfHeader};
 
 pub fn encrypt(pubkey_path: &Path, input_path: &Path) -> Result<(), PqfileError> {
     let pubkey_pem = fs::read_to_string(pubkey_path)?;
@@ -53,17 +51,44 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
 
     let original_size = plaintext.len() as u64;
 
-    let key = Key::from_slice(ss_bytes.as_ref());
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let cipher = ChaCha20Poly1305::new(key);
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext)
-        .map_err(|_| PqfileError::EncryptionFailure)?;
-
+    // Serialize header first — its bytes become the AEAD additional data so
+    // that any modification to any header field is detected on decryption.
     let header = PqfHeader { kem_ciphertext: kem_ct, nonce: nonce_bytes, original_size };
-    let mut output = Vec::with_capacity(1115 + plaintext.len() + 16);
-    header.write(&mut output)?;
-    output.extend_from_slice(&ciphertext);
+    let mut aad = Vec::with_capacity(1110);
+    header.write(&mut aad)?;
+
+    let key = Key::from_slice(ss_bytes.as_ref());
+    let cipher = ChaCha20Poly1305::new(key);
+    let stream_nonce = aead::generic_array::GenericArray::clone_from_slice(&nonce_bytes);
+    let mut enc = EncryptorBE32::<ChaCha20Poly1305>::from_aead(cipher, &stream_nonce);
+
+    let mut output = Vec::with_capacity(aad.len() + plaintext.len() + 16);
+    output.extend_from_slice(&aad);
+
+    let mut chunks = plaintext.chunks(CHUNK_SIZE).peekable();
+    // Handle empty plaintext: encrypt a single empty last chunk.
+    if chunks.peek().is_none() {
+        let ct = enc
+            .encrypt_last(Payload { msg: &[], aad: &aad })
+            .map_err(|_| PqfileError::EncryptionFailure)?;
+        output.extend_from_slice(&ct);
+    } else {
+        loop {
+            let chunk = chunks.next().unwrap();
+            if chunks.peek().is_none() {
+                let ct = enc
+                    .encrypt_last(Payload { msg: chunk, aad: &aad })
+                    .map_err(|_| PqfileError::EncryptionFailure)?;
+                output.extend_from_slice(&ct);
+                break;
+            } else {
+                let ct = enc
+                    .encrypt_next(Payload { msg: chunk, aad: &aad })
+                    .map_err(|_| PqfileError::EncryptionFailure)?;
+                output.extend_from_slice(&ct);
+            }
+        }
+    }
 
     Ok(output)
 }

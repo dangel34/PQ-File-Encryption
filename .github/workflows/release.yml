@@ -1,0 +1,168 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  # ── CLI binaries ─────────────────────────────────────────────────────────
+  build-cli:
+    name: CLI — ${{ matrix.target }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: pqfile
+            asset: pqfile-linux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bin: pqfile
+            asset: pqfile-macos-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: pqfile.exe
+            asset: pqfile-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build CLI
+        run: cargo build --release -p pqfile --target ${{ matrix.target }}
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: target/${{ matrix.target }}/release/${{ matrix.bin }}
+
+  # ── Desktop GUI binaries ──────────────────────────────────────────────────
+  build-desktop:
+    name: Desktop — ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin: pqfile-desktop
+            asset: pqfile-desktop-linux-x86_64
+          - os: macos-latest
+            bin: pqfile-desktop
+            asset: pqfile-desktop-macos-x86_64
+          - os: windows-latest
+            bin: pqfile-desktop.exe
+            asset: pqfile-desktop-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux GUI dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+
+      - name: Build desktop GUI
+        run: cargo build --release --bin pqfile-desktop
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: target/release/${{ matrix.bin }}
+
+  # ── WASM web app ───────────────────────────────────────────────────────────
+  build-wasm:
+    name: Web (WASM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.4.0
+        with:
+          version: latest
+
+      - name: Build WASM
+        working-directory: pqfile-gui
+        run: trunk build --release --public-url ./
+
+      - name: Archive dist/
+        run: tar -czf pqfile-web.tar.gz -C pqfile-gui/dist .
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqfile-web
+          path: pqfile-web.tar.gz
+
+      # Upload for GitHub Pages deployment
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pqfile-gui/dist
+
+  # ── GitHub Pages deploy ────────────────────────────────────────────────────
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: build-wasm
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ── GitHub Release ──────────────────────────────────────────────────────────
+  github-release:
+    name: Create GitHub Release
+    needs: [build-cli, build-desktop, build-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display artifact tree
+        run: find artifacts -type f
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: pqfile ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            artifacts/pqfile-linux-x86_64/pqfile
+            artifacts/pqfile-macos-x86_64/pqfile
+            artifacts/pqfile-windows-x86_64.exe/pqfile.exe
+            artifacts/pqfile-desktop-linux-x86_64/pqfile-desktop
+            artifacts/pqfile-desktop-macos-x86_64/pqfile-desktop
+            artifacts/pqfile-desktop-windows-x86_64.exe/pqfile-desktop.exe
+            artifacts/pqfile-web/pqfile-web.tar.gz

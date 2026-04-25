@@ -2,10 +2,8 @@ use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
-use chacha20poly1305::{
-    aead::{Aead, KeyInit},
-    ChaCha20Poly1305, Key, Nonce,
-};
+use aead::{stream::DecryptorBE32, Payload};
+use chacha20poly1305::{aead::KeyInit, ChaCha20Poly1305, Key};
 use ml_kem::{
     kem::{DecapsulationKey, Decapsulate},
     Ciphertext, Encoded, EncodedSizeUser, MlKem768, MlKem768Params,
@@ -13,7 +11,7 @@ use ml_kem::{
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
-use crate::format::{KEM_CT_LEN, PqfHeader};
+use crate::format::{CHUNK_SIZE, KEM_CT_LEN, PqfHeader};
 
 pub fn decrypt(privkey_path: &Path, input_path: &Path) -> Result<(), PqfileError> {
     let privkey_pem = fs::read_to_string(privkey_path)?;
@@ -37,6 +35,10 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8]) -> Result<Vec<u8>, Pqfi
     let mut cursor = Cursor::new(pqf_data);
     let header = PqfHeader::read(&mut cursor)?;
 
+    // Re-serialize the header to reconstruct the same AAD used during encryption.
+    let mut aad = Vec::with_capacity(1110);
+    header.write(&mut aad)?;
+
     let ct_slice = &header.kem_ciphertext[..];
     let ct = Ciphertext::<MlKem768>::try_from(ct_slice)
         .map_err(|_| PqfileError::InvalidKeyLength { expected: KEM_CT_LEN, got: ct_slice.len() })?;
@@ -48,9 +50,30 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8]) -> Result<Vec<u8>, Pqfi
     let payload = &pqf_data[cursor.position() as usize..];
 
     let key = Key::from_slice(ss_bytes.as_ref());
-    let nonce = Nonce::from_slice(&header.nonce);
     let cipher = ChaCha20Poly1305::new(key);
-    cipher
-        .decrypt(nonce, payload)
-        .map_err(|_| PqfileError::DecryptionFailure)
+    let stream_nonce = aead::generic_array::GenericArray::clone_from_slice(&header.nonce);
+    let mut dec = DecryptorBE32::<ChaCha20Poly1305>::from_aead(cipher, &stream_nonce);
+
+    // Each encrypted chunk is CHUNK_SIZE plaintext + 16-byte tag.
+    let chunk_ct_len = CHUNK_SIZE + 16;
+    let mut plaintext = Vec::with_capacity(header.original_size as usize);
+    let mut offset = 0usize;
+
+    while payload.len().saturating_sub(offset) > chunk_ct_len {
+        let ct_chunk = &payload[offset..offset + chunk_ct_len];
+        let pt = dec
+            .decrypt_next(Payload { msg: ct_chunk, aad: &aad })
+            .map_err(|_| PqfileError::DecryptionFailure)?;
+        plaintext.extend_from_slice(&pt);
+        offset += chunk_ct_len;
+    }
+
+    // Final (or only) chunk — consumes the decryptor.
+    let last_ct = &payload[offset..];
+    let last_pt = dec
+        .decrypt_last(Payload { msg: last_ct, aad: &aad })
+        .map_err(|_| PqfileError::DecryptionFailure)?;
+    plaintext.extend_from_slice(&last_pt);
+
+    Ok(plaintext)
 }

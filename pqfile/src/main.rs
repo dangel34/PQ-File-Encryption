@@ -41,7 +41,13 @@ enum Command {
 fn run() -> Result<(), PqfileError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Keygen { out } => keygen::keygen(&out),
+        Command::Keygen { out } => {
+            let fingerprint = keygen::keygen(&out)?;
+            println!("pubkey:      {}", out.join("pubkey.pem").display());
+            println!("privkey:     {}", out.join("privkey.pem").display());
+            println!("fingerprint: {fingerprint}");
+            Ok(())
+        }
         Command::Encrypt { recipient, input } => encrypt::encrypt(&recipient, &input),
         Command::Decrypt { key, input } => decrypt::decrypt(&key, &input),
         Command::Inspect { input } => inspect(&input),
@@ -57,13 +63,10 @@ fn inspect(input: &std::path::Path) -> Result<(), PqfileError> {
     println!("Magic:              PQFL");
     println!("Version:            {:#04x}", format::VERSION);
     println!("KEM variant:        {}", format::KEM_VARIANT);
+    println!("Header size:        {} bytes", format::HEADER_SIZE);
     println!(
         "Nonce:              {}",
-        header
-            .nonce
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
+        header.nonce.iter().map(|b| format!("{b:02x}")).collect::<String>()
     );
     println!("Original file size: {} bytes", header.original_size);
 

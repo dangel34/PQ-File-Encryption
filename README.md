@@ -90,13 +90,13 @@ cargo install --path pqfile
 ### Native GUI
 
 ```
-cargo build --release --bin pqfile-gui
+cargo build --release --bin pqfile-desktop
 ```
 
-Binary is at `target/release/pqfile-gui`. Run it directly:
+Binary is at `target/release/pqfile-desktop`. Run it directly:
 
 ```
-./target/release/pqfile-gui
+./target/release/pqfile-desktop
 ```
 
 ### Web GUI
@@ -160,9 +160,10 @@ Parses and prints the header fields without decrypting the payload. Useful for v
 
 ```
 Magic:              PQFL
-Version:            0x01
+Version:            0x03
 KEM variant:        768
-Nonce:              a3f09c12de87b64c01e5a920
+Header size:        1110 bytes
+Nonce:              a3f09c12de87b6
 Original file size: 2048 bytes
 ```
 
@@ -200,6 +201,33 @@ The GUI has four tabs and works identically on native and web, except that the w
 2. Click Inspect.
 
 The header fields (magic, version, KEM variant, nonce, original size) are displayed without decrypting the payload.
+
+---
+
+## Running the web GUI locally
+
+### Development server (recommended)
+
+`trunk serve` builds the app and serves it with live reload on every file change:
+
+```
+cd pqfile-gui
+trunk serve
+```
+
+Open `http://localhost:8080` in your browser.
+
+### Serving a pre-built dist/
+
+If you have already run `trunk build --release`, you can serve the output directly:
+
+```
+# Python (no install required)
+cd pqfile-gui/dist
+python -m http.server 8080
+```
+
+> The server must send the `application/wasm` MIME type for `.wasm` files or the browser will refuse to load the app. Python's `http.server` and `trunk serve` both handle this correctly.
 
 ---
 
@@ -244,17 +272,17 @@ Every encrypted file begins with a fixed-length header followed by the encrypted
 Offset   Length    Field
 ------   ------    -----
 0        4         Magic bytes: ASCII "PQFL"
-4        1         Version: 0x01
+4        1         Version: 0x03
 5        2         KEM variant: 768 as little-endian u16
 7        1088      ML-KEM-768 KEM ciphertext (encapsulated shared secret)
-1095     12        ChaCha20-Poly1305 nonce
-1107     8         Original plaintext size as little-endian u64
-1115     N+16      Encrypted payload (N bytes ciphertext + 16-byte Poly1305 tag)
+1095     7         STREAM nonce (StreamBE32 base nonce for ChaCha20-Poly1305)
+1102     8         Original plaintext size as little-endian u64
+1110     chunks    STREAM-AEAD payload: 64 KB chunks, each chunk+16-byte tag
 ```
 
 The KEM ciphertext field is 1088 bytes because that is the exact ciphertext size specified by FIPS 203 for the ML-KEM-768 parameter set (k=3, du=10, dv=4).
 
-The Poly1305 tag is appended directly to the ciphertext by the `chacha20poly1305` crate. The original file size field allows pre-allocation before decryption; it is not used for truncation since the authentication tag provides integrity.
+The payload uses the STREAM AEAD construction (`aead::stream::StreamBE32`) over 64 KB chunks. Each chunk is encrypted independently using a per-block nonce derived from the 8-byte stream nonce and a 4-byte big-endian counter, then authenticated with a 16-byte Poly1305 tag. The original file size field allows pre-allocation; the authentication tags provide integrity and prevent truncation or reordering attacks.
 
 ---
 
@@ -312,7 +340,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 |---------------------|-------------------------------------------------------|
 | Io                  | Any file system or I/O failure                        |
 | InvalidMagic        | File does not start with the bytes "PQFL"             |
-| UnsupportedVersion  | Version byte is not 0x01                              |
+| UnsupportedVersion  | Version byte is not 0x03                              |
 | UnsupportedKem      | KEM variant field is not 768                          |
 | KemEncapsulation    | ML-KEM encapsulation failed                           |
 | KemDecapsulation    | ML-KEM decapsulation failed                           |
@@ -330,6 +358,8 @@ All errors are reported to stderr with a descriptive message. The process exits 
 |------------------|---------|--------------------------------------------------|
 | ml-kem           | 0.2     | ML-KEM-768 key encapsulation (FIPS 203)          |
 | chacha20poly1305 | 0.10    | ChaCha20-Poly1305 authenticated encryption       |
+| aead             | 0.5     | STREAM AEAD construction (stream feature)        |
+| sha2             | 0.10    | SHA-256 for public key fingerprints              |
 | rand             | 0.8     | OsRng and RngCore for secure randomness          |
 | rand_core        | 0.6     | CryptoRngCore trait used by ml-kem               |
 | zeroize          | 1       | Overwrite secret bytes in memory on drop         |
@@ -343,6 +373,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 |----------------------|---------|------------------------------------------------|
 | eframe               | 0.29    | egui app framework (native via rlib, WASM via cdylib) |
 | rfd                  | 0.14    | Native sync and WASM async file dialogs        |
+| ureq                 | 2       | HTTP client for update checks (native only)    |
 | wasm-bindgen         | 0.2     | Rust/WASM bindings (WASM only)                 |
 | wasm-bindgen-futures | 0.4     | Async bridge for WASM (WASM only)              |
 | web-sys              | 0.3     | Browser DOM APIs for file download (WASM only) |
@@ -386,6 +417,6 @@ rpmbuild -bb pqfile/packaging/pqfile.spec
 - The private key (`privkey.pem`) must be kept confidential. Anyone who obtains it can decrypt any file encrypted to the corresponding public key.
 - The public key (`pubkey.pem`) can be shared freely.
 - Each encryption operation generates a fresh KEM ciphertext and a fresh random nonce. Reuse of a nonce under the same key would break ChaCha20-Poly1305 confidentiality, but this cannot happen here because the symmetric key itself is freshly derived per file.
-- The Poly1305 authentication tag guarantees that any modification to the ciphertext or header payload will be detected. The header fields before the payload (magic, version, KEM variant, KEM ciphertext, nonce, size) are not covered by the authentication tag; they are structural and validated by the format parser before decryption begins.
+- The STREAM AEAD construction authenticates both the payload chunks and all header fields. The serialized header is passed as additional data (AAD) to every STREAM chunk call. Any modification to any byte of the file — header or payload — will cause authentication to fail before any plaintext is produced.
 - Secret material (the decapsulation key bytes and the shared secret) is overwritten with zeros when the relevant variables go out of scope using the `zeroize` crate.
 - The web GUI performs all cryptographic operations in WebAssembly inside the browser. No file data or key material is transmitted over the network.
