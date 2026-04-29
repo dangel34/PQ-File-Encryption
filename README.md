@@ -1,5 +1,7 @@
 # pqfile
 
+[![SonarQube Cloud](https://sonarcloud.io/images/project_badges/sonarcloud-dark.svg)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
+
 A quantum-resistant file encryption tool with a command-line interface and a cross-platform GUI. It uses hybrid encryption combining ML-KEM-768 key encapsulation (NIST FIPS 203) with ChaCha20-Poly1305 authenticated symmetric encryption.
 
 Encrypted files can only be decrypted by the holder of the private decapsulation key, and any tampering with an encrypted file is detected before decryption produces output.
