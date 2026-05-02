@@ -1,6 +1,7 @@
 # pqfile
 
-[![SonarQube Cloud](https://sonarcloud.io/images/project_badges/sonarcloud-dark.svg)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=dangel34_PQ-File-Encryption&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=dangel34_PQ-File-Encryption&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
 
 A quantum-resistant file encryption tool with a command-line interface and a cross-platform GUI. It uses hybrid encryption combining ML-KEM-768 key encapsulation (NIST FIPS 203) with ChaCha20-Poly1305 authenticated symmetric encryption.
 
