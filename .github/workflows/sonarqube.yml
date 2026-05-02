@@ -19,6 +19,17 @@ jobs:
         with:
           fetch-depth: 0  # full history required for blame/new-code detection
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
