@@ -1211,3 +1211,74 @@ fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {
             ui.label(RichText::new(msg).size(13.0).color(color));
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn loaded_input(name: &str, data: Vec<u8>, path: Option<PathBuf>) -> FileInput {
+        FileInput { name: name.to_owned(), data: Some(data), path, pending: Default::default() }
+    }
+
+    #[test]
+    fn encrypt_missing_inputs_sets_error() {
+        let mut app = PqfileApp::default();
+        app.handle_encrypt();
+        assert!(matches!(app.encrypt_status, OpStatus::Err(_)));
+    }
+
+    #[test]
+    fn decrypt_missing_inputs_sets_error() {
+        let mut app = PqfileApp::default();
+        app.handle_decrypt();
+        assert!(matches!(app.decrypt_status, OpStatus::Err(_)));
+    }
+
+    #[test]
+    fn encrypt_bad_key_sets_error() {
+        let mut app = PqfileApp::default();
+        app.encrypt_pubkey = loaded_input("bad.pem", b"not a valid key".to_vec(), None);
+        app.encrypt_plain = loaded_input("test.txt", b"hello".to_vec(), None);
+        app.handle_encrypt();
+        assert!(matches!(app.encrypt_status, OpStatus::Err(_)));
+    }
+
+    #[test]
+    fn decrypt_bad_key_sets_error() {
+        let mut app = PqfileApp::default();
+        app.decrypt_privkey = loaded_input("bad.pem", b"not a valid key".to_vec(), None);
+        app.decrypt_pqf = loaded_input("test.pqf", b"garbage".to_vec(), None);
+        app.handle_decrypt();
+        assert!(matches!(app.decrypt_status, OpStatus::Err(_)));
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (pub_pem, priv_pem) = keygen::keygen_bytes().unwrap();
+        let plaintext = b"roundtrip test data".to_vec();
+
+        // Encrypt
+        let plain_path = tmp.path().join("input.txt");
+        std::fs::write(&plain_path, &plaintext).unwrap();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_pubkey = loaded_input("pubkey.pem", pub_pem.as_bytes().to_vec(), None);
+        app.encrypt_plain = loaded_input("input.txt", plaintext.clone(), Some(plain_path));
+        app.handle_encrypt();
+        assert!(matches!(app.encrypt_status, OpStatus::Ok(_)), "encryption failed");
+
+        // Decrypt
+        let pqf_path = tmp.path().join("input.txt.pqf");
+        let pqf_data = std::fs::read(&pqf_path).unwrap();
+
+        app.decrypt_privkey = loaded_input("privkey.pem", priv_pem.as_bytes().to_vec(), None);
+        app.decrypt_pqf = loaded_input("input.txt.pqf", pqf_data, Some(pqf_path));
+        app.handle_decrypt();
+        assert!(matches!(app.decrypt_status, OpStatus::Ok(_)), "decryption failed");
+
+        let decrypted = std::fs::read(tmp.path().join("input.txt")).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+}
