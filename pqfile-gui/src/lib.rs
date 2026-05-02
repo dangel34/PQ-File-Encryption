@@ -594,6 +594,39 @@ impl PqfileApp {
 // ── Encrypt tab ────────────────────────────────────────────────────────────
 
 impl PqfileApp {
+    fn handle_encrypt(&mut self) {
+        let pub_pem = self.encrypt_pubkey.as_str().map(str::to_owned);
+        let plain = self.encrypt_plain.data.clone();
+        let plain_name = self.encrypt_plain.name.clone();
+        let plain_path = self.encrypt_plain.path.clone();
+
+        let (Some(pub_pem), Some(plain)) = (pub_pem, plain) else {
+            self.encrypt_status = OpStatus::Err("Load both files first.".to_owned());
+            return;
+        };
+
+        match encrypt::encrypt_bytes(&pub_pem, &plain) {
+            Ok(pqf) => {
+                let out_name = format!("{plain_name}.pqf");
+                let out_path = plain_path.map(|p| {
+                    let mut s = p.as_os_str().to_owned();
+                    s.push(".pqf");
+                    PathBuf::from(s)
+                });
+                #[cfg(not(target_arch = "wasm32"))]
+                let confirm = self.settings.confirm_overwrite;
+                #[cfg(target_arch = "wasm32")]
+                let confirm = false;
+                self.encrypt_status = save_result(&out_name, &pqf, out_path, confirm);
+                if self.settings.auto_clear && matches!(self.encrypt_status, OpStatus::Ok(_)) {
+                    self.encrypt_pubkey.clear();
+                    self.encrypt_plain.clear();
+                }
+            }
+            Err(e) => self.encrypt_status = OpStatus::Err(e.to_string()),
+        }
+    }
+
     fn show_encrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
         tab_heading(ui, "Encrypt File", dark);
         ui.label(
@@ -626,40 +659,7 @@ impl PqfileApp {
             )
             .clicked()
         {
-            let pub_pem = self.encrypt_pubkey.as_str().map(str::to_owned);
-            let plain = self.encrypt_plain.data.clone();
-            let plain_name = self.encrypt_plain.name.clone();
-            let plain_path = self.encrypt_plain.path.clone();
-
-            match (pub_pem, plain) {
-                (Some(pub_pem), Some(plain)) => {
-                    match encrypt::encrypt_bytes(&pub_pem, &plain) {
-                        Ok(pqf) => {
-                            let out_name = format!("{plain_name}.pqf");
-                            let out_path = plain_path.map(|p| {
-                                let mut s = p.as_os_str().to_owned();
-                                s.push(".pqf");
-                                PathBuf::from(s)
-                            });
-                            #[cfg(not(target_arch = "wasm32"))]
-                            let confirm = self.settings.confirm_overwrite;
-                            #[cfg(target_arch = "wasm32")]
-                            let confirm = false;
-                            self.encrypt_status = save_result(&out_name, &pqf, out_path, confirm);
-                            if self.settings.auto_clear {
-                                if matches!(self.encrypt_status, OpStatus::Ok(_)) {
-                                    self.encrypt_pubkey.clear();
-                                    self.encrypt_plain.clear();
-                                }
-                            }
-                        }
-                        Err(e) => self.encrypt_status = OpStatus::Err(e.to_string()),
-                    }
-                }
-                _ => {
-                    self.encrypt_status = OpStatus::Err("Load both files first.".to_owned());
-                }
-            }
+            self.handle_encrypt();
         }
 
         if !ready {
@@ -678,6 +678,38 @@ impl PqfileApp {
 // ── Decrypt tab ────────────────────────────────────────────────────────────
 
 impl PqfileApp {
+    fn handle_decrypt(&mut self) {
+        let priv_pem = self.decrypt_privkey.as_str().map(str::to_owned);
+        let pqf = self.decrypt_pqf.data.clone();
+        let pqf_name = self.decrypt_pqf.name.clone();
+        let pqf_path = self.decrypt_pqf.path.clone();
+
+        let (Some(priv_pem), Some(pqf)) = (priv_pem, pqf) else {
+            self.decrypt_status = OpStatus::Err("Load both files first.".to_owned());
+            return;
+        };
+
+        match decrypt::decrypt_bytes(&priv_pem, &pqf) {
+            Ok(plain) => {
+                let out_name = PathBuf::from(&pqf_name)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| pqf_name.clone());
+                let out_path = pqf_path.map(|p| p.with_extension(""));
+                #[cfg(not(target_arch = "wasm32"))]
+                let confirm = self.settings.confirm_overwrite;
+                #[cfg(target_arch = "wasm32")]
+                let confirm = false;
+                self.decrypt_status = save_result(&out_name, &plain, out_path, confirm);
+                if self.settings.auto_clear && matches!(self.decrypt_status, OpStatus::Ok(_)) {
+                    self.decrypt_privkey.clear();
+                    self.decrypt_pqf.clear();
+                }
+            }
+            Err(e) => self.decrypt_status = OpStatus::Err(e.to_string()),
+        }
+    }
+
     fn show_decrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
         tab_heading(ui, "Decrypt File", dark);
         ui.label(
@@ -710,40 +742,7 @@ impl PqfileApp {
             )
             .clicked()
         {
-            let priv_pem = self.decrypt_privkey.as_str().map(str::to_owned);
-            let pqf = self.decrypt_pqf.data.clone();
-            let pqf_name = self.decrypt_pqf.name.clone();
-            let pqf_path = self.decrypt_pqf.path.clone();
-
-            match (priv_pem, pqf) {
-                (Some(priv_pem), Some(pqf)) => {
-                    match decrypt::decrypt_bytes(&priv_pem, &pqf) {
-                        Ok(plain) => {
-                            let out_name = PathBuf::from(&pqf_name)
-                                .file_stem()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| pqf_name.clone());
-                            let out_path = pqf_path.map(|p| p.with_extension(""));
-                            #[cfg(not(target_arch = "wasm32"))]
-                            let confirm = self.settings.confirm_overwrite;
-                            #[cfg(target_arch = "wasm32")]
-                            let confirm = false;
-                            self.decrypt_status =
-                                save_result(&out_name, &plain, out_path, confirm);
-                            if self.settings.auto_clear {
-                                if matches!(self.decrypt_status, OpStatus::Ok(_)) {
-                                    self.decrypt_privkey.clear();
-                                    self.decrypt_pqf.clear();
-                                }
-                            }
-                        }
-                        Err(e) => self.decrypt_status = OpStatus::Err(e.to_string()),
-                    }
-                }
-                _ => {
-                    self.decrypt_status = OpStatus::Err("Load both files first.".to_owned());
-                }
-            }
+            self.handle_decrypt();
         }
 
         if !ready {
