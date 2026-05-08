@@ -1,6 +1,6 @@
 [package]
 name = "pqfile-gui"
-version = "1.0.2"
+version = "2.0.0"
 edition = "2021"
 autobins = false
 
@@ -18,6 +18,7 @@ tempfile = "3"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = [
     "Window",
     "Document",
@@ -28,6 +29,7 @@ web-sys = { version = "0.3", features = [
     "Node",
     "Url",
     "Blob",
+    "console",
 ] }
 js-sys = "0.3"
 getrandom = { version = "0.2", features = ["js"] }

@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 // ── Version ────────────────────────────────────────────────────────────────
 
-const APP_VERSION: &str = "0.1.0";
+const APP_VERSION: &str = "2.0.0";
 
 // ── Catppuccin Mocha (dark) ────────────────────────────────────────────────
 
@@ -59,23 +59,28 @@ fn c_red(d: bool)      -> Color32 { if d { D_RED }      else { L_RED } }
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
     use wasm_bindgen::JsCast as _;
+
+    // Route Rust panics to the browser console for easier debugging.
+    console_error_panic_hook::set_once();
+
     let canvas = web_sys::window()
-        .unwrap()
+        .ok_or_else(|| JsValue::from_str("no window"))?
         .document()
-        .unwrap()
+        .ok_or_else(|| JsValue::from_str("no document"))?
         .get_element_by_id("pqfile_canvas")
-        .unwrap()
-        .dyn_into::<web_sys::HtmlCanvasElement>()
-        .unwrap();
+        .ok_or_else(|| JsValue::from_str("canvas element not found"))?
+        .dyn_into::<web_sys::HtmlCanvasElement>()?;
     wasm_bindgen_futures::spawn_local(async move {
-        eframe::WebRunner::new()
+        if let Err(e) = eframe::WebRunner::new()
             .start(
                 canvas,
                 eframe::WebOptions::default(),
                 Box::new(|cc| Ok(Box::new(PqfileApp::new(cc)))),
             )
             .await
-            .expect("failed to start eframe");
+        {
+            web_sys::console::error_1(&e);
+        }
     });
     Ok(())
 }
@@ -561,33 +566,42 @@ impl PqfileApp {
             )
             .clicked()
         {
-            match keygen::keygen_bytes() {
-                Ok((pub_pem, priv_pem)) => {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let dir = std::path::Path::new(&self.keygen_dir);
-                        let r1 = std::fs::write(dir.join("pubkey.pem"), pub_pem.as_bytes());
-                        let r2 = std::fs::write(dir.join("privkey.pem"), priv_pem.as_bytes());
-                        self.keygen_status = match (r1, r2) {
-                            (Ok(()), Ok(())) => {
-                                OpStatus::Ok(format!("Keys saved to  {}", dir.display()))
-                            }
-                            (Err(e), _) | (_, Err(e)) => OpStatus::Err(e.to_string()),
-                        };
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        download_bytes("pubkey.pem", pub_pem.as_bytes());
-                        download_bytes("privkey.pem", priv_pem.as_bytes());
-                        self.keygen_status =
-                            OpStatus::Ok("pubkey.pem and privkey.pem downloaded.".to_owned());
-                    }
-                }
-                Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),
-            }
+            self.handle_keygen();
         }
 
         show_status(ui, &self.keygen_status, dark);
+    }
+
+    fn handle_keygen(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.keygen_dir.trim().is_empty() {
+            self.keygen_status = OpStatus::Err("Choose an output directory first.".to_owned());
+            return;
+        }
+        match keygen::keygen_bytes() {
+            Ok((pub_pem, priv_pem)) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let dir = std::path::Path::new(&self.keygen_dir);
+                    let r1 = std::fs::write(dir.join("pubkey.pem"), pub_pem.as_bytes());
+                    let r2 = std::fs::write(dir.join("privkey.pem"), priv_pem.as_bytes());
+                    self.keygen_status = match (r1, r2) {
+                        (Ok(()), Ok(())) => {
+                            OpStatus::Ok(format!("Keys saved to  {}", dir.display()))
+                        }
+                        (Err(e), _) | (_, Err(e)) => OpStatus::Err(e.to_string()),
+                    };
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    download_bytes("pubkey.pem", pub_pem.as_bytes());
+                    download_bytes("privkey.pem", priv_pem.as_bytes());
+                    self.keygen_status =
+                        OpStatus::Ok("pubkey.pem and privkey.pem downloaded.".to_owned());
+                }
+            }
+            Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),
+        }
     }
 }
 
@@ -1219,6 +1233,26 @@ mod tests {
 
     fn loaded_input(name: &str, data: Vec<u8>, path: Option<PathBuf>) -> FileInput {
         FileInput { name: name.to_owned(), data: Some(data), path, pending: Default::default() }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn keygen_empty_dir_sets_error() {
+        let mut app = PqfileApp::default();
+        app.handle_keygen();
+        assert!(matches!(app.keygen_status, OpStatus::Err(_)));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn keygen_valid_dir_saves_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = PqfileApp::default();
+        app.keygen_dir = tmp.path().to_string_lossy().into_owned();
+        app.handle_keygen();
+        assert!(matches!(app.keygen_status, OpStatus::Ok(_)));
+        assert!(tmp.path().join("pubkey.pem").exists());
+        assert!(tmp.path().join("privkey.pem").exists());
     }
 
     #[test]

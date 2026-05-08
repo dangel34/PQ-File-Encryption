@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
 };
 use ml_kem::{
@@ -14,7 +14,7 @@ use rand_core::RngCore;
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
-use crate::format::{KEM_CT_LEN, NONCE_LEN, PqfHeader};
+use crate::format::{HEADER_LEN, KEM_CT_LEN, NONCE_LEN, PqfHeader};
 
 pub fn encrypt(pubkey_path: &Path, input_path: &Path) -> Result<(), PqfileError> {
     let pubkey_pem = fs::read_to_string(pubkey_path)?;
@@ -53,17 +53,17 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
 
     let original_size = plaintext.len() as u64;
 
+    let header = PqfHeader { kem_ciphertext: kem_ct, nonce: nonce_bytes, original_size };
+    let mut output = Vec::with_capacity(HEADER_LEN + plaintext.len() + 16);
+    header.write(&mut output)?;
+
     let key = Key::from_slice(ss_bytes.as_ref());
     let nonce = Nonce::from_slice(&nonce_bytes);
     let cipher = ChaCha20Poly1305::new(key);
     let ciphertext = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(nonce, Payload { msg: plaintext, aad: &output })
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let header = PqfHeader { kem_ciphertext: kem_ct, nonce: nonce_bytes, original_size };
-    let mut output = Vec::with_capacity(1115 + plaintext.len() + 16);
-    header.write(&mut output)?;
     output.extend_from_slice(&ciphertext);
-
     Ok(output)
 }
