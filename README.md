@@ -55,15 +55,14 @@ PQ-File-Encryption/
 │       ├── Cargo.deb.toml  Debian package metadata
 │       └── pqfile.spec     RPM spec for Fedora/RHEL
 ├── pqfile-gui/             Shared GUI logic + WASM web app
-│   ├── Cargo.toml          crate-type = ["cdylib", "rlib"]
+│   ├── Cargo.toml          crate-type = ["cdylib", "rlib"], autobins = false
 │   ├── index.html          Canvas page for trunk/WASM builds
 │   └── src/
-│       ├── lib.rs          App logic and WASM entry point
-│       └── main.rs         Native entry point (links against lib)
+│       └── lib.rs          App logic and WASM entry point
 └── pqfile-desktop/         Native desktop binary
     ├── Cargo.toml          Depends on pqfile-gui and eframe
     └── src/
-        └── main.rs         Native entry point (12 lines)
+        └── main.rs         Native entry point (~18 lines)
 ```
 
 The `pqfile` crate is both a library (exposing `encrypt_bytes`, `decrypt_bytes`, `keygen_bytes`) and a CLI binary. The `pqfile-gui` crate is a lib-only crate: it compiles to a `cdylib` for WASM deployment and an `rlib` for the native binary to link against. The `pqfile-desktop` crate is the native binary; it contains only the entry point and links against `pqfile-gui`. This separation follows the official eframe template pattern and avoids build artifact conflicts between the lib and binary targets.
@@ -298,18 +297,20 @@ Keys are stored in standard PEM framing with custom type labels:
 
 ```
 -----BEGIN ML-KEM-768 PRIVATE KEY-----
-<base64-encoded decapsulation key, 2400 bytes raw>
+<base64-encoded decapsulation key seed, 64 bytes raw>
 -----END ML-KEM-768 PRIVATE KEY-----
 ```
 
-Raw sizes from FIPS 203 Section 7:
+The private key stores the 64-byte seed (§3.3 of FIPS 203) rather than the 2400-byte expanded form. The decapsulation key is re-derived from the seed on load, which keeps key files small and avoids storing redundant data.
 
-| Key type          | Raw size (bytes) |
-|-------------------|-----------------|
-| Encapsulation key | 1184            |
-| Decapsulation key | 2400            |
-| KEM ciphertext    | 1088            |
-| Shared secret     | 32              |
+Raw sizes:
+
+| Key type              | Raw size (bytes) |
+|-----------------------|-----------------|
+| Encapsulation key     | 1184            |
+| Decapsulation key seed| 64              |
+| KEM ciphertext        | 1088            |
+| Shared secret         | 32              |
 
 ---
 
@@ -321,14 +322,16 @@ Run the full test suite from the repository root:
 cargo test
 ```
 
-The integration test in `pqfile/tests/roundtrip.rs` performs a complete end-to-end cycle:
+The integration tests in `pqfile/tests/roundtrip.rs` cover the CLI binary end-to-end:
 
-1. Creates a temporary directory.
-2. Writes a known byte string to a file.
-3. Runs `pqfile keygen` to generate a fresh key pair.
-4. Runs `pqfile encrypt` to produce a `.pqf` file.
-5. Runs `pqfile decrypt` to recover the plaintext.
-6. Asserts that the recovered bytes are identical to the original.
+| Test | What it verifies |
+|------|-----------------|
+| `roundtrip` | keygen → encrypt → decrypt → byte-for-byte match |
+| `roundtrip_custom_output_paths` | `-o` flag on both encrypt and decrypt |
+| `keygen_refuses_overwrite_without_force` | second keygen exits non-zero without `--force` |
+| `keygen_force_overwrites_existing_keys` | `--force` succeeds on second keygen |
+| `inspect_shows_header_fields` | `pqfile inspect` prints correct magic, version, KEM variant, and size |
+| `inspect_fails_on_invalid_file` | inspect exits non-zero on a non-`.pqf` file |
 
 ---
 
@@ -342,8 +345,6 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | InvalidMagic        | File does not start with the bytes "PQFL"             |
 | UnsupportedVersion  | Version byte is not 0x02                              |
 | UnsupportedKem      | KEM variant field is not 768                          |
-| KemEncapsulation    | ML-KEM encapsulation failed                           |
-| KemDecapsulation    | ML-KEM decapsulation failed                           |
 | DecryptionFailure   | ChaCha20-Poly1305 authentication tag mismatch         |
 | InvalidPem          | PEM file could not be parsed                          |
 | InvalidKeyLength    | Decoded key bytes are the wrong length                |
@@ -357,27 +358,26 @@ All errors are reported to stderr with a descriptive message. The process exits 
 
 | Crate            | Version | Purpose                                          |
 |------------------|---------|--------------------------------------------------|
-| ml-kem           | 0.2     | ML-KEM-768 key encapsulation (FIPS 203)          |
+| ml-kem           | 0.3     | ML-KEM-768 key encapsulation (FIPS 203)          |
 | chacha20poly1305 | 0.10    | ChaCha20-Poly1305 authenticated encryption       |
-| rand             | 0.8     | OsRng and RngCore for secure randomness          |
-| rand_core        | 0.6     | CryptoRngCore trait used by ml-kem               |
+| getrandom        | 0.4     | OS CSPRNG for nonce generation                   |
 | zeroize          | 1       | Overwrite secret bytes in memory on drop         |
 | pem              | 3       | PEM encoding and decoding for key files          |
 | clap             | 4       | Command-line argument parsing with derive macros |
-| thiserror        | 1       | Ergonomic custom error type derivation           |
-| sha3             | 0.10    | SHA3-256 (FIPS 202) for public key fingerprints  |
+| thiserror        | 2       | Ergonomic custom error type derivation           |
+| sha3             | 0.11    | SHA3-256 (FIPS 202) for public key fingerprints  |
 
 ### pqfile-gui (shared GUI logic and WASM lib)
 
 | Crate                | Version | Purpose                                        |
 |----------------------|---------|------------------------------------------------|
-| eframe               | 0.29    | egui app framework (native via rlib, WASM via cdylib) |
-| rfd                  | 0.14    | Native sync and WASM async file dialogs        |
+| eframe               | 0.34    | egui app framework (native via rlib, WASM via cdylib) |
+| rfd                  | 0.17    | Native sync and WASM async file dialogs        |
 | wasm-bindgen         | 0.2     | Rust/WASM bindings (WASM only)                 |
 | wasm-bindgen-futures | 0.4     | Async bridge for WASM (WASM only)              |
 | web-sys              | 0.3     | Browser DOM APIs for file download (WASM only) |
 | js-sys               | 0.3     | JavaScript types for WASM (WASM only)          |
-| getrandom            | 0.2     | JS entropy source for WASM crypto (WASM only)  |
+| getrandom            | 0.4     | JS entropy source for WASM crypto (WASM only)  |
 | console_error_panic_hook | 0.1 | Routes Rust panics to the browser console (WASM only) |
 
 ### pqfile-desktop (native binary)
@@ -385,7 +385,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | Crate      | Version | Purpose                                  |
 |------------|---------|------------------------------------------|
 | pqfile-gui | local   | Shared GUI app logic (linked as rlib)    |
-| eframe     | 0.29    | Native window creation and event loop    |
+| eframe     | 0.34    | Native window creation and event loop    |
 
 ---
 

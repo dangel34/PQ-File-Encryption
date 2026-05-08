@@ -66,7 +66,7 @@ This document tracks planned improvements, new features, and security work acros
 ### Security
 
 - **ML-KEM-1024 support**
-  Add a `--level 1024` flag to `pqfile keygen` and `encrypt`. Store the KEM variant in the header (already present as a u16 field). The decapsulation key size changes from 2400 to 3168 bytes and the ciphertext from 1088 to 1568 bytes. Existing v2 files remain readable.
+  Add a `--level 1024` flag to `pqfile keygen` and `encrypt`. Store the KEM variant in the header (already present as a u16 field). The private key seed stays 64 bytes (unchanged); the encapsulation key grows from 1184 to 1568 bytes and the KEM ciphertext from 1088 to 1568 bytes. Existing v2 files remain readable.
 
 - **Digital signatures with ML-DSA (NIST FIPS 204)**
   Add optional file signing: `pqfile sign` produces a detached `.sig` file; `pqfile verify` checks it. Uses ML-DSA-65 (Dilithium level 3). This is separate from encryption — a sender can sign a file before the recipient encrypts it, proving the file was not substituted in transit.

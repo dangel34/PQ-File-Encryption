@@ -114,17 +114,18 @@ rpmbuild -bb pqfile/packaging/pqfile.spec
 
 ---
 
-## Step 4 — Create the GitHub Release
+## Step 4 — Wait for the release workflow
 
-1. Go to **Releases → Draft a new release** on GitHub.
-2. Select the tag `vX.Y.Z` you just pushed.
-3. Set the release title to `vX.Y.Z`.
-4. Write release notes (what changed since the last release).
-5. Upload the artifacts you built in Step 3:
-   - `pqfile` / `pqfile.exe`
-   - `pqfile-desktop` / `pqfile-desktop.exe`
-   - `pqfile_X.Y.Z_amd64.deb` (if built)
-6. Click **Publish release**.
+Pushing the tag triggers `.github/workflows/release.yml`, which:
+
+1. Runs the full test suite.
+2. Builds CLI and desktop GUI binaries for all four platforms (Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64).
+3. Builds the Windows installer via Inno Setup.
+4. Builds the WASM web app with trunk and archives it as `pqfile-web.tar.gz`.
+5. Generates a `checksums.txt` (SHA-256) covering all artifacts.
+6. Creates a **draft** GitHub release with all artifacts attached.
+
+Monitor progress in the **Actions** tab. Once the workflow completes, open the draft release, review the auto-generated notes, and click **Publish release**.
 
 ---
 
