@@ -2,7 +2,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use eframe::egui::{self, Color32, Margin, RichText, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
 use pqfile::{decrypt, encrypt, format, keygen};
 
 #[cfg(target_arch = "wasm32")]
@@ -262,37 +262,38 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     );
     v.selection.stroke = Stroke::new(1.0, accent);
 
-    v.window_rounding = Rounding::same(8.0);
+    v.window_corner_radius = CornerRadius::same(8);
     v.window_stroke = Stroke::new(1.0, surf1);
     v.popup_shadow = egui::Shadow {
-        offset: Vec2::new(0.0, 4.0),
-        blur: 16.0,
-        spread: 0.0,
+        offset: [0, 4],
+        blur: 16,
+        spread: 0,
         color: Color32::from_black_alpha(shadow_alpha),
     };
 
-    let r = Rounding::same(6.0);
-    v.widgets.noninteractive.rounding = r;
-    v.widgets.inactive.rounding = r;
-    v.widgets.hovered.rounding = r;
-    v.widgets.active.rounding = r;
+    let r = CornerRadius::same(6);
+    v.widgets.noninteractive.corner_radius = r;
+    v.widgets.inactive.corner_radius = r;
+    v.widgets.hovered.corner_radius = r;
+    v.widgets.active.corner_radius = r;
 
     // silence unused warnings from destructuring
     let _ = overlay;
 
     ctx.set_visuals(v);
 
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.spacing.item_spacing = Vec2::new(8.0, 6.0);
     style.spacing.button_padding = Vec2::new(10.0, 5.0);
-    style.spacing.window_margin = Margin::same(16.0);
-    ctx.set_style(style);
+    style.spacing.window_margin = Margin::same(16);
+    ctx.set_global_style(style);
 }
 
 // ── Frame ──────────────────────────────────────────────────────────────────
 
 impl eframe::App for PqfileApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         if self.poll_files() {
             ctx.request_repaint();
         }
@@ -302,10 +303,10 @@ impl eframe::App for PqfileApp {
         let bg     = c_bg(dark);
 
         // ── Title bar ──────────────────────────────────────────────────────
-        egui::TopBottomPanel::top("top_bar")
-            .exact_height(46.0)
-            .frame(egui::Frame::none().fill(chrome).inner_margin(Margin::symmetric(14.0, 0.0)))
-            .show(ctx, |ui| {
+        egui::Panel::top("top_bar")
+            .exact_size(46.0)
+            .frame(egui::Frame::NONE.fill(chrome).inner_margin(Margin::symmetric(14, 0)))
+            .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new("🔐  pqfile")
@@ -330,10 +331,10 @@ impl eframe::App for PqfileApp {
             });
 
         // ── Footer ─────────────────────────────────────────────────────────
-        egui::TopBottomPanel::bottom("footer")
-            .exact_height(26.0)
-            .frame(egui::Frame::none().fill(chrome).inner_margin(Margin::symmetric(14.0, 0.0)))
-            .show(ctx, |ui| {
+        egui::Panel::bottom("footer")
+            .exact_size(26.0)
+            .frame(egui::Frame::NONE.fill(chrome).inner_margin(Margin::symmetric(14, 0)))
+            .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.label(RichText::new(format!("v{APP_VERSION}")).size(11.0).color(c_overlay(dark)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -348,17 +349,17 @@ impl eframe::App for PqfileApp {
 
         // ── About modal ────────────────────────────────────────────────────
         if self.show_about {
-            self.show_about_window(ctx, dark);
+            self.show_about_window(&ctx, dark);
         }
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(bg))
-            .show(ctx, |ui| {
+            .frame(egui::Frame::NONE.fill(bg))
+            .show_inside(ui, |ui| {
                 // Tab strip
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(chrome)
-                    .inner_margin(Margin::symmetric(14.0, 7.0))
+                    .inner_margin(Margin::symmetric(14, 7))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             tab_btn(ui, &mut self.tab, Tab::Keygen,   "🔑  Keygen",   dark);
@@ -372,14 +373,14 @@ impl eframe::App for PqfileApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
-                        egui::Frame::none()
-                            .inner_margin(Margin::symmetric(18.0, 14.0))
+                        egui::Frame::NONE
+                            .inner_margin(Margin::symmetric(18, 14))
                             .show(ui, |ui| match self.tab {
                                 Tab::Keygen   => self.show_keygen(ui, dark),
                                 Tab::Encrypt  => self.show_encrypt(ui, dark),
                                 Tab::Decrypt  => self.show_decrypt(ui, dark),
                                 Tab::Inspect  => self.show_inspect(ui, dark),
-                                Tab::Settings => self.show_settings(ui, ctx, dark),
+                                Tab::Settings => self.show_settings(ui, &ctx, dark),
                             });
                     });
             });
@@ -420,10 +421,10 @@ impl PqfileApp {
             .default_width(380.0)
             .max_height(440.0)
             .frame(
-                egui::Frame::window(&ctx.style())
+                egui::Frame::window(&ctx.global_style())
                     .fill(c_bg(dark))
                     .stroke(Stroke::new(1.0, c_surface1(dark)))
-                    .rounding(Rounding::same(10.0)),
+                    .corner_radius(CornerRadius::same(10)),
             )
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
@@ -580,15 +581,17 @@ impl PqfileApp {
         }
         match keygen::keygen_bytes() {
             Ok((pub_pem, priv_pem)) => {
+                let fp = keygen::fingerprint_pem(&pub_pem);
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let dir = std::path::Path::new(&self.keygen_dir);
                     let r1 = std::fs::write(dir.join("pubkey.pem"), pub_pem.as_bytes());
                     let r2 = std::fs::write(dir.join("privkey.pem"), priv_pem.as_bytes());
                     self.keygen_status = match (r1, r2) {
-                        (Ok(()), Ok(())) => {
-                            OpStatus::Ok(format!("Keys saved to  {}", dir.display()))
-                        }
+                        (Ok(()), Ok(())) => OpStatus::Ok(format!(
+                            "Keys saved to {}\nFingerprint: {fp}",
+                            dir.display()
+                        )),
                         (Err(e), _) | (_, Err(e)) => OpStatus::Err(e.to_string()),
                     };
                 }
@@ -596,8 +599,9 @@ impl PqfileApp {
                 {
                     download_bytes("pubkey.pem", pub_pem.as_bytes());
                     download_bytes("privkey.pem", priv_pem.as_bytes());
-                    self.keygen_status =
-                        OpStatus::Ok("pubkey.pem and privkey.pem downloaded.".to_owned());
+                    self.keygen_status = OpStatus::Ok(format!(
+                        "pubkey.pem and privkey.pem downloaded.\nFingerprint: {fp}"
+                    ));
                 }
             }
             Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),
@@ -1010,11 +1014,11 @@ fn card(
     border: Color32,
     content: impl FnOnce(&mut egui::Ui),
 ) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(fill)
         .stroke(Stroke::new(1.0, border))
-        .rounding(Rounding::same(8.0))
-        .inner_margin(Margin::same(12.0))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::same(12))
         .outer_margin(Margin::ZERO)
         .show(ui, content);
 }
@@ -1058,7 +1062,7 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, dark: bool) -> egui::Response
             255,
         );
         let r = rect.height() / 2.0;
-        ui.painter().rect_filled(rect, Rounding::same(r), track);
+        ui.painter().rect_filled(rect, CornerRadius::from(r), track);
         let knob_x = rect.left() + r + t * (rect.width() - 2.0 * r);
         ui.painter().circle_filled(
             egui::pos2(knob_x, rect.center().y),
@@ -1213,14 +1217,14 @@ fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {
         OpStatus::Err(m) => (m.as_str(), c_red(dark)),
     };
     ui.add_space(8.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 22))
         .stroke(Stroke::new(
             1.0,
             Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 80),
         ))
-        .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::symmetric(10.0, 6.0))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(10, 6))
         .show(ui, |ui| {
             ui.label(RichText::new(msg).size(13.0).color(color));
         });

@@ -9,8 +9,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pqfile = { path = "../pqfile" }
-eframe = { version = "0.29", features = ["default_fonts"] }
-rfd = "0.14"
+eframe = { version = "0.34", features = ["default_fonts"] }
+rfd = "0.17"
 
 [dev-dependencies]
 tempfile = "3"
@@ -32,4 +32,4 @@ web-sys = { version = "0.3", features = [
     "console",
 ] }
 js-sys = "0.3"
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }

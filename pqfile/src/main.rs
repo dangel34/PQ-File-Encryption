@@ -22,16 +22,25 @@ enum Command {
     Keygen {
         #[arg(long, value_name = "DIR")]
         out: PathBuf,
+        /// Overwrite existing key files without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     Encrypt {
         #[arg(short = 'r', value_name = "PUBKEY")]
         recipient: PathBuf,
         input: PathBuf,
+        /// Write encrypted output to this path instead of <input>.pqf.
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: Option<PathBuf>,
     },
     Decrypt {
         #[arg(short = 'k', value_name = "PRIVKEY")]
         key: PathBuf,
         input: PathBuf,
+        /// Write decrypted output to this path instead of stripping .pqf.
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: Option<PathBuf>,
     },
     Inspect {
         input: PathBuf,
@@ -41,9 +50,18 @@ enum Command {
 fn run() -> Result<(), PqfileError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Keygen { out } => keygen::keygen(&out),
-        Command::Encrypt { recipient, input } => encrypt::encrypt(&recipient, &input),
-        Command::Decrypt { key, input } => decrypt::decrypt(&key, &input),
+        Command::Keygen { out, force } => {
+            let fp = keygen::keygen(&out, force)?;
+            println!("Keys written to {}", out.display());
+            println!("Public key fingerprint: {fp}");
+            Ok(())
+        }
+        Command::Encrypt { recipient, input, output } => {
+            encrypt::encrypt(&recipient, &input, output.as_deref())
+        }
+        Command::Decrypt { key, input, output } => {
+            decrypt::decrypt(&key, &input, output.as_deref())
+        }
         Command::Inspect { input } => inspect(&input),
     }
 }
