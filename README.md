@@ -138,13 +138,30 @@ pqfile keygen --out /path/to/keys/
 
 Writes `pubkey.pem` and `privkey.pem` to the given directory. The directory must already exist. Share `pubkey.pem` with anyone who needs to send you encrypted files. Keep `privkey.pem` private.
 
+On success, prints a SHA3-256 fingerprint of the public key:
+
+```
+Keys written to /path/to/keys/
+Public key fingerprint: e2:a3:43:ab:78:8a:64:f3
+```
+
+If either key file already exists, the command refuses to overwrite and exits with an error. Use `--force` to overwrite:
+
+```
+pqfile keygen --out /path/to/keys/ --force
+```
+
 ### Encrypt a file
 
 ```
 pqfile encrypt -r /path/to/keys/pubkey.pem secret.txt
 ```
 
-Produces `secret.txt.pqf` alongside the original file. The original is not removed. The output path is always the input path with `.pqf` appended.
+Produces `secret.txt.pqf` alongside the original file. The original is not removed. Use `-o` to write the encrypted file to a custom path:
+
+```
+pqfile encrypt -r pubkey.pem secret.txt -o /tmp/out.pqf
+```
 
 ### Decrypt a file
 
@@ -152,7 +169,13 @@ Produces `secret.txt.pqf` alongside the original file. The original is not remov
 pqfile decrypt -k /path/to/keys/privkey.pem secret.txt.pqf
 ```
 
-Produces `secret.txt` (the `.pqf` extension is stripped). If the file has been tampered with, the command exits with an authentication tag mismatch error and writes no output.
+Produces `secret.txt` (the `.pqf` extension is stripped). Use `-o` to write the decrypted file to a custom path:
+
+```
+pqfile decrypt -k privkey.pem secret.txt.pqf -o recovered.txt
+```
+
+If the file has been tampered with, the command exits with an authentication tag mismatch error and writes no output.
 
 ### Inspect a .pqf file
 
@@ -324,6 +347,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | DecryptionFailure   | ChaCha20-Poly1305 authentication tag mismatch         |
 | InvalidPem          | PEM file could not be parsed                          |
 | InvalidKeyLength    | Decoded key bytes are the wrong length                |
+| OutputExists        | Key file already exists and `--force` was not passed  |
 
 ---
 
@@ -341,6 +365,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | pem              | 3       | PEM encoding and decoding for key files          |
 | clap             | 4       | Command-line argument parsing with derive macros |
 | thiserror        | 1       | Ergonomic custom error type derivation           |
+| sha3             | 0.10    | SHA3-256 (FIPS 202) for public key fingerprints  |
 
 ### pqfile-gui (shared GUI logic and WASM lib)
 
