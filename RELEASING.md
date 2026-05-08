@@ -29,13 +29,17 @@ All three crates (`pqfile`, `pqfile-gui`, `pqfile-desktop`) are versioned togeth
 
 ## Step 1 — Bump versions
 
-Edit the `version` field in all three `Cargo.toml` files to the new version:
+Edit the version in all of the following files:
 
-```
-pqfile/Cargo.toml
-pqfile-gui/Cargo.toml
-pqfile-desktop/Cargo.toml
-```
+| File | Field |
+|---|---|
+| `pqfile/Cargo.toml` | `version` |
+| `pqfile-gui/Cargo.toml` | `version` |
+| `pqfile-desktop/Cargo.toml` | `version` |
+| `pqfile-gui/src/lib.rs` | `APP_VERSION` constant |
+| `pqfile-desktop/packaging/setup.iss` | `AppVersion` |
+| `pqfile/packaging/pqfile.spec` | `Version` + add a `%changelog` entry |
+| `sonar-project.properties` | `sonar.projectVersion` |
 
 Then regenerate the lock file:
 

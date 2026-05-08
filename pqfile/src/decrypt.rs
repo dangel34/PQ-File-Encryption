@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::path::Path;
 
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
 };
 use ml_kem::{
@@ -13,7 +13,7 @@ use ml_kem::{
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
-use crate::format::{KEM_CT_LEN, PqfHeader};
+use crate::format::{HEADER_LEN, KEM_CT_LEN, PqfHeader};
 
 pub fn decrypt(privkey_path: &Path, input_path: &Path) -> Result<(), PqfileError> {
     let privkey_pem = fs::read_to_string(privkey_path)?;
@@ -45,12 +45,13 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8]) -> Result<Vec<u8>, Pqfi
     let mut ss_bytes = Zeroizing::new([0u8; 32]);
     ss_bytes.copy_from_slice(ss.as_slice());
 
-    let payload = &pqf_data[cursor.position() as usize..];
+    let header_bytes = &pqf_data[..HEADER_LEN];
+    let payload = &pqf_data[HEADER_LEN..];
 
     let key = Key::from_slice(ss_bytes.as_ref());
     let nonce = Nonce::from_slice(&header.nonce);
     let cipher = ChaCha20Poly1305::new(key);
     cipher
-        .decrypt(nonce, payload)
+        .decrypt(nonce, Payload { msg: payload, aad: header_bytes })
         .map_err(|_| PqfileError::DecryptionFailure)
 }

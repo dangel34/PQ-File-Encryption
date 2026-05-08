@@ -58,7 +58,8 @@ PQ-File-Encryption/
 │   ├── Cargo.toml          crate-type = ["cdylib", "rlib"]
 │   ├── index.html          Canvas page for trunk/WASM builds
 │   └── src/
-│       └── lib.rs          App logic and WASM entry point
+│       ├── lib.rs          App logic and WASM entry point
+│       └── main.rs         Native entry point (links against lib)
 └── pqfile-desktop/         Native desktop binary
     ├── Cargo.toml          Depends on pqfile-gui and eframe
     └── src/
@@ -93,13 +94,13 @@ cargo install --path pqfile
 ### Native GUI
 
 ```
-cargo build --release --bin pqfile-gui
+cargo build --release -p pqfile-desktop
 ```
 
-Binary is at `target/release/pqfile-gui`. Run it directly:
+Binary is at `target/release/pqfile-desktop`. Run it directly:
 
 ```
-./target/release/pqfile-gui
+./target/release/pqfile-desktop
 ```
 
 ### Web GUI
@@ -163,7 +164,7 @@ Parses and prints the header fields without decrypting the payload. Useful for v
 
 ```
 Magic:              PQFL
-Version:            0x01
+Version:            0x02
 KEM variant:        768
 Nonce:              a3f09c12de87b64c01e5a920
 Original file size: 2048 bytes
@@ -212,12 +213,13 @@ After running `trunk build --release` inside `pqfile-gui/`, the `dist/` folder c
 
 ### GitHub Pages
 
+Deployment is automated via `.github/workflows/pages.yml`. Pushing to `main` triggers a trunk build and deploys the result to:
+
 ```
-# From pqfile-gui/
-trunk build --release --public-url /your-repo-name/
+https://dangel34.github.io/PQ-File-Encryption/
 ```
 
-Push the `dist/` folder to the `gh-pages` branch, or configure Pages to serve from it.
+To redeploy without a code change, use the **Run workflow** button on the `Deploy to GitHub Pages` workflow in the Actions tab. If you are deploying to a different repository, update the `--public-url` flag in the workflow to match your repo name.
 
 ### Cloudflare Pages / Netlify / Vercel
 
@@ -247,7 +249,7 @@ Every encrypted file begins with a fixed-length header followed by the encrypted
 Offset   Length    Field
 ------   ------    -----
 0        4         Magic bytes: ASCII "PQFL"
-4        1         Version: 0x01
+4        1         Version: 0x02
 5        2         KEM variant: 768 as little-endian u16
 7        1088      ML-KEM-768 KEM ciphertext (encapsulated shared secret)
 1095     12        ChaCha20-Poly1305 nonce
@@ -257,7 +259,7 @@ Offset   Length    Field
 
 The KEM ciphertext field is 1088 bytes because that is the exact ciphertext size specified by FIPS 203 for the ML-KEM-768 parameter set (k=3, du=10, dv=4).
 
-The Poly1305 tag is appended directly to the ciphertext by the `chacha20poly1305` crate. The original file size field allows pre-allocation before decryption; it is not used for truncation since the authentication tag provides integrity.
+The entire 1115-byte header (bytes 0–1114) is passed as AEAD additional data (AAD) during encryption. The Poly1305 tag therefore covers both the ciphertext payload and the header, so any modification to any header field — including magic, version, KEM variant, KEM ciphertext, nonce, or original size — is detected and causes decryption to fail. The original file size field is informational; it is displayed by `pqfile inspect` but not used for truncation.
 
 ---
 
@@ -315,7 +317,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 |---------------------|-------------------------------------------------------|
 | Io                  | Any file system or I/O failure                        |
 | InvalidMagic        | File does not start with the bytes "PQFL"             |
-| UnsupportedVersion  | Version byte is not 0x01                              |
+| UnsupportedVersion  | Version byte is not 0x02                              |
 | UnsupportedKem      | KEM variant field is not 768                          |
 | KemEncapsulation    | ML-KEM encapsulation failed                           |
 | KemDecapsulation    | ML-KEM decapsulation failed                           |
@@ -351,6 +353,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | web-sys              | 0.3     | Browser DOM APIs for file download (WASM only) |
 | js-sys               | 0.3     | JavaScript types for WASM (WASM only)          |
 | getrandom            | 0.2     | JS entropy source for WASM crypto (WASM only)  |
+| console_error_panic_hook | 0.1 | Routes Rust panics to the browser console (WASM only) |
 
 ### pqfile-desktop (native binary)
 
@@ -389,6 +392,6 @@ rpmbuild -bb pqfile/packaging/pqfile.spec
 - The private key (`privkey.pem`) must be kept confidential. Anyone who obtains it can decrypt any file encrypted to the corresponding public key.
 - The public key (`pubkey.pem`) can be shared freely.
 - Each encryption operation generates a fresh KEM ciphertext and a fresh random nonce. Reuse of a nonce under the same key would break ChaCha20-Poly1305 confidentiality, but this cannot happen here because the symmetric key itself is freshly derived per file.
-- The Poly1305 authentication tag guarantees that any modification to the ciphertext or header payload will be detected. The header fields before the payload (magic, version, KEM variant, KEM ciphertext, nonce, size) are not covered by the authentication tag; they are structural and validated by the format parser before decryption begins.
+- The entire `.pqf` file is authenticated. The 1115-byte header is passed as AEAD additional data (AAD), so the Poly1305 tag covers both the header and the ciphertext. Any modification to any byte of the file — header or payload — is detected before decryption produces output.
 - Secret material (the decapsulation key bytes and the shared secret) is overwritten with zeros when the relevant variables go out of scope using the `zeroize` crate.
 - The web GUI performs all cryptographic operations in WebAssembly inside the browser. No file data or key material is transmitted over the network.

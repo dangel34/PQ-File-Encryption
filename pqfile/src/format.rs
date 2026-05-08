@@ -3,10 +3,11 @@ use std::io::{Read, Write};
 use crate::error::PqfileError;
 
 pub const MAGIC: &[u8; 4] = b"PQFL";
-pub const VERSION: u8 = 0x01;
+pub const VERSION: u8 = 0x02;
 pub const KEM_VARIANT: u16 = 768;
 pub const KEM_CT_LEN: usize = 1088;
 pub const NONCE_LEN: usize = 12;
+pub const HEADER_LEN: usize = 4 + 1 + 2 + KEM_CT_LEN + NONCE_LEN + 8;
 
 pub struct PqfHeader {
     pub kem_ciphertext: [u8; KEM_CT_LEN],

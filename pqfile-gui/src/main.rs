@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 fn main() {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -9,7 +11,7 @@ fn main() {
     eframe::run_native(
         "pqfile",
         options,
-        Box::new(|_cc| Ok(Box::new(pqfile_gui::PqfileApp::default()))),
+        Box::new(|cc| Ok(Box::new(pqfile_gui::PqfileApp::new(cc)))),
     )
     .unwrap();
 }
