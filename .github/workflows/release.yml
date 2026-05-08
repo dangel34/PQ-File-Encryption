@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev
+
+      - name: Run tests
+        run: cargo test --workspace
+
+  build:
+    name: Build — ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            ext: ""
+          - target: x86_64-apple-darwin
+            os: macos-13
+            ext: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            ext: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Build CLI
+        run: cargo build --release -p pqfile --target ${{ matrix.target }}
+
+      - name: Build desktop GUI
+        run: cargo build --release -p pqfile-desktop --target ${{ matrix.target }}
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build Windows installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          iscc /DAppVersion=${{ steps.version.outputs.version }} "pqfile-desktop\packaging\setup.iss"
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/pqfile${{ matrix.ext }}" \
+             "dist/pqfile-${{ matrix.target }}${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/pqfile-desktop${{ matrix.ext }}" \
+             "dist/pqfile-desktop-${{ matrix.target }}${{ matrix.ext }}"
+
+      - name: Stage Windows installer
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          cp "pqfile-desktop/packaging/output/pqfile-setup-${{ steps.version.outputs.version }}.exe" dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: dist/
+
+  wasm:
+    name: Build — WASM
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: jetli/trunk-action@v0.5.1
+        with:
+          version: latest
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-wasm-
+
+      - name: Build WASM
+        working-directory: pqfile-gui
+        run: trunk build --release --public-url /PQ-File-Encryption/
+
+      - name: Archive WASM
+        run: tar -czf pqfile-web.tar.gz -C pqfile-gui/dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-wasm
+          path: pqfile-web.tar.gz
+
+  release:
+    name: Create GitHub Release
+    needs: [build, wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: artifacts-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * | sort > checksums.txt
+
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "pqfile ${{ github.ref_name }}" \
+            --generate-notes \
+            --draft \
+            artifacts/*

@@ -119,3 +119,50 @@ fn keygen_force_overwrites_existing_keys() {
         .unwrap();
     assert!(status.success(), "keygen --force failed");
 }
+
+#[test]
+fn inspect_shows_header_fields() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("data.txt");
+    fs::write(&input, b"inspect test payload").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", dir.join("pubkey.pem").to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt failed");
+
+    let output = std::process::Command::new(bin())
+        .args(["inspect", dir.join("data.txt.pqf").to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "inspect failed");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("PQFL"), "missing magic");
+    assert!(stdout.contains("0x02"), "missing version");
+    assert!(stdout.contains("768"), "missing KEM variant");
+    assert!(stdout.contains("Original file size"), "missing size field");
+    assert!(stdout.contains("20 bytes"), "wrong original size");
+}
+
+#[test]
+fn inspect_fails_on_invalid_file() {
+    let tmp = TempDir::new().unwrap();
+    let bad = tmp.path().join("bad.pqf");
+    fs::write(&bad, b"not a pqf file").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["inspect", bad.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "inspect should fail on invalid file");
+}

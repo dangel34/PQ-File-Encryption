@@ -7,7 +7,7 @@
 ;   3. Compile:  iscc setup.iss
 ;      or open in Inno Setup IDE and press F9.
 ;
-; Output: pqfile-desktop\packaging\output\pqfile-setup-0.1.0.exe
+; Output: pqfile-desktop\packaging\output\pqfile-setup-{AppVersion}.exe
 
 #define AppName      "pqfile"
 #define AppVersion   "2.0.0"
