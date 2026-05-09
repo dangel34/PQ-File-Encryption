@@ -52,7 +52,9 @@ cargo build --workspace
 ## Step 2 — Commit and tag
 
 ```
-git add pqfile/Cargo.toml pqfile-gui/Cargo.toml pqfile-desktop/Cargo.toml Cargo.lock
+git add pqfile/Cargo.toml pqfile-gui/Cargo.toml pqfile-desktop/Cargo.toml Cargo.lock \
+        pqfile-gui/src/lib.rs pqfile-desktop/packaging/setup.iss \
+        pqfile/packaging/pqfile.spec sonar-project.properties
 git commit -m "chore: bump version to X.Y.Z"
 git tag vX.Y.Z
 git push origin main
