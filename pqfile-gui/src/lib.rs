@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 // ── Version ────────────────────────────────────────────────────────────────
 
-const APP_VERSION: &str = "2.0.0";
+const APP_VERSION: &str = "2.0.1";
 
 // ── Catppuccin Mocha (dark) ────────────────────────────────────────────────
 
