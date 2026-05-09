@@ -27,45 +27,27 @@ All three crates (`pqfile`, `pqfile-gui`, `pqfile-desktop`) are versioned togeth
 
 ---
 
-## Step 1 — Bump versions
+## Step 1 — Bump versions, commit, and tag
 
-Edit the version in all of the following files:
+Run the script from the repo root:
 
-| File | Field |
-|---|---|
-| `pqfile/Cargo.toml` | `version` |
-| `pqfile-gui/Cargo.toml` | `version` |
-| `pqfile-desktop/Cargo.toml` | `version` |
-| `pqfile-gui/src/lib.rs` | `APP_VERSION` constant |
-| `pqfile-desktop/packaging/setup.iss` | `AppVersion` |
-| `pqfile/packaging/pqfile.spec` | `Version` + add a `%changelog` entry |
-| `sonar-project.properties` | `sonar.projectVersion` |
-
-Then regenerate the lock file:
-
-```
-cargo build --workspace
+```powershell
+.\bump-version.ps1 X.Y.Z
 ```
 
----
+Optionally include a one-line RPM changelog summary (defaults to "Version bump"):
 
-## Step 2 — Commit and tag
+```powershell
+.\bump-version.ps1 X.Y.Z -SpecChangelog "Fix foo and bar"
+```
 
-```
-git add pqfile/Cargo.toml pqfile-gui/Cargo.toml pqfile-desktop/Cargo.toml Cargo.lock \
-        pqfile-gui/src/lib.rs pqfile-desktop/packaging/setup.iss \
-        pqfile/packaging/pqfile.spec sonar-project.properties
-git commit -m "chore: bump version to X.Y.Z"
-git tag vX.Y.Z
-git push origin main
-git push origin vX.Y.Z
-```
+The script updates all version fields across the codebase, regenerates `Cargo.lock`, commits, tags, and pushes to `main` automatically.
 
 Pushing `main` triggers the SonarQube analysis. Wait for it to pass before proceeding.
 
 ---
 
-## Step 3 — Build release artifacts
+## Step 2 — Build release artifacts
 
 Run all builds from the repository root.
 
@@ -116,7 +98,7 @@ rpmbuild -bb pqfile/packaging/pqfile.spec
 
 ---
 
-## Step 4 — Wait for the release workflow
+## Step 3 — Wait for the release workflow
 
 Pushing the tag triggers `.github/workflows/release.yml`, which:
 
@@ -131,9 +113,9 @@ Monitor progress in the **Actions** tab. Once the workflow completes, open the d
 
 ---
 
-## Step 5 — Web GUI deployment
+## Step 4 — Web GUI deployment
 
-The GitHub Pages deployment is **automatic**. Pushing to `main` (Step 2) triggers `.github/workflows/pages.yml`, which builds the WASM app with trunk and deploys it to GitHub Pages at:
+The GitHub Pages deployment is **automatic**. Pushing to `main` (Step 1) triggers `.github/workflows/pages.yml`, which builds the WASM app with trunk and deploys it to GitHub Pages at:
 
 ```
 https://dangel34.github.io/PQ-File-Encryption/
