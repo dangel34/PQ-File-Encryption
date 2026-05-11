@@ -189,7 +189,7 @@ jobs:
 
       - name: Build WASM
         working-directory: pqfile-gui
-        run: trunk build --release --public-url /PQ-File-Encryption/
+        run: trunk build --release
 
       - name: Archive WASM
         run: tar -czf pqfile-web.tar.gz -C pqfile-gui/dist .

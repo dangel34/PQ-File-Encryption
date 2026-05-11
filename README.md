@@ -233,15 +233,9 @@ The header fields (magic, version, KEM variant, nonce, original size) are displa
 
 After running `trunk build --release` inside `pqfile-gui/`, the `dist/` folder contains everything needed for a static deployment.
 
-### GitHub Pages
+### Self-hosted server (via CI)
 
-Deployment is automated via `.github/workflows/pages.yml`. Pushing to `main` triggers a trunk build and deploys the result to:
-
-```
-https://dangel34.github.io/PQ-File-Encryption/
-```
-
-To redeploy without a code change, use the **Run workflow** button on the `Deploy to GitHub Pages` workflow in the Actions tab. If you are deploying to a different repository, update the `--public-url` flag in the workflow to match your repo name.
+Deployment to a self-hosted server is automated via `.github/workflows/deploy.yml`. Pushing to `main` triggers a trunk build on the self-hosted runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`. No manual action is needed. See `NGINX_DEPLOYMENT.md` for the nginx configuration.
 
 ### Cloudflare Pages / Netlify / Vercel
 
