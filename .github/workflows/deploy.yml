@@ -7,6 +7,8 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+    permissions:
+      contents: read
 
     env:
       CARGO_TERM_COLOR: always
@@ -17,6 +19,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
 
       - name: Cache Cargo registry and build artifacts
