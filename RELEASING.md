@@ -115,13 +115,9 @@ Monitor progress in the **Actions** tab. Once the workflow completes, open the d
 
 ## Step 4 — Web GUI deployment
 
-The GitHub Pages deployment is **automatic**. Pushing to `main` (Step 1) triggers `.github/workflows/pages.yml`, which builds the WASM app with trunk and deploys it to GitHub Pages at:
+Deployment is **automatic**. Pushing to `main` (Step 1) triggers `.github/workflows/deploy.yml`, which builds the WASM app on the self-hosted Raspberry Pi runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` directly.
 
-```
-https://dangel34.github.io/PQ-File-Encryption/
-```
-
-No manual action is needed. You can monitor the deployment in the **Actions** tab. If you need to redeploy without a code change, use the **Run workflow** button on the `Deploy to GitHub Pages` workflow.
+No manual action is needed. Monitor progress in the **Actions** tab.
 
 ---
 

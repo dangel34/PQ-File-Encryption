@@ -475,6 +475,13 @@ sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
 ## 11. Redeploying after a code update
 
+If the self-hosted GitHub Actions runner is configured for this repository, deployment is
+**automatic**: pushing to `main` triggers `.github/workflows/deploy.yml`, which builds the
+WASM app on the runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`.
+
+For manual redeployment (e.g. if the runner is offline or you are deploying from a different
+machine):
+
 ```bash
 # Build locally
 cd pqfile-gui

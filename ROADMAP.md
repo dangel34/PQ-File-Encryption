@@ -17,6 +17,12 @@ This document tracks planned improvements, new features, and security work acros
 - **Signed releases via sigstore/cosign**
   Automatically sign release binaries and checksums in CI using cosign keyless signing. Publish a `checksums.txt.sig` alongside each GitHub release.
 
+- **cargo-deny**
+  Add a `deny.toml` and a CI step using `cargo-deny` to block disallowed licenses, duplicate dependencies, and advisories beyond what `cargo-audit` covers. Complements the existing audit step in `release.yml` with license and supply-chain policy enforcement.
+
+- **Secret scanning (gitleaks)**
+  Add a `gitleaks` step to the CI workflow (or as a pre-commit hook) to catch accidentally committed secrets, API keys, or private key material before they reach the remote. Configure a `.gitleaks.toml` allowlist to suppress intentional test fixtures.
+
 ### CLI
 
 - **Output path flag (`-o / --output`)** ✓ _released v2.1_
@@ -124,6 +130,9 @@ This document tracks planned improvements, new features, and security work acros
 
 - **Benchmark suite**
   Add `criterion` benchmarks for encrypt and decrypt at 1 KB, 1 MB, and 100 MB (once streaming exists). Track performance regressions in CI.
+
+- **cargo-vet**
+  Adopt `cargo vet` for third-party crate supply-chain vetting. Each dependency gets an explicit audit entry (safe-to-deploy, safe-to-run, or a trusted publisher exemption). Adds ongoing maintenance burden but is standard practice for widely-distributed security tools.
 
 ---
 
