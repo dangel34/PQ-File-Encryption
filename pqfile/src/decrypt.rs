@@ -48,6 +48,9 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8]) -> Result<Vec<u8>, Pqfi
 
     let header_bytes = &pqf_data[..HEADER_LEN];
     let payload = &pqf_data[HEADER_LEN..];
+    if payload.len() < 16 {
+        return Err(PqfileError::DecryptionFailure);
+    }
 
     let key = Key::from_slice(ss_bytes.as_ref());
     let nonce = Nonce::from_slice(&header.nonce);

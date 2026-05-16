@@ -1191,22 +1191,36 @@ fn save_result(
 
 #[cfg(target_arch = "wasm32")]
 fn download_bytes(filename: &str, data: &[u8]) {
+    if let Err(e) = try_download_bytes(filename, data) {
+        web_sys::console::error_1(&e);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn try_download_bytes(filename: &str, data: &[u8]) -> Result<(), JsValue> {
     use wasm_bindgen::JsCast;
-    let arr = js_sys::Uint8Array::new_with_length(data.len() as u32);
+    let len = u32::try_from(data.len())
+        .map_err(|_| JsValue::from_str("file too large to download in browser"))?;
+    let arr = js_sys::Uint8Array::new_with_length(len);
     arr.copy_from(data);
-    let blob = web_sys::Blob::new_with_u8_array_sequence(&js_sys::Array::of1(&arr)).unwrap();
-    let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
-    let window = web_sys::window().unwrap();
-    let document = window.document().unwrap();
-    let body = document.body().unwrap();
-    let a: web_sys::HtmlAnchorElement =
-        document.create_element("a").unwrap().dyn_into().unwrap();
-    a.set_href(&url);
-    a.set_download(filename);
-    body.append_child(&a).unwrap();
-    a.click();
-    body.remove_child(&a).unwrap();
-    web_sys::Url::revoke_object_url(&url).unwrap();
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&js_sys::Array::of1(&arr))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)?;
+    let result = (|| -> Result<(), JsValue> {
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+        let document = window.document().ok_or_else(|| JsValue::from_str("no document"))?;
+        let body = document.body().ok_or_else(|| JsValue::from_str("no body"))?;
+        let a: web_sys::HtmlAnchorElement =
+            document.create_element("a")?.dyn_into()?;
+        a.set_href(&url);
+        a.set_download(filename);
+        body.append_child(&a)?;
+        a.click();
+        body.remove_child(&a)?;
+        Ok(())
+    })();
+    // Always revoke the object URL, even if DOM operations failed.
+    let _ = web_sys::Url::revoke_object_url(&url);
+    result
 }
 
 fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {
