@@ -10,7 +10,7 @@
 ; Output: pqfile-desktop\packaging\output\pqfile-setup-{AppVersion}.exe
 
 #define AppName      "pqfile"
-#define AppVersion   "2.0.1"
+#define AppVersion   "2.0.2"
 #define AppPublisher "Derek"
 #define AppExeName   "pqfile-desktop.exe"
 #define BinPath      "..\..\target\release\" + AppExeName
