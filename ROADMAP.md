@@ -59,8 +59,8 @@ This document tracks planned improvements, new features, and security work acros
 - **Windows winget manifest**
   Submit a manifest to the `microsoft/winget-pkgs` community repository so users can install via `winget install pqfile`.
 
-- **Automated release workflow**
-  Add a `.github/workflows/release.yml` triggered by a version tag (`v*`). It should: build CLI binaries for `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, and `x86_64-pc-windows-msvc`; build the Windows installer via Inno Setup; build the WASM web app; attach all artifacts to a GitHub release draft.
+- **Automated release workflow** ✓ _released v2.x_
+  `.github/workflows/release.yml` triggered by a version tag (`v*`). Builds CLI and desktop GUI binaries for all four platforms, the Windows installer via Inno Setup, the WASM web app, generates `checksums.txt`, and creates a draft GitHub release.
 
 - **SBOM generation**
   Produce a CycloneDX or SPDX software bill of materials in CI using `cargo-cyclonedx` or `cargo-sbom` and attach it to each release.
