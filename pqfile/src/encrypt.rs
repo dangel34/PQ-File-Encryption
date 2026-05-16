@@ -101,4 +101,13 @@ mod tests {
         encrypt(&pk, &input, None).unwrap();
         assert!(tmp.path().join("data.txt.pqf").exists());
     }
+
+    #[test]
+    fn encrypt_rejects_malformed_public_key_bytes() {
+        // 0xFF bytes produce 12-bit packed coefficients of 0xFFF = 4095, which exceeds
+        // q = 3329, so EncapsulationKey768::new rejects the key as structurally invalid.
+        let bad_key = pem::encode(&pem::Pem::new("ML-KEM-768 PUBLIC KEY", vec![0xFFu8; 1184]));
+        let result = encrypt_bytes(&bad_key, b"hello");
+        assert!(matches!(result, Err(PqfileError::InvalidPem(_))));
+    }
 }

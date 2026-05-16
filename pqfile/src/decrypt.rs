@@ -94,4 +94,24 @@ mod tests {
         decrypt(&priv_path, &pqf, None).unwrap();
         assert_eq!(fs::read(tmp.path().join("file.txt")).unwrap(), expected);
     }
+
+    #[test]
+    fn decrypt_rejects_truncated_payload() {
+        use crate::format::{KEM_CT_LEN, MAGIC, NONCE_LEN, VERSION, KEM_VARIANT};
+
+        let (_, priv_pem) = keygen_bytes().unwrap();
+
+        // Build a valid header followed by only 8 bytes of payload (below the 16-byte AEAD tag minimum).
+        let mut data = Vec::new();
+        data.extend_from_slice(MAGIC);
+        data.push(VERSION);
+        data.extend_from_slice(&KEM_VARIANT.to_le_bytes());
+        data.extend_from_slice(&[0u8; KEM_CT_LEN]);
+        data.extend_from_slice(&[0u8; NONCE_LEN]);
+        data.extend_from_slice(&0u64.to_le_bytes());
+        data.extend_from_slice(&[0u8; 8]);
+
+        let result = decrypt_bytes(&priv_pem, &data);
+        assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
+    }
 }

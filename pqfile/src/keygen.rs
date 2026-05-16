@@ -107,6 +107,20 @@ mod tests {
     }
 
     #[test]
+    fn keygen_cleans_up_pubkey_when_privkey_write_fails() {
+        let tmp = tempdir().unwrap();
+        // Making privkey.pem a directory causes fs::write to fail on both Unix and Windows.
+        fs::create_dir(tmp.path().join("privkey.pem")).unwrap();
+        // force=true bypasses the exists check so we reach the write step.
+        let result = keygen(tmp.path(), true);
+        assert!(result.is_err(), "expected error when privkey write fails");
+        assert!(
+            !tmp.path().join("pubkey.pem").exists(),
+            "pubkey.pem should be cleaned up after privkey write failure"
+        );
+    }
+
+    #[test]
     fn fingerprint_is_deterministic() {
         let bytes = [0xab_u8; 32];
         assert_eq!(fingerprint(&bytes), fingerprint(&bytes));
