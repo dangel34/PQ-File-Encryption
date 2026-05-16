@@ -27,39 +27,27 @@ All three crates (`pqfile`, `pqfile-gui`, `pqfile-desktop`) are versioned togeth
 
 ---
 
-## Step 1 — Bump versions
+## Step 1 — Bump versions, commit, and tag
 
-Edit the `version` field in all three `Cargo.toml` files to the new version:
+Run the script from the repo root:
 
-```
-pqfile/Cargo.toml
-pqfile-gui/Cargo.toml
-pqfile-desktop/Cargo.toml
+```powershell
+.\bump-version.ps1 X.Y.Z
 ```
 
-Then regenerate the lock file:
+Optionally include a one-line RPM changelog summary (defaults to "Version bump"):
 
-```
-cargo build --workspace
+```powershell
+.\bump-version.ps1 X.Y.Z -SpecChangelog "Fix foo and bar"
 ```
 
----
-
-## Step 2 — Commit and tag
-
-```
-git add pqfile/Cargo.toml pqfile-gui/Cargo.toml pqfile-desktop/Cargo.toml Cargo.lock
-git commit -m "chore: bump version to X.Y.Z"
-git tag vX.Y.Z
-git push origin main
-git push origin vX.Y.Z
-```
+The script updates all version fields across the codebase, regenerates `Cargo.lock`, commits, tags, and pushes to `main` automatically.
 
 Pushing `main` triggers the SonarQube analysis. Wait for it to pass before proceeding.
 
 ---
 
-## Step 3 — Build release artifacts
+## Step 2 — Build release artifacts
 
 Run all builds from the repository root.
 
@@ -110,29 +98,26 @@ rpmbuild -bb pqfile/packaging/pqfile.spec
 
 ---
 
-## Step 4 — Create the GitHub Release
+## Step 3 — Wait for the release workflow
 
-1. Go to **Releases → Draft a new release** on GitHub.
-2. Select the tag `vX.Y.Z` you just pushed.
-3. Set the release title to `vX.Y.Z`.
-4. Write release notes (what changed since the last release).
-5. Upload the artifacts you built in Step 3:
-   - `pqfile` / `pqfile.exe`
-   - `pqfile-desktop` / `pqfile-desktop.exe`
-   - `pqfile_X.Y.Z_amd64.deb` (if built)
-6. Click **Publish release**.
+Pushing the tag triggers `.github/workflows/release.yml`, which:
+
+1. Runs the full test suite.
+2. Builds CLI and desktop GUI binaries for all four platforms (Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64).
+3. Builds the Windows installer via Inno Setup.
+4. Builds the WASM web app with trunk and archives it as `pqfile-web.tar.gz`.
+5. Generates a `checksums.txt` (SHA-256) covering all artifacts.
+6. Creates a **draft** GitHub release with all artifacts attached.
+
+Monitor progress in the **Actions** tab. Once the workflow completes, open the draft release, review the auto-generated notes, and click **Publish release**.
 
 ---
 
-## Step 5 — Web GUI deployment
+## Step 4 — Web GUI deployment
 
-The GitHub Pages deployment is **automatic**. Pushing to `main` (Step 2) triggers `.github/workflows/pages.yml`, which builds the WASM app with trunk and deploys it to GitHub Pages at:
+Deployment is **automatic**. Pushing to `main` (Step 1) triggers `.github/workflows/deploy.yml`, which builds the WASM app on the self-hosted Raspberry Pi runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` directly.
 
-```
-https://dangel34.github.io/PQ-File-Encryption/
-```
-
-No manual action is needed. You can monitor the deployment in the **Actions** tab. If you need to redeploy without a code change, use the **Run workflow** button on the `Deploy to GitHub Pages` workflow.
+No manual action is needed. Monitor progress in the **Actions** tab.
 
 ---
 
