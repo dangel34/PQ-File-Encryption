@@ -14,12 +14,6 @@ pub enum PqfileError {
     #[error("unsupported KEM variant: {0}")]
     UnsupportedKem(u16),
 
-    #[error("KEM encapsulation error")]
-    KemEncapsulation,
-
-    #[error("KEM decapsulation error")]
-    KemDecapsulation,
-
     #[error("encryption failure")]
     EncryptionFailure,
 
@@ -31,4 +25,7 @@ pub enum PqfileError {
 
     #[error("invalid key length: expected {expected}, got {got}")]
     InvalidKeyLength { expected: usize, got: usize },
+
+    #[error("output file already exists (use --force to overwrite): {0}")]
+    OutputExists(std::path::PathBuf),
 }

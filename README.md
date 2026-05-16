@@ -55,14 +55,14 @@ PQ-File-Encryption/
 │       ├── Cargo.deb.toml  Debian package metadata
 │       └── pqfile.spec     RPM spec for Fedora/RHEL
 ├── pqfile-gui/             Shared GUI logic + WASM web app
-│   ├── Cargo.toml          crate-type = ["cdylib", "rlib"]
+│   ├── Cargo.toml          crate-type = ["cdylib", "rlib"], autobins = false
 │   ├── index.html          Canvas page for trunk/WASM builds
 │   └── src/
 │       └── lib.rs          App logic and WASM entry point
 └── pqfile-desktop/         Native desktop binary
     ├── Cargo.toml          Depends on pqfile-gui and eframe
     └── src/
-        └── main.rs         Native entry point (12 lines)
+        └── main.rs         Native entry point (~18 lines)
 ```
 
 The `pqfile` crate is both a library (exposing `encrypt_bytes`, `decrypt_bytes`, `keygen_bytes`) and a CLI binary. The `pqfile-gui` crate is a lib-only crate: it compiles to a `cdylib` for WASM deployment and an `rlib` for the native binary to link against. The `pqfile-desktop` crate is the native binary; it contains only the entry point and links against `pqfile-gui`. This separation follows the official eframe template pattern and avoids build artifact conflicts between the lib and binary targets.
@@ -93,13 +93,13 @@ cargo install --path pqfile
 ### Native GUI
 
 ```
-cargo build --release --bin pqfile-gui
+cargo build --release -p pqfile-desktop
 ```
 
-Binary is at `target/release/pqfile-gui`. Run it directly:
+Binary is at `target/release/pqfile-desktop`. Run it directly:
 
 ```
-./target/release/pqfile-gui
+./target/release/pqfile-desktop
 ```
 
 ### Web GUI
@@ -137,13 +137,30 @@ pqfile keygen --out /path/to/keys/
 
 Writes `pubkey.pem` and `privkey.pem` to the given directory. The directory must already exist. Share `pubkey.pem` with anyone who needs to send you encrypted files. Keep `privkey.pem` private.
 
+On success, prints a SHA3-256 fingerprint of the public key:
+
+```
+Keys written to /path/to/keys/
+Public key fingerprint: e2:a3:43:ab:78:8a:64:f3
+```
+
+If either key file already exists, the command refuses to overwrite and exits with an error. Use `--force` to overwrite:
+
+```
+pqfile keygen --out /path/to/keys/ --force
+```
+
 ### Encrypt a file
 
 ```
 pqfile encrypt -r /path/to/keys/pubkey.pem secret.txt
 ```
 
-Produces `secret.txt.pqf` alongside the original file. The original is not removed. The output path is always the input path with `.pqf` appended.
+Produces `secret.txt.pqf` alongside the original file. The original is not removed. Use `-o` to write the encrypted file to a custom path:
+
+```
+pqfile encrypt -r pubkey.pem secret.txt -o /tmp/out.pqf
+```
 
 ### Decrypt a file
 
@@ -151,7 +168,13 @@ Produces `secret.txt.pqf` alongside the original file. The original is not remov
 pqfile decrypt -k /path/to/keys/privkey.pem secret.txt.pqf
 ```
 
-Produces `secret.txt` (the `.pqf` extension is stripped). If the file has been tampered with, the command exits with an authentication tag mismatch error and writes no output.
+Produces `secret.txt` (the `.pqf` extension is stripped). Use `-o` to write the decrypted file to a custom path:
+
+```
+pqfile decrypt -k privkey.pem secret.txt.pqf -o recovered.txt
+```
+
+If the file has been tampered with, the command exits with an authentication tag mismatch error and writes no output.
 
 ### Inspect a .pqf file
 
@@ -163,7 +186,7 @@ Parses and prints the header fields without decrypting the payload. Useful for v
 
 ```
 Magic:              PQFL
-Version:            0x01
+Version:            0x02
 KEM variant:        768
 Nonce:              a3f09c12de87b64c01e5a920
 Original file size: 2048 bytes
@@ -210,14 +233,9 @@ The header fields (magic, version, KEM variant, nonce, original size) are displa
 
 After running `trunk build --release` inside `pqfile-gui/`, the `dist/` folder contains everything needed for a static deployment.
 
-### GitHub Pages
+### Self-hosted server (via CI)
 
-```
-# From pqfile-gui/
-trunk build --release --public-url /your-repo-name/
-```
-
-Push the `dist/` folder to the `gh-pages` branch, or configure Pages to serve from it.
+Deployment to a self-hosted server is automated via `.github/workflows/deploy.yml`. Pushing to `main` triggers a trunk build on the self-hosted runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`. No manual action is needed. See `NGINX_DEPLOYMENT.md` for the nginx configuration.
 
 ### Cloudflare Pages / Netlify / Vercel
 
@@ -247,7 +265,7 @@ Every encrypted file begins with a fixed-length header followed by the encrypted
 Offset   Length    Field
 ------   ------    -----
 0        4         Magic bytes: ASCII "PQFL"
-4        1         Version: 0x01
+4        1         Version: 0x02
 5        2         KEM variant: 768 as little-endian u16
 7        1088      ML-KEM-768 KEM ciphertext (encapsulated shared secret)
 1095     12        ChaCha20-Poly1305 nonce
@@ -257,7 +275,7 @@ Offset   Length    Field
 
 The KEM ciphertext field is 1088 bytes because that is the exact ciphertext size specified by FIPS 203 for the ML-KEM-768 parameter set (k=3, du=10, dv=4).
 
-The Poly1305 tag is appended directly to the ciphertext by the `chacha20poly1305` crate. The original file size field allows pre-allocation before decryption; it is not used for truncation since the authentication tag provides integrity.
+The entire 1115-byte header (bytes 0–1114) is passed as AEAD additional data (AAD) during encryption. The Poly1305 tag therefore covers both the ciphertext payload and the header, so any modification to any header field — including magic, version, KEM variant, KEM ciphertext, nonce, or original size — is detected and causes decryption to fail. The original file size field is informational; it is displayed by `pqfile inspect` but not used for truncation.
 
 ---
 
@@ -273,18 +291,20 @@ Keys are stored in standard PEM framing with custom type labels:
 
 ```
 -----BEGIN ML-KEM-768 PRIVATE KEY-----
-<base64-encoded decapsulation key, 2400 bytes raw>
+<base64-encoded decapsulation key seed, 64 bytes raw>
 -----END ML-KEM-768 PRIVATE KEY-----
 ```
 
-Raw sizes from FIPS 203 Section 7:
+The private key stores the 64-byte seed (§3.3 of FIPS 203) rather than the 2400-byte expanded form. The decapsulation key is re-derived from the seed on load, which keeps key files small and avoids storing redundant data.
 
-| Key type          | Raw size (bytes) |
-|-------------------|-----------------|
-| Encapsulation key | 1184            |
-| Decapsulation key | 2400            |
-| KEM ciphertext    | 1088            |
-| Shared secret     | 32              |
+Raw sizes:
+
+| Key type              | Raw size (bytes) |
+|-----------------------|-----------------|
+| Encapsulation key     | 1184            |
+| Decapsulation key seed| 64              |
+| KEM ciphertext        | 1088            |
+| Shared secret         | 32              |
 
 ---
 
@@ -296,14 +316,16 @@ Run the full test suite from the repository root:
 cargo test
 ```
 
-The integration test in `pqfile/tests/roundtrip.rs` performs a complete end-to-end cycle:
+The integration tests in `pqfile/tests/roundtrip.rs` cover the CLI binary end-to-end:
 
-1. Creates a temporary directory.
-2. Writes a known byte string to a file.
-3. Runs `pqfile keygen` to generate a fresh key pair.
-4. Runs `pqfile encrypt` to produce a `.pqf` file.
-5. Runs `pqfile decrypt` to recover the plaintext.
-6. Asserts that the recovered bytes are identical to the original.
+| Test | What it verifies |
+|------|-----------------|
+| `roundtrip` | keygen → encrypt → decrypt → byte-for-byte match |
+| `roundtrip_custom_output_paths` | `-o` flag on both encrypt and decrypt |
+| `keygen_refuses_overwrite_without_force` | second keygen exits non-zero without `--force` |
+| `keygen_force_overwrites_existing_keys` | `--force` succeeds on second keygen |
+| `inspect_shows_header_fields` | `pqfile inspect` prints correct magic, version, KEM variant, and size |
+| `inspect_fails_on_invalid_file` | inspect exits non-zero on a non-`.pqf` file |
 
 ---
 
@@ -315,13 +337,12 @@ All errors are reported to stderr with a descriptive message. The process exits 
 |---------------------|-------------------------------------------------------|
 | Io                  | Any file system or I/O failure                        |
 | InvalidMagic        | File does not start with the bytes "PQFL"             |
-| UnsupportedVersion  | Version byte is not 0x01                              |
+| UnsupportedVersion  | Version byte is not 0x02                              |
 | UnsupportedKem      | KEM variant field is not 768                          |
-| KemEncapsulation    | ML-KEM encapsulation failed                           |
-| KemDecapsulation    | ML-KEM decapsulation failed                           |
 | DecryptionFailure   | ChaCha20-Poly1305 authentication tag mismatch         |
 | InvalidPem          | PEM file could not be parsed                          |
 | InvalidKeyLength    | Decoded key bytes are the wrong length                |
+| OutputExists        | Key file already exists and `--force` was not passed  |
 
 ---
 
@@ -331,33 +352,34 @@ All errors are reported to stderr with a descriptive message. The process exits 
 
 | Crate            | Version | Purpose                                          |
 |------------------|---------|--------------------------------------------------|
-| ml-kem           | 0.2     | ML-KEM-768 key encapsulation (FIPS 203)          |
+| ml-kem           | 0.3     | ML-KEM-768 key encapsulation (FIPS 203)          |
 | chacha20poly1305 | 0.10    | ChaCha20-Poly1305 authenticated encryption       |
-| rand             | 0.8     | OsRng and RngCore for secure randomness          |
-| rand_core        | 0.6     | CryptoRngCore trait used by ml-kem               |
+| getrandom        | 0.4     | OS CSPRNG for nonce generation                   |
 | zeroize          | 1       | Overwrite secret bytes in memory on drop         |
 | pem              | 3       | PEM encoding and decoding for key files          |
 | clap             | 4       | Command-line argument parsing with derive macros |
-| thiserror        | 1       | Ergonomic custom error type derivation           |
+| thiserror        | 2       | Ergonomic custom error type derivation           |
+| sha3             | 0.11    | SHA3-256 (FIPS 202) for public key fingerprints  |
 
 ### pqfile-gui (shared GUI logic and WASM lib)
 
 | Crate                | Version | Purpose                                        |
 |----------------------|---------|------------------------------------------------|
-| eframe               | 0.29    | egui app framework (native via rlib, WASM via cdylib) |
-| rfd                  | 0.14    | Native sync and WASM async file dialogs        |
+| eframe               | 0.34    | egui app framework (native via rlib, WASM via cdylib) |
+| rfd                  | 0.17    | Native sync and WASM async file dialogs        |
 | wasm-bindgen         | 0.2     | Rust/WASM bindings (WASM only)                 |
 | wasm-bindgen-futures | 0.4     | Async bridge for WASM (WASM only)              |
 | web-sys              | 0.3     | Browser DOM APIs for file download (WASM only) |
 | js-sys               | 0.3     | JavaScript types for WASM (WASM only)          |
-| getrandom            | 0.2     | JS entropy source for WASM crypto (WASM only)  |
+| getrandom            | 0.4     | JS entropy source for WASM crypto (WASM only)  |
+| console_error_panic_hook | 0.1 | Routes Rust panics to the browser console (WASM only) |
 
 ### pqfile-desktop (native binary)
 
 | Crate      | Version | Purpose                                  |
 |------------|---------|------------------------------------------|
 | pqfile-gui | local   | Shared GUI app logic (linked as rlib)    |
-| eframe     | 0.29    | Native window creation and event loop    |
+| eframe     | 0.34    | Native window creation and event loop    |
 
 ---
 
@@ -389,6 +411,6 @@ rpmbuild -bb pqfile/packaging/pqfile.spec
 - The private key (`privkey.pem`) must be kept confidential. Anyone who obtains it can decrypt any file encrypted to the corresponding public key.
 - The public key (`pubkey.pem`) can be shared freely.
 - Each encryption operation generates a fresh KEM ciphertext and a fresh random nonce. Reuse of a nonce under the same key would break ChaCha20-Poly1305 confidentiality, but this cannot happen here because the symmetric key itself is freshly derived per file.
-- The Poly1305 authentication tag guarantees that any modification to the ciphertext or header payload will be detected. The header fields before the payload (magic, version, KEM variant, KEM ciphertext, nonce, size) are not covered by the authentication tag; they are structural and validated by the format parser before decryption begins.
+- The entire `.pqf` file is authenticated. The 1115-byte header is passed as AEAD additional data (AAD), so the Poly1305 tag covers both the header and the ciphertext. Any modification to any byte of the file — header or payload — is detected before decryption produces output.
 - Secret material (the decapsulation key bytes and the shared secret) is overwritten with zeros when the relevant variables go out of scope using the `zeroize` crate.
 - The web GUI performs all cryptographic operations in WebAssembly inside the browser. No file data or key material is transmitted over the network.
