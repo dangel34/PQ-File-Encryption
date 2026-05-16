@@ -26,8 +26,14 @@ pub fn keygen(out_dir: &Path, force: bool) -> Result<String, PqfileError> {
     let (pub_pem, priv_pem) = keygen_bytes()?;
     let raw_pub = pem::parse(&pub_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
     let fp = fingerprint(raw_pub.contents());
-    fs::write(out_dir.join("pubkey.pem"), pub_pem.as_bytes())?;
-    fs::write(out_dir.join("privkey.pem"), priv_pem.as_bytes())?;
+    let pub_path = out_dir.join("pubkey.pem");
+    let priv_path = out_dir.join("privkey.pem");
+    fs::write(&pub_path, pub_pem.as_bytes())?;
+    if let Err(e) = fs::write(&priv_path, priv_pem.as_bytes()) {
+        // Clean up the already-written public key so the pair is never left mismatched.
+        let _ = fs::remove_file(&pub_path);
+        return Err(e.into());
+    }
     Ok(fp)
 }
 

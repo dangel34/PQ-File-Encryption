@@ -37,7 +37,7 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
     let raw_arr = Array::try_from(raw)
         .map_err(|_| PqfileError::InvalidKeyLength { expected: 1184, got: raw.len() })?;
     let ek = EncapsulationKey768::new(&raw_arr)
-        .map_err(|_| PqfileError::InvalidKeyLength { expected: 1184, got: raw.len() })?;
+        .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-768 public key".to_owned()))?;
 
     let (ct, ss) = ek.encapsulate();
     let mut ss_bytes = Zeroizing::new([0u8; 32]);
