@@ -23,7 +23,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install trunk
-        run: command -v trunk || cargo install trunk --locked
+        run: command -v trunk || cargo install trunk --version 0.21.14 --locked
 
       - name: Build WASM
         working-directory: pqfile-gui
@@ -31,3 +31,11 @@ jobs:
 
       - name: Deploy to /var/www/pqfile
         run: rsync -a --delete pqfile-gui/dist/ /var/www/pqfile/
+
+      - name: Purge Cloudflare cache
+        run: |
+          curl -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/purge_cache" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}' \
+            --fail --silent --show-error
