@@ -477,7 +477,9 @@ sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
 If the self-hosted GitHub Actions runner is configured for this repository, deployment is
 **automatic**: pushing to `main` triggers `.github/workflows/deploy.yml`, which builds the
-WASM app on the runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`.
+WASM app on the runner, rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`,
+and then purges the Cloudflare cache (`purge_everything`) so visitors immediately receive
+the new build rather than a stale cached copy.
 
 For manual redeployment (e.g. if the runner is offline or you are deploying from a different
 machine):
@@ -489,6 +491,16 @@ trunk build --release --public-url /
 
 # Push to server (--delete removes stale hashed assets)
 rsync -av --delete dist/ user@yourserver.com:/var/www/pqfile/
+```
+
+If Cloudflare is in front of the server, also purge the cache manually from the Cloudflare
+dashboard (Caching → Configuration → Purge Everything) or via the API:
+
+```bash
+curl -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+  -H "Authorization: Bearer ${CF_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  --data '{"purge_everything":true}'
 ```
 
 No nginx reload is required — only static files change.
