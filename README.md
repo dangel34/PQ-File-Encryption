@@ -150,6 +150,33 @@ If either key file already exists, the command refuses to overwrite and exits wi
 pqfile keygen --out /path/to/keys/ --force
 ```
 
+#### Passphrase-protected private keys
+
+Add `--passphrase` to encrypt the private key at rest with Argon2id + AES-256-GCM. The passphrase is prompted interactively (input is not echoed):
+
+```
+pqfile keygen --out /path/to/keys/ --passphrase
+```
+
+```
+Enter passphrase: 
+Confirm passphrase: 
+Keys written to /path/to/keys/
+Public key fingerprint: e2:a3:43:ab:78:8a:64:f3
+```
+
+The `privkey.pem` file uses the `ML-KEM-768 ENCRYPTED PRIVATE KEY` PEM label. When decrypting a file that uses a passphrase-protected key, the passphrase is prompted automatically:
+
+```
+pqfile decrypt -k /path/to/keys/privkey.pem secret.txt.pqf
+```
+
+```
+Enter passphrase for private key: 
+```
+
+Unencrypted keys (`ML-KEM-768 PRIVATE KEY`) continue to work without any prompt.
+
 ### Encrypt a file
 
 ```
@@ -190,6 +217,34 @@ Version:            0x02
 KEM variant:        768
 Nonce:              a3f09c12de87b64c01e5a920
 Original file size: 2048 bytes
+```
+
+### Shell completions
+
+`pqfile completions <shell>` prints a ready-to-install completion script for the specified shell. Supported values: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
+
+**Bash**
+```bash
+pqfile completions bash >> ~/.bash_completion
+# or, for per-user completions on systems with ~/.bash_completion.d/:
+pqfile completions bash > ~/.bash_completion.d/pqfile
+```
+
+**Zsh** (place in a directory on your `$fpath`)
+```zsh
+pqfile completions zsh > ~/.zfunc/_pqfile
+# ensure ~/.zfunc is in fpath — add to ~/.zshrc if needed:
+#   fpath=(~/.zfunc $fpath); autoload -Uz compinit && compinit
+```
+
+**Fish**
+```fish
+pqfile completions fish > ~/.config/fish/completions/pqfile.fish
+```
+
+**PowerShell**
+```powershell
+pqfile completions powershell >> $PROFILE
 ```
 
 ---
@@ -295,6 +350,16 @@ Keys are stored in standard PEM framing with custom type labels:
 -----END ML-KEM-768 PRIVATE KEY-----
 ```
 
+When generated with `--passphrase`, the private key uses a different label and an encrypted body:
+
+```
+-----BEGIN ML-KEM-768 ENCRYPTED PRIVATE KEY-----
+<base64-encoded: 16-byte Argon2id salt || 12-byte AES-GCM nonce || 80-byte AES-256-GCM ciphertext>
+-----END ML-KEM-768 ENCRYPTED PRIVATE KEY-----
+```
+
+The 80-byte ciphertext is the 64-byte seed encrypted under a 256-bit key derived from the passphrase via Argon2id (m=64 MiB, t=3, p=1), plus the 16-byte AES-GCM authentication tag.
+
 The private key stores the 64-byte seed (§3.3 of FIPS 203) rather than the 2400-byte expanded form. The decapsulation key is re-derived from the seed on load, which keeps key files small and avoids storing redundant data.
 
 Raw sizes:
@@ -344,6 +409,8 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | InvalidPem          | PEM file could not be parsed                          |
 | InvalidKeyLength    | Decoded key bytes are the wrong length                |
 | OutputExists        | Key file already exists and `--force` was not passed  |
+| WrongPassphrase     | Passphrase decryption of private key seed failed      |
+| PassphraseRequired  | Encrypted private key loaded but no passphrase supplied |
 
 ---
 
@@ -361,6 +428,9 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | clap             | 4       | Command-line argument parsing with derive macros |
 | thiserror        | 2       | Ergonomic custom error type derivation           |
 | sha3             | 0.12    | SHA3-256 (FIPS 202) for public key fingerprints  |
+| argon2           | 0.5     | Argon2id KDF for passphrase-protected keys       |
+| aes-gcm          | 0.10    | AES-256-GCM wrapping of the private key seed     |
+| rpassword        | 7       | Secure passphrase prompting in the CLI           |
 
 ### pqfile-gui (shared GUI logic and WASM lib)
 

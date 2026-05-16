@@ -1,0 +1,32 @@
+# gitleaks configuration
+# https://github.com/gitleaks/gitleaks
+
+title = "pqfile gitleaks config"
+
+[extend]
+# Inherit the default ruleset and add project-specific allowances below.
+useDefault = true
+
+[[allowlists]]
+description = "Test passphrases and key fixtures in unit tests"
+regexTarget = "line"
+# Suppress lines containing only test passphrases or synthetic key material.
+# These are not real secrets — they are hardcoded test inputs.
+regexes = [
+    # Passphrase strings used in unit tests
+    '''hunter2''',
+    '''correct horse''',
+    '''correct''',
+    '''secret''',
+    # Argon2id / AES-GCM test vectors (all-same-byte arrays, e.g. [0x42u8; 64])
+    '''\[0x[0-9a-fA-F]{2}u8; \d+\]''',
+]
+
+[[allowlists]]
+description = "Cargo package metadata"
+regexTarget = "line"
+regexes = [
+    # Maintainer email in Cargo.toml / packaging files is not a credential.
+    '''maintainer\s*=''',
+    '''copyright\s*=''',
+]

@@ -166,3 +166,76 @@ fn inspect_fails_on_invalid_file() {
         .unwrap();
     assert!(!status.success(), "inspect should fail on invalid file");
 }
+
+// ── Shell completions ──────────────────────────────────────────────────────
+
+#[test]
+fn completions_bash_exits_success_and_contains_function() {
+    let output = std::process::Command::new(bin())
+        .args(["completions", "bash"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "completions bash should exit 0");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("_pqfile"), "bash completion should define _pqfile function");
+    assert!(!stdout.is_empty());
+}
+
+#[test]
+fn completions_zsh_exits_success() {
+    let output = std::process::Command::new(bin())
+        .args(["completions", "zsh"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "completions zsh should exit 0");
+    assert!(!output.stdout.is_empty(), "zsh output should be non-empty");
+}
+
+#[test]
+fn completions_fish_exits_success() {
+    let output = std::process::Command::new(bin())
+        .args(["completions", "fish"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "completions fish should exit 0");
+    assert!(!output.stdout.is_empty(), "fish output should be non-empty");
+}
+
+#[test]
+fn completions_powershell_exits_success() {
+    let output = std::process::Command::new(bin())
+        .args(["completions", "powershell"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "completions powershell should exit 0");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("pqfile"), "powershell output should reference pqfile");
+}
+
+#[test]
+fn completions_unknown_shell_exits_failure() {
+    let status = std::process::Command::new(bin())
+        .args(["completions", "tcsh"])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "unknown shell should exit non-zero");
+}
+
+#[test]
+fn completions_all_shells_cover_subcommands() {
+    // Verify each shell's output mentions the key subcommands.
+    for shell in ["bash", "zsh", "fish", "powershell"] {
+        let output = std::process::Command::new(bin())
+            .args(["completions", shell])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "completions {shell} failed");
+        let text = String::from_utf8(output.stdout).unwrap();
+        for sub in ["keygen", "encrypt", "decrypt", "inspect", "completions"] {
+            assert!(
+                text.contains(sub),
+                "shell {shell}: completion output missing subcommand '{sub}'"
+            );
+        }
+    }
+}

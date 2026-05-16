@@ -2,13 +2,14 @@
 name = "pqfile-gui"
 version = "2.0.2"
 edition = "2021"
+license = "MIT"
 autobins = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pqfile = { path = "../pqfile" }
+pqfile = { path = "../pqfile", version = "2.0.2" }
 eframe = { version = "0.34", features = ["default_fonts"] }
 rfd = "0.17"
 

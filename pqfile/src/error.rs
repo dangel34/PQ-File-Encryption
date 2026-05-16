@@ -28,4 +28,10 @@ pub enum PqfileError {
 
     #[error("output file already exists (use --force to overwrite): {0}")]
     OutputExists(std::path::PathBuf),
+
+    #[error("wrong passphrase or corrupted key")]
+    WrongPassphrase,
+
+    #[error("private key is passphrase-protected; provide a passphrase to decrypt it")]
+    PassphraseRequired,
 }

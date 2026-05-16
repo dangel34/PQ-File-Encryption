@@ -172,6 +172,34 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    fn load(storage: &dyn eframe::Storage) -> Self {
+        let dark_mode = storage.get_string("dark_mode")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(true);
+        let auto_clear = storage.get_string("auto_clear")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(false);
+        #[cfg(not(target_arch = "wasm32"))]
+        let confirm_overwrite = storage.get_string("confirm_overwrite")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(false);
+        Self {
+            dark_mode,
+            auto_clear,
+            #[cfg(not(target_arch = "wasm32"))]
+            confirm_overwrite,
+        }
+    }
+
+    fn save(&self, storage: &mut dyn eframe::Storage) {
+        storage.set_string("dark_mode", self.dark_mode.to_string());
+        storage.set_string("auto_clear", self.auto_clear.to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        storage.set_string("confirm_overwrite", self.confirm_overwrite.to_string());
+    }
+}
+
 // ── App ────────────────────────────────────────────────────────────────────
 
 pub struct PqfileApp {
@@ -220,8 +248,13 @@ impl Default for PqfileApp {
 
 impl PqfileApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        apply_theme(&cc.egui_ctx, true);
-        Self::default()
+        let settings = cc.storage
+            .map(Settings::load)
+            .unwrap_or_default();
+        apply_theme(&cc.egui_ctx, settings.dark_mode);
+        let mut app = Self::default();
+        app.settings = settings;
+        app
     }
 }
 
@@ -292,10 +325,41 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
 // ── Frame ──────────────────────────────────────────────────────────────────
 
 impl eframe::App for PqfileApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.settings.save(storage);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.poll_files() {
             ctx.request_repaint();
+        }
+        self.handle_dropped_files(&ctx);
+
+        // Drag-over overlay — paint above everything else when files are hovering
+        let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
+        if hovering {
+            let dark = self.settings.dark_mode;
+            let accent = c_accent(dark);
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("drop_overlay"),
+            ));
+            let screen = ctx.viewport_rect();
+            painter.rect_filled(screen, 0.0, Color32::from_black_alpha(140));
+            painter.rect_stroke(
+                screen.shrink(12.0),
+                egui::CornerRadius::same(12),
+                egui::Stroke::new(2.0, accent),
+                egui::StrokeKind::Inside,
+            );
+            painter.text(
+                screen.center(),
+                egui::Align2::CENTER_CENTER,
+                "Drop file here",
+                egui::FontId::proportional(26.0),
+                accent,
+            );
         }
 
         let dark = self.settings.dark_mode;
@@ -384,6 +448,64 @@ impl eframe::App for PqfileApp {
                             });
                     });
             });
+    }
+}
+
+// ── Drag-and-drop ──────────────────────────────────────────────────────────
+
+impl PqfileApp {
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        for file in dropped {
+            let name = if !file.name.is_empty() {
+                file.name.clone()
+            } else {
+                file.path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            };
+
+            let data = if let Some(bytes) = file.bytes {
+                Some(bytes.to_vec())
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                { file.path.as_ref().and_then(|p| std::fs::read(p).ok()) }
+                #[cfg(target_arch = "wasm32")]
+                { None }
+            };
+
+            let Some(data) = data else { continue };
+            self.route_drop(name, data, file.path);
+        }
+    }
+
+    /// Route a dropped file into the correct slot based on the active tab and
+    /// the file's extension. Pure logic with no egui dependency — testable directly.
+    fn route_drop(&mut self, name: String, data: Vec<u8>, path: Option<PathBuf>) {
+        let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let picked = PickedFile { name, data, path };
+        match self.tab {
+            Tab::Encrypt => {
+                if ext == "pem" {
+                    *self.encrypt_pubkey.pending.lock().unwrap() = Some(picked);
+                } else {
+                    *self.encrypt_plain.pending.lock().unwrap() = Some(picked);
+                }
+            }
+            Tab::Decrypt => {
+                if ext == "pem" {
+                    *self.decrypt_privkey.pending.lock().unwrap() = Some(picked);
+                } else {
+                    *self.decrypt_pqf.pending.lock().unwrap() = Some(picked);
+                }
+            }
+            Tab::Inspect => {
+                *self.inspect_pqf.pending.lock().unwrap() = Some(picked);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -575,34 +697,33 @@ impl PqfileApp {
 
     fn handle_keygen(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if self.keygen_dir.trim().is_empty() {
-            self.keygen_status = OpStatus::Err("Choose an output directory first.".to_owned());
-            return;
+        {
+            if self.keygen_dir.trim().is_empty() {
+                self.keygen_status = OpStatus::Err("Choose an output directory first.".to_owned());
+                return;
+            }
+            let dir = std::path::Path::new(&self.keygen_dir);
+            // force=true when confirm_overwrite is off (the default): overwrite freely.
+            // force=false when confirm_overwrite is on: refuse if either key file exists.
+            let force = !self.settings.confirm_overwrite;
+            self.keygen_status = match keygen::keygen(dir, force, None) {
+                Ok(fp) => OpStatus::Ok(format!(
+                    "Keys saved to {}\nFingerprint: {fp}",
+                    dir.display()
+                )),
+                Err(e) => OpStatus::Err(e.to_string()),
+            };
         }
-        match keygen::keygen_bytes() {
+
+        #[cfg(target_arch = "wasm32")]
+        match keygen::keygen_bytes(None) {
             Ok((pub_pem, priv_pem)) => {
                 let fp = keygen::fingerprint_pem(&pub_pem);
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let dir = std::path::Path::new(&self.keygen_dir);
-                    let r1 = std::fs::write(dir.join("pubkey.pem"), pub_pem.as_bytes());
-                    let r2 = std::fs::write(dir.join("privkey.pem"), priv_pem.as_bytes());
-                    self.keygen_status = match (r1, r2) {
-                        (Ok(()), Ok(())) => OpStatus::Ok(format!(
-                            "Keys saved to {}\nFingerprint: {fp}",
-                            dir.display()
-                        )),
-                        (Err(e), _) | (_, Err(e)) => OpStatus::Err(e.to_string()),
-                    };
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    download_bytes("pubkey.pem", pub_pem.as_bytes());
-                    download_bytes("privkey.pem", priv_pem.as_bytes());
-                    self.keygen_status = OpStatus::Ok(format!(
-                        "pubkey.pem and privkey.pem downloaded.\nFingerprint: {fp}"
-                    ));
-                }
+                download_bytes("pubkey.pem", pub_pem.as_bytes());
+                download_bytes("privkey.pem", priv_pem.as_bytes());
+                self.keygen_status = OpStatus::Ok(format!(
+                    "pubkey.pem and privkey.pem downloaded.\nFingerprint: {fp}"
+                ));
             }
             Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),
         }
@@ -707,7 +828,7 @@ impl PqfileApp {
             return;
         };
 
-        match decrypt::decrypt_bytes(&priv_pem, &pqf) {
+        match decrypt::decrypt_bytes(&priv_pem, &pqf, None) {
             Ok(plain) => {
                 let out_name = PathBuf::from(&pqf_name)
                     .file_stem()
@@ -921,7 +1042,7 @@ impl PqfileApp {
                     ui,
                     &mut self.settings.confirm_overwrite,
                     "Protect existing files",
-                    "Block output if a file with the same name already exists.",
+                    "Block output if a file with the same name already exists (keygen, encrypt, decrypt).",
                     dark,
                 );
             }
@@ -1273,6 +1394,33 @@ mod tests {
         assert!(tmp.path().join("privkey.pem").exists());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn keygen_confirm_overwrite_blocks_existing_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = PqfileApp::default();
+        app.keygen_dir = tmp.path().to_string_lossy().into_owned();
+        app.handle_keygen();
+        assert!(matches!(app.keygen_status, OpStatus::Ok(_)), "first keygen should succeed");
+
+        app.settings.confirm_overwrite = true;
+        app.handle_keygen();
+        assert!(matches!(app.keygen_status, OpStatus::Err(_)), "second keygen should fail when confirm_overwrite is set");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn keygen_without_confirm_overwrite_replaces_existing_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = PqfileApp::default();
+        app.keygen_dir = tmp.path().to_string_lossy().into_owned();
+        app.handle_keygen();
+        assert!(matches!(app.keygen_status, OpStatus::Ok(_)), "first keygen should succeed");
+
+        app.handle_keygen();
+        assert!(matches!(app.keygen_status, OpStatus::Ok(_)), "second keygen should succeed when confirm_overwrite is off");
+    }
+
     #[test]
     fn encrypt_missing_inputs_sets_error() {
         let mut app = PqfileApp::default();
@@ -1308,7 +1456,7 @@ mod tests {
     #[test]
     fn encrypt_decrypt_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
-        let (pub_pem, priv_pem) = keygen::keygen_bytes().unwrap();
+        let (pub_pem, priv_pem) = keygen::keygen_bytes(None).unwrap();
         let plaintext = b"roundtrip test data".to_vec();
 
         // Encrypt
@@ -1332,5 +1480,150 @@ mod tests {
 
         let decrypted = std::fs::read(tmp.path().join("input.txt")).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    // ── Settings persistence ───────────────────────────────────────────────
+
+    use std::collections::HashMap;
+
+    struct MockStorage(HashMap<String, String>);
+
+    impl eframe::Storage for MockStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn settings_load_returns_defaults_when_storage_empty() {
+        let storage = MockStorage(HashMap::new());
+        let s = Settings::load(&storage);
+        assert!(s.dark_mode, "dark_mode default should be true");
+        assert!(!s.auto_clear, "auto_clear default should be false");
+        #[cfg(not(target_arch = "wasm32"))]
+        assert!(!s.confirm_overwrite, "confirm_overwrite default should be false");
+    }
+
+    #[test]
+    fn settings_load_reads_stored_values() {
+        let mut map = HashMap::new();
+        map.insert("dark_mode".to_owned(), "false".to_owned());
+        map.insert("auto_clear".to_owned(), "true".to_owned());
+        #[cfg(not(target_arch = "wasm32"))]
+        map.insert("confirm_overwrite".to_owned(), "true".to_owned());
+        let storage = MockStorage(map);
+        let s = Settings::load(&storage);
+        assert!(!s.dark_mode);
+        assert!(s.auto_clear);
+        #[cfg(not(target_arch = "wasm32"))]
+        assert!(s.confirm_overwrite);
+    }
+
+    #[test]
+    fn settings_load_ignores_invalid_values_and_uses_defaults() {
+        let mut map = HashMap::new();
+        map.insert("dark_mode".to_owned(), "not_a_bool".to_owned());
+        map.insert("auto_clear".to_owned(), "1".to_owned()); // not valid bool::from_str
+        let storage = MockStorage(map);
+        let s = Settings::load(&storage);
+        assert!(s.dark_mode);   // falls back to default true
+        assert!(!s.auto_clear); // falls back to default false
+    }
+
+    #[test]
+    fn settings_save_then_load_roundtrip() {
+        let mut storage = MockStorage(HashMap::new());
+        let original = Settings {
+            dark_mode: false,
+            auto_clear: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            confirm_overwrite: true,
+        };
+        original.save(&mut storage);
+        let loaded = Settings::load(&storage);
+        assert_eq!(loaded.dark_mode, original.dark_mode);
+        assert_eq!(loaded.auto_clear, original.auto_clear);
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(loaded.confirm_overwrite, original.confirm_overwrite);
+    }
+
+    // ── Drag-and-drop routing ──────────────────────────────────────────────
+
+    #[test]
+    fn drop_encrypt_tab_pem_goes_to_pubkey_slot() {
+        let mut app = PqfileApp::default();
+        app.tab = Tab::Encrypt;
+        app.route_drop("pubkey.pem".to_owned(), b"key-data".to_vec(), None);
+        app.encrypt_pubkey.poll();
+        assert!(app.encrypt_pubkey.loaded(), "pem should land in pubkey slot");
+        assert!(!app.encrypt_plain.loaded(), "plaintext slot should be empty");
+    }
+
+    #[test]
+    fn drop_encrypt_tab_non_pem_goes_to_plaintext_slot() {
+        let mut app = PqfileApp::default();
+        app.tab = Tab::Encrypt;
+        app.route_drop("secret.txt".to_owned(), b"hello world".to_vec(), None);
+        app.encrypt_plain.poll();
+        assert!(app.encrypt_plain.loaded(), "txt should land in plaintext slot");
+        assert!(!app.encrypt_pubkey.loaded(), "pubkey slot should be empty");
+    }
+
+    #[test]
+    fn drop_decrypt_tab_pem_goes_to_privkey_slot() {
+        let mut app = PqfileApp::default();
+        app.tab = Tab::Decrypt;
+        app.route_drop("privkey.pem".to_owned(), b"key-data".to_vec(), None);
+        app.decrypt_privkey.poll();
+        assert!(app.decrypt_privkey.loaded(), "pem should land in privkey slot");
+        assert!(!app.decrypt_pqf.loaded(), "pqf slot should be empty");
+    }
+
+    #[test]
+    fn drop_decrypt_tab_pqf_goes_to_pqf_slot() {
+        let mut app = PqfileApp::default();
+        app.tab = Tab::Decrypt;
+        app.route_drop("secret.txt.pqf".to_owned(), b"ciphertext".to_vec(), None);
+        app.decrypt_pqf.poll();
+        assert!(app.decrypt_pqf.loaded(), "pqf should land in pqf slot");
+        assert!(!app.decrypt_privkey.loaded(), "privkey slot should be empty");
+    }
+
+    #[test]
+    fn drop_inspect_tab_any_file_goes_to_inspect_slot() {
+        let mut app = PqfileApp::default();
+        app.tab = Tab::Inspect;
+        app.route_drop("anything.pqf".to_owned(), b"data".to_vec(), None);
+        app.inspect_pqf.poll();
+        assert!(app.inspect_pqf.loaded());
+    }
+
+    #[test]
+    fn drop_keygen_tab_ignored() {
+        let mut app = PqfileApp::default(); // default tab is Keygen
+        app.route_drop("key.pem".to_owned(), b"data".to_vec(), None);
+        app.encrypt_pubkey.poll();
+        app.encrypt_plain.poll();
+        app.decrypt_privkey.poll();
+        app.decrypt_pqf.poll();
+        app.inspect_pqf.poll();
+        assert!(!app.encrypt_pubkey.loaded());
+        assert!(!app.encrypt_plain.loaded());
+        assert!(!app.decrypt_privkey.loaded());
+        assert!(!app.decrypt_pqf.loaded());
+        assert!(!app.inspect_pqf.loaded());
+    }
+
+    #[test]
+    fn drop_extension_matching_is_case_insensitive() {
+        let mut app = PqfileApp::default();
+        app.tab = Tab::Encrypt;
+        app.route_drop("PUBKEY.PEM".to_owned(), b"key-data".to_vec(), None);
+        app.encrypt_pubkey.poll();
+        assert!(app.encrypt_pubkey.loaded(), "uppercase .PEM should route to pubkey slot");
     }
 }

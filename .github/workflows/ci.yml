@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Supply-chain and license policy ────────────────────────────────────────
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: EmbarkStudios/cargo-deny-action@34899fd7e9ff728e6d8f64f15d5c14d9cce5b4c4 # v2
+        with:
+          command: check
+          # advisories: block on known RustSec vulnerabilities
+          # licenses:   enforce the allow-list in deny.toml
+          # bans:       catch duplicate crates and banned dependencies
+          # sources:    only allow crates.io
+          arguments: advisories licenses bans sources
+
+  # ── Secret scanning ────────────────────────────────────────────────────────
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0  # full history so gitleaks can scan all commits
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c3 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
