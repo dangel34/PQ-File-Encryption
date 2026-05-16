@@ -32,7 +32,7 @@ jobs:
           check "pqfile-gui/Cargo.toml"               "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-gui/Cargo.toml)"
           check "pqfile-desktop/Cargo.toml"           "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-desktop/Cargo.toml)"
           check "pqfile-gui/src/lib.rs"               "$(grep -oP '(?<=APP_VERSION: &str = ")[^"]+' pqfile-gui/src/lib.rs)"
-          check "pqfile-desktop/packaging/setup.iss"  "$(grep -oP '(?<=#define AppVersion\s+")[^"]+' pqfile-desktop/packaging/setup.iss)"
+          check "pqfile-desktop/packaging/setup.iss"  "$(grep -oP '#define AppVersion\s+"\K[^"]+' pqfile-desktop/packaging/setup.iss)"
           check "pqfile/packaging/pqfile.spec"        "$(grep -oP '^Version:\s+\K\S+' pqfile/packaging/pqfile.spec)"
           check "sonar-project.properties"            "$(grep -oP '(?<=sonar\.projectVersion=)\S+' sonar-project.properties)"
 
