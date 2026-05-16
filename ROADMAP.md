@@ -8,8 +8,8 @@ This document tracks planned improvements, new features, and security work acros
 
 ### Security
 
-- **Passphrase-protected private keys**
-  Derive an encryption key from a user passphrase using Argon2id and use it to encrypt the raw private key bytes before writing the PEM file. Decryption prompts for the passphrase. This means a stolen `privkey.pem` is useless without the passphrase.
+- **Passphrase-protected private keys** ✓ _released_
+  `pqfile keygen --passphrase` derives an AES-256-GCM key from the passphrase using Argon2id (m=64 MiB, t=3, p=1) and encrypts the 64-byte seed before writing the PEM file. Decrypt auto-detects the `ML-KEM-768 ENCRYPTED PRIVATE KEY` label and prompts for the passphrase. Unencrypted keys remain fully supported.
 
 - **Key fingerprint display** ✓ _released_
   SHA3-256 fingerprint (first 8 bytes, colon-separated hex) printed by `pqfile keygen` and shown in the GUI Keygen success message.
@@ -20,11 +20,11 @@ This document tracks planned improvements, new features, and security work acros
 - **Signed releases via sigstore/cosign**
   Automatically sign release binaries and checksums in CI using cosign keyless signing. Publish a `checksums.txt.sig` alongside each GitHub release.
 
-- **cargo-deny**
-  Add a `deny.toml` and a CI step using `cargo-deny` to block disallowed licenses, duplicate dependencies, and advisories beyond what `cargo-audit` covers. Complements the existing audit step in `release.yml` with license and supply-chain policy enforcement.
+- **cargo-deny** ✓ _released_
+  `deny.toml` enforces license policy (MIT, Apache-2.0, BSL-1.0, OFL-1.1, and font licenses from egui), blocks banned crates (openssl-sys), and restricts sources to crates.io. Runs in `.github/workflows/ci.yml` on every push and PR to main.
 
-- **Secret scanning (gitleaks)**
-  Add a `gitleaks` step to the CI workflow (or as a pre-commit hook) to catch accidentally committed secrets, API keys, or private key material before they reach the remote. Configure a `.gitleaks.toml` allowlist to suppress intentional test fixtures.
+- **Secret scanning (gitleaks)** ✓ _released_
+  `.gitleaks.toml` with an allowlist for test passphrases and packaging metadata. Runs in `.github/workflows/ci.yml` alongside cargo-deny on every push and PR to main.
 
 ### CLI
 
@@ -34,8 +34,8 @@ This document tracks planned improvements, new features, and security work acros
 - **Stdin / stdout pipe support**
   Accept `-` as the input file to read from stdin and write to stdout. Enables composability: `cat secret.txt | pqfile encrypt -r pubkey.pem - > out.pqf`.
 
-- **Shell completions**
-  Generate completion scripts for bash, zsh, fish, and PowerShell via `clap_complete`. Ship them in the `.deb` and `.rpm` packages and document the one-liner to install them.
+- **Shell completions** ✓ _released_
+  `pqfile completions <shell>` prints a ready-to-install script for bash, zsh, fish, PowerShell, or elvish. Pipe directly into the appropriate location for your shell (see README for one-liners).
 
 - **`pqfile keygen --force` flag** ✓ _released_
   Without `--force`, keygen refuses to overwrite an existing `pubkey.pem` or `privkey.pem`.

@@ -7,14 +7,17 @@ use sha3::{Digest, Sha3_256};
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
+use crate::passphrase;
 
-const PUB_TAG: &str = "ML-KEM-768 PUBLIC KEY";
-const PRIV_TAG: &str = "ML-KEM-768 PRIVATE KEY";
+pub const PUB_TAG: &str = "ML-KEM-768 PUBLIC KEY";
+pub const PRIV_TAG: &str = "ML-KEM-768 PRIVATE KEY";
+pub const PRIV_ENC_TAG: &str = "ML-KEM-768 ENCRYPTED PRIVATE KEY";
 
 /// Generates a key pair and writes it to `out_dir`.
 /// Returns the SHA3-256 fingerprint of the public key (first 8 bytes, colon-separated hex).
 /// Errors with `OutputExists` if either key file already exists and `force` is false.
-pub fn keygen(out_dir: &Path, force: bool) -> Result<String, PqfileError> {
+/// If `passphrase` is `Some`, the private key is encrypted before writing.
+pub fn keygen(out_dir: &Path, force: bool, passphrase: Option<&str>) -> Result<String, PqfileError> {
     if !force {
         for name in ["pubkey.pem", "privkey.pem"] {
             let p = out_dir.join(name);
@@ -23,7 +26,7 @@ pub fn keygen(out_dir: &Path, force: bool) -> Result<String, PqfileError> {
             }
         }
     }
-    let (pub_pem, priv_pem) = keygen_bytes()?;
+    let (pub_pem, priv_pem) = keygen_bytes(passphrase)?;
     let raw_pub = pem::parse(&pub_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
     let fp = fingerprint(raw_pub.contents());
     let pub_path = out_dir.join("pubkey.pem");
@@ -37,13 +40,23 @@ pub fn keygen(out_dir: &Path, force: bool) -> Result<String, PqfileError> {
     Ok(fp)
 }
 
-pub fn keygen_bytes() -> Result<(String, String), PqfileError> {
+/// Generates a key pair and returns the PEM strings.
+/// If `passphrase` is `Some`, the private key PEM uses the encrypted tag and
+/// the body is the Argon2id-wrapped seed; otherwise the body is the raw 64-byte seed.
+pub fn keygen_bytes(passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
     let (dk, ek) = MlKem768::generate_keypair();
 
     let pub_pem = pem::encode(&Pem::new(PUB_TAG, ek.to_bytes().as_slice().to_vec()));
 
-    let priv_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
-    let priv_pem = pem::encode(&Pem::new(PRIV_TAG, priv_bytes.to_vec()));
+    let seed_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
+    let priv_pem = if let Some(pp) = passphrase {
+        let mut seed_arr = [0u8; 64];
+        seed_arr.copy_from_slice(&seed_bytes);
+        let body = passphrase::encrypt_seed(&seed_arr, pp)?;
+        pem::encode(&Pem::new(PRIV_ENC_TAG, body))
+    } else {
+        pem::encode(&Pem::new(PRIV_TAG, seed_bytes.to_vec()))
+    };
 
     Ok((pub_pem, priv_pem))
 }
@@ -76,7 +89,7 @@ mod tests {
     #[test]
     fn keygen_writes_key_files() {
         let tmp = tempdir().unwrap();
-        keygen(tmp.path(), false).unwrap();
+        keygen(tmp.path(), false, None).unwrap();
         assert!(tmp.path().join("pubkey.pem").exists());
         assert!(tmp.path().join("privkey.pem").exists());
     }
@@ -84,7 +97,7 @@ mod tests {
     #[test]
     fn keygen_returns_fingerprint_string() {
         let tmp = tempdir().unwrap();
-        let fp = keygen(tmp.path(), false).unwrap();
+        let fp = keygen(tmp.path(), false, None).unwrap();
         assert_eq!(fp.len(), 23);
         assert!(fp.chars().all(|c| c.is_ascii_hexdigit() || c == ':'));
     }
@@ -92,16 +105,16 @@ mod tests {
     #[test]
     fn keygen_refuses_existing_pubkey_without_force() {
         let tmp = tempdir().unwrap();
-        keygen(tmp.path(), false).unwrap();
-        let err = keygen(tmp.path(), false).unwrap_err();
+        keygen(tmp.path(), false, None).unwrap();
+        let err = keygen(tmp.path(), false, None).unwrap_err();
         assert!(matches!(err, PqfileError::OutputExists(_)));
     }
 
     #[test]
     fn keygen_force_overwrites_existing_keys() {
         let tmp = tempdir().unwrap();
-        keygen(tmp.path(), false).unwrap();
-        keygen(tmp.path(), true).unwrap();
+        keygen(tmp.path(), false, None).unwrap();
+        keygen(tmp.path(), true, None).unwrap();
         assert!(tmp.path().join("pubkey.pem").exists());
         assert!(tmp.path().join("privkey.pem").exists());
     }
@@ -112,7 +125,7 @@ mod tests {
         // Making privkey.pem a directory causes fs::write to fail on both Unix and Windows.
         fs::create_dir(tmp.path().join("privkey.pem")).unwrap();
         // force=true bypasses the exists check so we reach the write step.
-        let result = keygen(tmp.path(), true);
+        let result = keygen(tmp.path(), true, None);
         assert!(result.is_err(), "expected error when privkey write fails");
         assert!(
             !tmp.path().join("pubkey.pem").exists(),
@@ -144,7 +157,7 @@ mod tests {
 
     #[test]
     fn fingerprint_pem_returns_valid_fingerprint_for_real_key() {
-        let (pub_pem, _) = keygen_bytes().unwrap();
+        let (pub_pem, _) = keygen_bytes(None).unwrap();
         let fp = fingerprint_pem(&pub_pem);
         let parts: Vec<&str> = fp.split(':').collect();
         assert_eq!(parts.len(), 8);
@@ -153,5 +166,28 @@ mod tests {
     #[test]
     fn fingerprint_pem_returns_unknown_for_invalid_pem() {
         assert_eq!(fingerprint_pem("not valid pem"), "unknown");
+    }
+
+    #[test]
+    fn keygen_bytes_with_passphrase_uses_encrypted_tag() {
+        let (_, priv_pem) = keygen_bytes(Some("secret")).unwrap();
+        let parsed = pem::parse(&priv_pem).unwrap();
+        assert_eq!(parsed.tag(), PRIV_ENC_TAG);
+    }
+
+    #[test]
+    fn keygen_bytes_without_passphrase_uses_plain_tag() {
+        let (_, priv_pem) = keygen_bytes(None).unwrap();
+        let parsed = pem::parse(&priv_pem).unwrap();
+        assert_eq!(parsed.tag(), PRIV_TAG);
+    }
+
+    #[test]
+    fn keygen_with_passphrase_writes_encrypted_key() {
+        let tmp = tempdir().unwrap();
+        keygen(tmp.path(), false, Some("correct horse battery staple")).unwrap();
+        let priv_pem = std::fs::read_to_string(tmp.path().join("privkey.pem")).unwrap();
+        let parsed = pem::parse(&priv_pem).unwrap();
+        assert_eq!(parsed.tag(), PRIV_ENC_TAG);
     }
 }
