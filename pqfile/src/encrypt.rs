@@ -75,7 +75,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn write_pubkey(dir: &Path) -> PathBuf {
-        let (pub_pem, _) = keygen_bytes().unwrap();
+        let (pub_pem, _) = keygen_bytes(None).unwrap();
         let path = dir.join("pk.pem");
         fs::write(&path, pub_pem.as_bytes()).unwrap();
         path

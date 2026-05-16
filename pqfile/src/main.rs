@@ -3,10 +3,12 @@ mod encrypt;
 mod error;
 mod format;
 mod keygen;
+mod passphrase;
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 use error::PqfileError;
 
@@ -25,6 +27,9 @@ enum Command {
         /// Overwrite existing key files without prompting.
         #[arg(long, default_value_t = false)]
         force: bool,
+        /// Protect the private key with a passphrase (prompted interactively).
+        #[arg(long, default_value_t = false)]
+        passphrase: bool,
     },
     Encrypt {
         #[arg(short = 'r', value_name = "PUBKEY")]
@@ -45,13 +50,30 @@ enum Command {
     Inspect {
         input: PathBuf,
     },
+    /// Print a shell completion script to stdout.
+    ///
+    /// Examples:
+    ///   pqfile completions bash   >> ~/.bash_completion
+    ///   pqfile completions zsh    > ~/.zfunc/_pqfile
+    ///   pqfile completions fish   > ~/.config/fish/completions/pqfile.fish
+    ///   pqfile completions powershell >> $PROFILE
+    Completions {
+        /// Target shell (bash, zsh, fish, powershell, elvish).
+        shell: Shell,
+    },
 }
 
 fn run() -> Result<(), PqfileError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Keygen { out, force } => {
-            let fp = keygen::keygen(&out, force)?;
+        Command::Keygen { out, force, passphrase } => {
+            let pp = if passphrase {
+                let p = prompt_new_passphrase()?;
+                Some(p)
+            } else {
+                None
+            };
+            let fp = keygen::keygen(&out, force, pp.as_deref())?;
             println!("Keys written to {}", out.display());
             println!("Public key fingerprint: {fp}");
             Ok(())
@@ -60,10 +82,46 @@ fn run() -> Result<(), PqfileError> {
             encrypt::encrypt(&recipient, &input, output.as_deref())
         }
         Command::Decrypt { key, input, output } => {
-            decrypt::decrypt(&key, &input, output.as_deref())
+            let privkey_pem = std::fs::read_to_string(&key)?;
+            let pp = if needs_passphrase(&privkey_pem) {
+                Some(prompt_passphrase("Enter passphrase for private key: ")?)
+            } else {
+                None
+            };
+            decrypt::decrypt(&key, &input, output.as_deref(), pp.as_deref())
         }
         Command::Inspect { input } => inspect(&input),
+        Command::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "pqfile", &mut std::io::stdout());
+            Ok(())
+        }
     }
+}
+
+/// Returns true if the PEM file uses the encrypted private key tag.
+fn needs_passphrase(pem_str: &str) -> bool {
+    pem::parse(pem_str)
+        .map(|p| p.tag() == keygen::PRIV_ENC_TAG)
+        .unwrap_or(false)
+}
+
+/// Prompts for a new passphrase with confirmation.
+fn prompt_new_passphrase() -> Result<String, PqfileError> {
+    let pp = rpassword::prompt_password("Enter passphrase: ")
+        .map_err(|e| PqfileError::Io(e))?;
+    let confirm = rpassword::prompt_password("Confirm passphrase: ")
+        .map_err(|e| PqfileError::Io(e))?;
+    if pp != confirm {
+        eprintln!("error: passphrases do not match");
+        std::process::exit(1);
+    }
+    Ok(pp)
+}
+
+/// Prompts for an existing passphrase without confirmation.
+fn prompt_passphrase(prompt: &str) -> Result<String, PqfileError> {
+    rpassword::prompt_password(prompt).map_err(|e| PqfileError::Io(e))
 }
 
 fn inspect(input: &std::path::Path) -> Result<(), PqfileError> {

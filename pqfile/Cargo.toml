@@ -17,8 +17,12 @@ getrandom = "0.4"
 zeroize = { version = "1", features = ["derive"] }
 pem = "3"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 thiserror = "2"
 sha3 = "0.12"
+argon2 = { version = "0.5", features = ["zeroize"] }
+aes-gcm = "0.10"
+rpassword = "7"
 
 [dev-dependencies]
 tempfile = "3"
