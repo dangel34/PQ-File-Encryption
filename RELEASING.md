@@ -115,7 +115,11 @@ Monitor progress in the **Actions** tab. Once the workflow completes, open the d
 
 ## Step 4 — Web GUI deployment
 
-Deployment is **automatic**. Pushing to `main` (Step 1) triggers `.github/workflows/deploy.yml`, which builds the WASM app on the self-hosted Raspberry Pi runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` directly.
+Deployment is **automatic**. Pushing to `main` (Step 1) triggers `.github/workflows/deploy.yml`, which:
+
+1. Builds the WASM app on the self-hosted Raspberry Pi runner.
+2. Rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`.
+3. Purges the Cloudflare cache (`purge_everything`) so visitors immediately get the new build.
 
 No manual action is needed. Monitor progress in the **Actions** tab.
 

@@ -11,8 +11,11 @@ This document tracks planned improvements, new features, and security work acros
 - **Passphrase-protected private keys**
   Derive an encryption key from a user passphrase using Argon2id and use it to encrypt the raw private key bytes before writing the PEM file. Decryption prompts for the passphrase. This means a stolen `privkey.pem` is useless without the passphrase.
 
-- **Key fingerprint display** ✓ _released v2.1_
+- **Key fingerprint display** ✓ _released_
   SHA3-256 fingerprint (first 8 bytes, colon-separated hex) printed by `pqfile keygen` and shown in the GUI Keygen success message.
+
+- **cargo-audit in CI** ✓ _released_
+  `cargo audit` runs in `release.yml` before every build, blocking releases with known RustSec advisories in the dependency tree.
 
 - **Signed releases via sigstore/cosign**
   Automatically sign release binaries and checksums in CI using cosign keyless signing. Publish a `checksums.txt.sig` alongside each GitHub release.
@@ -25,7 +28,7 @@ This document tracks planned improvements, new features, and security work acros
 
 ### CLI
 
-- **Output path flag (`-o / --output`)** ✓ _released v2.1_
+- **Output path flag (`-o / --output`)** ✓ _released_
   `pqfile encrypt … -o /tmp/out.pqf` and `pqfile decrypt … -o recovered.txt`.
 
 - **Stdin / stdout pipe support**
@@ -34,7 +37,7 @@ This document tracks planned improvements, new features, and security work acros
 - **Shell completions**
   Generate completion scripts for bash, zsh, fish, and PowerShell via `clap_complete`. Ship them in the `.deb` and `.rpm` packages and document the one-liner to install them.
 
-- **`pqfile keygen --force` flag** ✓ _released v2.1_
+- **`pqfile keygen --force` flag** ✓ _released_
   Without `--force`, keygen refuses to overwrite an existing `pubkey.pem` or `privkey.pem`.
 
 ### GUI
@@ -47,6 +50,9 @@ This document tracks planned improvements, new features, and security work acros
 
 - **Multi-file encrypt (native only)**
   Allow selecting multiple plaintext files in one Browse dialog and encrypt them sequentially with the same public key. Show a per-file status list.
+
+- **GUI keygen: confirm before overwriting existing keys**
+  The native GUI calls `keygen_bytes()` directly and writes keys unconditionally — it bypasses the `--force` check enforced by the CLI. The `confirm_overwrite` setting only protects encrypt/decrypt output, not keygen. Clicking "Generate Key Pair" a second time silently replaces an existing key pair. Should either route through `keygen()` with an overwrite prompt or respect the confirm-overwrite setting.
 
 - **Persist settings across sessions**
   Save `Settings` (theme, auto-clear, confirm-overwrite) to disk via `eframe`'s `Storage` API so they survive restarts.
