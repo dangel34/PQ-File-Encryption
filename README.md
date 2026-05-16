@@ -325,7 +325,7 @@ The integration tests in `pqfile/tests/roundtrip.rs` cover the CLI binary end-to
 | `keygen_refuses_overwrite_without_force` | second keygen exits non-zero without `--force` |
 | `keygen_force_overwrites_existing_keys` | `--force` succeeds on second keygen |
 | `inspect_shows_header_fields` | `pqfile inspect` prints correct magic, version, KEM variant, and size |
-| `inspect_fails_on_invalid_file` | inspect exits non-zero on a non-`.pqf` file |
+| `inspect_fails_on_invalid_file` | inspect exits non-zero on a file with invalid magic bytes |
 
 ---
 
@@ -339,6 +339,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | InvalidMagic        | File does not start with the bytes "PQFL"             |
 | UnsupportedVersion  | Version byte is not 0x02                              |
 | UnsupportedKem      | KEM variant field is not 768                          |
+| EncryptionFailure   | ChaCha20-Poly1305 encryption failed (e.g. nonce generation error) |
 | DecryptionFailure   | ChaCha20-Poly1305 authentication tag mismatch         |
 | InvalidPem          | PEM file could not be parsed                          |
 | InvalidKeyLength    | Decoded key bytes are the wrong length                |
@@ -359,7 +360,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | pem              | 3       | PEM encoding and decoding for key files          |
 | clap             | 4       | Command-line argument parsing with derive macros |
 | thiserror        | 2       | Ergonomic custom error type derivation           |
-| sha3             | 0.11    | SHA3-256 (FIPS 202) for public key fingerprints  |
+| sha3             | 0.12    | SHA3-256 (FIPS 202) for public key fingerprints  |
 
 ### pqfile-gui (shared GUI logic and WASM lib)
 
