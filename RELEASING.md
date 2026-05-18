@@ -14,20 +14,11 @@ The project uses semantic versioning (`MAJOR.MINOR.PATCH`).
 | New feature (new CLI subcommand, new GUI tab, new library function) | 1.1.0 |
 | Bug fix or internal refactor with no user-visible change | 1.0.2 |
 
-All three crates (`pqfile`, `pqfile-gui`, `pqfile-desktop`) are versioned together and should always share the same version number.
+All three crates (`pqfile`, `pqfile-gui`, `pqfile-desktop`) are versioned together and always share the same version number.
 
 ---
 
-## Pre-release checklist
-
-- [ ] All tests pass locally: `cargo test --workspace`
-- [ ] No SonarQube issues you intend to fix before release (check the badge in README)
-- [ ] README is up to date with any new features or changed behaviour
-- [ ] You are on the `main` branch with a clean working tree
-
----
-
-## Step 1 — Bump versions, commit, and tag
+## Step 1 - Bump versions, commit, and tag
 
 Run the script from the repo root:
 
@@ -41,87 +32,43 @@ Optionally include a one-line RPM changelog summary (defaults to "Version bump")
 .\bump-version.ps1 X.Y.Z -SpecChangelog "Fix foo and bar"
 ```
 
-The script updates all version fields across the codebase, regenerates `Cargo.lock`, commits, tags, and pushes to `main` automatically.
+The script does the following automatically, aborting early if anything fails:
 
-Pushing `main` triggers the SonarQube analysis. Wait for it to pass before proceeding.
-
----
-
-## Step 2 — Build release artifacts
-
-Run all builds from the repository root.
-
-### CLI binary
-
-```
-cargo build --release -p pqfile
-```
-
-Output: `target/release/pqfile` (Linux/macOS) or `target/release/pqfile.exe` (Windows)
-
-### Native desktop GUI
-
-```
-cargo build --release -p pqfile-desktop
-```
-
-Output: `target/release/pqfile-desktop` (Linux/macOS) or `target/release/pqfile-desktop.exe` (Windows)
-
-### Web GUI (WASM)
-
-```
-rustup target add wasm32-unknown-unknown   # one-time setup
-cargo install trunk                        # one-time setup
-
-cd pqfile-gui
-trunk build --release
-```
-
-Output: `pqfile-gui/dist/` — a self-contained static folder ready to deploy.
-
-### Debian package (optional)
-
-```
-cargo install cargo-deb   # one-time setup
-cargo deb -p pqfile
-```
-
-Output: `target/debian/pqfile_X.Y.Z_amd64.deb`
-
-### RPM package (optional)
-
-```
-cargo build --release -p pqfile
-cp target/release/pqfile ~/rpmbuild/BUILD/
-rpmbuild -bb pqfile/packaging/pqfile.spec
-```
+1. **Pre-flight**: verifies you are on `main` with a clean working tree.
+2. **Tests**: runs `cargo test --workspace`; the bump will not proceed if any test fails.
+3. **Version replacements**: updates all version fields across the codebase (`Cargo.toml` files, `APP_VERSION` constant, Inno Setup `.iss`, `sonar-project.properties`, RPM `.spec` version + changelog entry).
+4. **Lock file**: regenerates `Cargo.lock` via `cargo build --workspace`.
+5. **Commit, tag, push**: creates a `chore: bump version to X.Y.Z` commit, tags it `vX.Y.Z`, and pushes both to `origin`.
 
 ---
 
-## Step 3 — Wait for the release workflow
+## Step 2 - Wait for CI
 
-Pushing the tag triggers `.github/workflows/release.yml`, which:
+Pushing to `main` and the tag triggers two workflows in parallel:
 
-1. Runs the full test suite.
-2. Builds CLI and desktop GUI binaries for all four platforms (Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64).
-3. Builds the Windows installer via Inno Setup.
-4. Builds the WASM web app with trunk and archives it as `pqfile-web.tar.gz`.
-5. Generates a `checksums.txt` (SHA-256) covering all artifacts.
-6. Creates a **draft** GitHub release with all artifacts attached.
+### Release workflow (`.github/workflows/release.yml`)
 
-Monitor progress in the **Actions** tab. Once the workflow completes, open the draft release, review the auto-generated notes, and click **Publish release**.
+Triggered by the `vX.Y.Z` tag. Runs:
 
----
+1. Version consistency check across all `Cargo.toml`, `lib.rs`, `.iss`, `.spec`, and `sonar-project.properties`.
+2. Full test suite + `cargo audit`.
+3. Multi-platform builds: Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64 (CLI + desktop GUI).
+4. Windows installer via Inno Setup.
+5. WASM web app build, archived as `pqfile-web.tar.gz`.
+6. SHA-256 checksums for all artifacts.
+7. Creates a **draft** GitHub release with all artifacts attached.
 
-## Step 4 — Web GUI deployment
+Monitor progress in the **Actions** tab. Once complete, open the draft release, review the auto-generated notes, and click **Publish release**.
 
-Deployment is **automatic**. Pushing to `main` (Step 1) triggers `.github/workflows/deploy.yml`, which:
+### Deploy workflow (`.github/workflows/deploy.yml`)
 
-1. Builds the WASM app on the self-hosted Raspberry Pi runner.
+Triggered by the push to `main`. Runs on the self-hosted Raspberry Pi runner:
+
+1. Builds the WASM app with trunk.
 2. Rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`.
-3. Purges the Cloudflare cache (`purge_everything`) so visitors immediately get the new build.
+3. Purges the Cloudflare cache (`purge_everything`) so visitors immediately see the new build.
 
-No manual action is needed. Monitor progress in the **Actions** tab.
+No manual action needed. Monitor progress in the **Actions** tab.
 
 ---
 

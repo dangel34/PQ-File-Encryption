@@ -54,7 +54,7 @@ We will coordinate the disclosure timeline with you and credit you in the releas
 
 ### Out of scope
 
-- Vulnerabilities in third-party Cargo dependencies — report those to the upstream crate maintainers
+- Vulnerabilities in third-party Cargo dependencies (report those to the upstream crate maintainers)
 - Attacks that require physical access to the machine or an already-compromised OS
 - Brute-force attacks against the ML-KEM-768 parameter set (security category 3 is a design constraint, not a flaw)
 - Social engineering
@@ -69,7 +69,7 @@ pqfile is built on the following invariants. Any proposal that weakens them is t
 Key encapsulation uses ML-KEM-768 (NIST FIPS 203, security category 3). This parameter set is believed to be secure against both classical and quantum adversaries.
 
 **Authenticated encryption**
-Symmetric encryption uses ChaCha20-Poly1305 (RFC 8439). The entire 1115-byte `.pqf` header — magic, version, KEM variant, KEM ciphertext, nonce, and original file size — is passed as AEAD additional data. The Poly1305 tag therefore authenticates both the header and the payload. Any single-byte modification to any part of the file causes decryption to fail before plaintext is returned.
+Symmetric encryption uses ChaCha20-Poly1305 (RFC 8439). The entire 1115-byte `.pqf` header (magic, version, KEM variant, KEM ciphertext, nonce, and original file size) is passed as AEAD additional data. The Poly1305 tag therefore authenticates both the header and the payload. Any single-byte modification to any part of the file causes decryption to fail before plaintext is returned.
 
 **Fresh randomness per file**
 A new ML-KEM encapsulation and a new 96-bit nonce are generated independently for every encryption operation using the OS CSPRNG (`getrandom`). Nonce reuse is structurally impossible under normal usage.

@@ -2,7 +2,7 @@
 
 This guide covers a full production deployment of the pqfile web GUI on an Ubuntu server
 running nginx, with hardened TLS, privacy-preserving logging, and security headers tuned
-for WebAssembly. All cryptographic operations run entirely in the visitor's browser — no
+for WebAssembly. All cryptographic operations run entirely in the visitor's browser; no
 file data or key material is ever transmitted to the server.
 
 ---
@@ -26,7 +26,7 @@ Allow only SSH, HTTP (for the ACME challenge), and HTTPS. Drop everything else.
 ```bash
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
-sudo ufw allow 22/tcp      # SSH — change this if you use a non-standard port
+sudo ufw allow 22/tcp      # SSH - change this if you use a non-standard port
 sudo ufw allow 80/tcp      # Let's Encrypt ACME HTTP-01 challenge
 sudo ufw allow 443/tcp     # HTTPS
 sudo ufw enable
@@ -192,7 +192,7 @@ server {
     }
 }
 
-# HTTPS — the main site
+# HTTPS - the main site
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
@@ -209,7 +209,7 @@ server {
     # TLS 1.2 and 1.3 only; disable 1.0 and 1.1
     ssl_protocols TLSv1.2 TLSv1.3;
 
-    # Modern cipher suite — prefer ECDHE, disable RC4, 3DES, NULL
+    # Modern cipher suite - prefer ECDHE, disable RC4, 3DES, NULL
     ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:'
                 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:'
                 'ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:'
@@ -218,12 +218,12 @@ server {
 
     ssl_dhparam /etc/nginx/dhparam.pem;
 
-    # Session resumption — safe with modern TLS
+    # Session resumption - safe with modern TLS
     ssl_session_timeout 1d;
     ssl_session_cache shared:SSL:10m;
     ssl_session_tickets off;        # disable; tickets require careful key rotation
 
-    # OCSP stapling — server fetches and caches the revocation response
+    # OCSP stapling - server fetches and caches the revocation response
     ssl_stapling on;
     ssl_stapling_verify on;
     resolver 1.1.1.1 8.8.8.8 valid=300s;
@@ -236,7 +236,7 @@ server {
     index index.html;
 
     # ----------------------------------------------------------------
-    # Logging — anonymized IP, no query strings in the referer
+    # Logging - anonymized IP, no query strings in the referer
     # ----------------------------------------------------------------
     access_log /var/log/nginx/pqfile_access.log privacy;
     error_log  /var/log/nginx/pqfile_error.log warn;
@@ -250,7 +250,7 @@ server {
     # Security headers
     # ----------------------------------------------------------------
 
-    # HSTS — tell browsers to use HTTPS for 1 year, include subdomains,
+    # HSTS - tell browsers to use HTTPS for 1 year, include subdomains,
     # and submit to the preload list if you want.
     # Remove "preload" if you are not ready to commit the whole domain.
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
@@ -264,7 +264,7 @@ server {
     # Do not send Referer header when navigating away
     add_header Referrer-Policy "no-referrer" always;
 
-    # Permissions Policy — disable browser features the app does not need
+    # Permissions Policy - disable browser features the app does not need
     add_header Permissions-Policy
         "geolocation=(), microphone=(), camera=(), payment=(), usb=(), interest-cohort=()"
         always;
@@ -278,7 +278,7 @@ server {
     # 'wasm-unsafe-eval' is required for WebAssembly instantiation (Chrome 95+, Firefox 102+).
     # 'unsafe-inline' on style-src covers any inline styles injected by the egui/trunk runtime.
     # data: on img-src covers canvas data-URI exports used by egui for textures.
-    # No 'unsafe-eval' — only the narrower 'wasm-unsafe-eval' is granted.
+    # No 'unsafe-eval' - only the narrower 'wasm-unsafe-eval' is granted.
     add_header Content-Security-Policy
         "default-src 'self'; "
         "script-src 'self' 'wasm-unsafe-eval'; "
@@ -303,11 +303,11 @@ server {
     # Static file caching
     # ----------------------------------------------------------------
 
-    # Cache .wasm and .js assets aggressively — trunk hashes filenames on release builds
+    # Cache .wasm and .js assets aggressively - trunk hashes filenames on release builds
     location ~* \.(wasm|js)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
-        # Re-declare security headers — add_header does not inherit inside location blocks
+        # Re-declare security headers - add_header does not inherit inside location blocks
         add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
         add_header X-Frame-Options "DENY" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -315,7 +315,7 @@ server {
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
     }
 
-    # HTML: no cache — always fetch the latest index.html
+    # HTML: no cache - always fetch the latest index.html
     location = /index.html {
         expires -1;
         add_header Cache-Control "no-store, no-cache, must-revalidate";
@@ -327,7 +327,7 @@ server {
     }
 
     # ----------------------------------------------------------------
-    # SPA fallback — serve index.html for any unknown path
+    # SPA fallback - serve index.html for any unknown path
     # ----------------------------------------------------------------
     location / {
         try_files $uri $uri/ /index.html;
@@ -365,7 +365,7 @@ trunk build --release --public-url /
 ```
 
 The output is in `pqfile-gui/dist/`. The release build hashes asset filenames (e.g.
-`pqfile-abc123.wasm`), which is what makes the aggressive 1-year cache headers safe —
+`pqfile-abc123.wasm`), which is what makes the aggressive 1-year cache headers safe:
 a new build produces new filenames, bypassing any cached copies.
 
 ---
@@ -503,7 +503,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cac
   --data '{"purge_everything":true}'
 ```
 
-No nginx reload is required — only static files change.
+No nginx reload is required; only static files change.
 
 ---
 
@@ -529,7 +529,7 @@ No nginx reload is required — only static files change.
 
 | Measure                          | Reason                                                              |
 |----------------------------------|---------------------------------------------------------------------|
-| ufw — ports 22, 80, 443 only     | Reduces attack surface to the minimum required                      |
+| ufw - ports 22, 80, 443 only     | Reduces attack surface to the minimum required                      |
 | SSH key-only, no root login      | Eliminates credential brute-force against the most privileged account|
 | fail2ban                         | Bans IPs that repeatedly fail SSH authentication                    |
 | Unattended upgrades              | Applies OS security patches without manual intervention             |
