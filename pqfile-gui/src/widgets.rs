@@ -264,6 +264,6 @@ pub(crate) fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(10, 6))
         .show(ui, |ui| {
-            ui.label(RichText::new(msg).size(13.0).color(color));
+            ui.label(RichText::new(msg).size(13.0).color(c_text(dark)));
         });
 }

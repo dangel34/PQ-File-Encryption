@@ -55,9 +55,7 @@ impl PqfileApp {
             .map(Settings::load)
             .unwrap_or_default();
         apply_theme(&cc.egui_ctx, settings.dark_mode);
-        let mut app = Self::default();
-        app.settings = settings;
-        app
+        Self { settings, ..Default::default() }
     }
 }
 
