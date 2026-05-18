@@ -62,7 +62,7 @@ Monitor progress in the **Actions** tab. Once complete, open the draft release, 
 
 ### Deploy workflow (`.github/workflows/deploy.yml`)
 
-Triggered by the push to `main`. Runs on the self-hosted Raspberry Pi runner:
+Triggered by the version tag. Runs on the self-hosted Raspberry Pi runner:
 
 1. Builds the WASM app with trunk.
 2. Rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`.
