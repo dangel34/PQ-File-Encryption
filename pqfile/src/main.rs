@@ -109,9 +109,9 @@ fn needs_passphrase(pem_str: &str) -> bool {
 /// Prompts for a new passphrase with confirmation.
 fn prompt_new_passphrase() -> Result<String, PqfileError> {
     let pp = rpassword::prompt_password("Enter passphrase: ")
-        .map_err(|e| PqfileError::Io(e))?;
+        .map_err(PqfileError::Io)?;
     let confirm = rpassword::prompt_password("Confirm passphrase: ")
-        .map_err(|e| PqfileError::Io(e))?;
+        .map_err(PqfileError::Io)?;
     if pp != confirm {
         eprintln!("error: passphrases do not match");
         std::process::exit(1);
@@ -121,7 +121,7 @@ fn prompt_new_passphrase() -> Result<String, PqfileError> {
 
 /// Prompts for an existing passphrase without confirmation.
 fn prompt_passphrase(prompt: &str) -> Result<String, PqfileError> {
-    rpassword::prompt_password(prompt).map_err(|e| PqfileError::Io(e))
+    rpassword::prompt_password(prompt).map_err(PqfileError::Io)
 }
 
 fn inspect(input: &std::path::Path) -> Result<(), PqfileError> {
