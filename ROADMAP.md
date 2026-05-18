@@ -4,7 +4,7 @@ This document tracks planned improvements, new features, and security work acros
 
 ---
 
-## v2.x — Incremental improvements (no breaking changes)
+## v2.x - Incremental improvements (no breaking changes)
 
 ### Security
 
@@ -52,7 +52,7 @@ This document tracks planned improvements, new features, and security work acros
   Allow selecting multiple plaintext files in one Browse dialog and encrypt them sequentially with the same public key. Show a per-file status list.
 
 - **GUI keygen: confirm before overwriting existing keys**
-  The native GUI calls `keygen_bytes()` directly and writes keys unconditionally — it bypasses the `--force` check enforced by the CLI. The `confirm_overwrite` setting only protects encrypt/decrypt output, not keygen. Clicking "Generate Key Pair" a second time silently replaces an existing key pair. Should either route through `keygen()` with an overwrite prompt or respect the confirm-overwrite setting.
+  The native GUI calls `keygen_bytes()` directly and writes keys unconditionally; it bypasses the `--force` check enforced by the CLI. The `confirm_overwrite` setting only protects encrypt/decrypt output, not keygen. Clicking "Generate Key Pair" a second time silently replaces an existing key pair. Should either route through `keygen()` with an overwrite prompt or respect the confirm-overwrite setting.
 
 - **Persist settings across sessions**
   Save `Settings` (theme, auto-clear, confirm-overwrite) to disk via `eframe`'s `Storage` API so they survive restarts.
@@ -73,7 +73,7 @@ This document tracks planned improvements, new features, and security work acros
 
 ---
 
-## v3.0 — Next major release (breaking .pqf format changes)
+## v3.0 - Next major release (breaking .pqf format changes)
 
 ### Security
 
@@ -81,7 +81,7 @@ This document tracks planned improvements, new features, and security work acros
   Add a `--level 1024` flag to `pqfile keygen` and `encrypt`. Store the KEM variant in the header (already present as a u16 field). The private key seed stays 64 bytes (unchanged); the encapsulation key grows from 1184 to 1568 bytes and the KEM ciphertext from 1088 to 1568 bytes. Existing v2 files remain readable.
 
 - **Digital signatures with ML-DSA (NIST FIPS 204)**
-  Add optional file signing: `pqfile sign` produces a detached `.sig` file; `pqfile verify` checks it. Uses ML-DSA-65 (Dilithium level 3). This is separate from encryption — a sender can sign a file before the recipient encrypts it, proving the file was not substituted in transit.
+  Add optional file signing: `pqfile sign` produces a detached `.sig` file; `pqfile verify` checks it. Uses ML-DSA-65 (Dilithium level 3). This is separate from encryption; a sender can sign a file before the recipient encrypts it, proving the file was not substituted in transit.
 
 - **Hybrid classical + post-quantum key exchange**
   Combine X25519 with ML-KEM-768 in a hybrid KEM: the shared secret is `HKDF-SHA256(x25519_ss || mlkem_ss)`. This provides security against both classical and quantum adversaries simultaneously, following NIST guidance on hybrid schemes. Format version bump to `0x03`.

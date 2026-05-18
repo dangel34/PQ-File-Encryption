@@ -11,6 +11,27 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 
 $root = $PSScriptRoot
 
+# ── Pre-flight checks ──────────────────────────────────────────────────────
+
+$branch = git rev-parse --abbrev-ref HEAD
+if ($branch -ne 'main') {
+    Write-Error "Must be on 'main' branch to release (currently on '$branch')"
+    exit 1
+}
+
+$dirty = git status --porcelain
+if ($dirty) {
+    Write-Error "Working tree is not clean. Commit or stash changes before releasing."
+    exit 1
+}
+
+Write-Host "Running tests..."
+cargo test --workspace -q
+if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed — aborting version bump"; exit 1 }
+Write-Host "  all tests passed"
+
+# ── Version replacements ───────────────────────────────────────────────────
+
 function Replace-InFile([string]$path, [string]$pattern, [string]$replacement) {
     $content = Get-Content $path -Raw
     $updated = $content -replace $pattern, $replacement
@@ -30,8 +51,8 @@ Replace-InFile "$root\pqfile-desktop\Cargo.toml" $cargoPattern $cargoReplacement
 
 # pqfile-gui/src/lib.rs — APP_VERSION constant
 Replace-InFile "$root\pqfile-gui\src\lib.rs" `
-    'const APP_VERSION: &str = "\d+\.\d+\.\d+";' `
-    "const APP_VERSION: &str = `"$Version`";"
+    'pub\(crate\) const APP_VERSION: &str = "\d+\.\d+\.\d+";' `
+    "pub(crate) const APP_VERSION: &str = `"$Version`";"
 
 # Inno Setup
 Replace-InFile "$root\pqfile-desktop\packaging\setup.iss" `
@@ -63,13 +84,15 @@ Write-Host "Regenerating Cargo.lock..."
 cargo build --workspace -q
 if ($LASTEXITCODE -ne 0) { Write-Error "cargo build failed"; exit 1 }
 
-# Commit, tag, push
+# ── Commit, tag, push ─────────────────────────────────────────────────────
+
 Write-Host "Committing..."
 git add -A
-
 git commit -m "chore: bump version to $Version"
 git tag "v$Version"
 git push origin main
 git push origin "v$Version"
 
 Write-Host "Done — v$Version tagged and pushed."
+Write-Host "  -> CI release workflow will build artifacts and create a draft GitHub release."
+Write-Host "  -> Deploy workflow will rebuild and publish the web app."
