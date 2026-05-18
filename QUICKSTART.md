@@ -157,7 +157,7 @@ After `trunk build --release` inside `pqfile-gui/`, the `dist/` folder is a self
 
 ### Self-hosted (automated via CI)
 
-Pushing to `main` triggers `.github/workflows/deploy.yml`, which builds on the self-hosted runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`. See [NGINX_DEPLOYMENT.md](NGINX_DEPLOYMENT.md) for the nginx configuration.
+Pushing a version tag (via `bump-version.ps1`) triggers `.github/workflows/deploy.yml`, which builds on the self-hosted runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`. See [NGINX_DEPLOYMENT.md](NGINX_DEPLOYMENT.md) for the nginx configuration.
 
 ### Cloudflare Pages / Netlify / Vercel
 
