@@ -43,8 +43,6 @@ Because the symmetric key is freshly generated for each file and encapsulated wi
 ```
 PQ-File-Encryption/
 ├── Cargo.toml              Workspace manifest
-├── Formula/
-│   └── pqfile.rb           Homebrew formula (copy to homebrew-pqfile tap)
 ├── fuzz/                   cargo-fuzz targets (excluded from main workspace)
 │   └── fuzz_targets/
 │       ├── fuzz_header_read.rs    Fuzzes PqfHeader::read on arbitrary bytes
@@ -228,22 +226,6 @@ cargo test --workspace
 ---
 
 ## Packaging
-
-### macOS — Homebrew
-
-```bash
-brew install dangel34/pqfile/pqfile
-```
-
-The formula is in [Formula/pqfile.rb](Formula/pqfile.rb) and is updated automatically by the release workflow. Shell completions for bash, zsh, and fish are installed via `post_install`.
-
-### Windows — winget
-
-```powershell
-winget install dangel34.pqfile
-```
-
-Installs the desktop GUI and CLI. Manifests live in [pqfile-desktop/packaging/winget/](pqfile-desktop/packaging/winget/) and are submitted automatically to `microsoft/winget-pkgs` when a release is published (requires the `WINGET_TOKEN` secret — see [ROADMAP.md](ROADMAP.md)).
 
 ### Debian / Ubuntu
 

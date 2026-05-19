@@ -6,22 +6,6 @@ Get up and running in a few minutes. For full reference documentation see [READM
 
 ## Install
 
-### macOS — Homebrew
-
-```bash
-brew install dangel34/pqfile/pqfile
-```
-
-Installs the CLI. Shell completions for bash, zsh, and fish are installed automatically.
-
-### Windows — winget
-
-```powershell
-winget install dangel34.pqfile
-```
-
-Installs the desktop GUI (includes the pqfile CLI).
-
 ### Pre-built binaries
 
 Download the latest release from the [Releases page](https://github.com/dangel34/PQ-File-Encryption/releases). Available archives:

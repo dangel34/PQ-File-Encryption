@@ -78,11 +78,6 @@ No manual action needed. Monitor progress in the **Actions** tab.
 - Confirm the SonarQube badge still shows passing.
 - Verify the GitHub Release page shows the correct assets and tag (including `checksums.txt.sig` and `sbom-*.cdx.json`).
 - Smoke-test the downloaded binary: generate a key pair, encrypt a file, decrypt it.
-- **Homebrew tap**: open `Formula/pqfile.rb`, copy the SHA-256 values for each platform binary from the release's `checksums.txt`, and update the `sha256 ""` placeholders. Commit and push to the `dangel34/homebrew-pqfile` tap repository. Users can then install with:
-  ```
-  brew tap dangel34/pqfile
-  brew install pqfile
-  ```
 - **Verify cosign signature** (optional sanity check):
   ```
   cosign verify-blob \

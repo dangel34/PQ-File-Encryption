@@ -1,5 +1,0 @@
-PackageIdentifier: dangel34.pqfile
-PackageVersion: "{{VERSION}}"
-DefaultLocale: en-US
-ManifestType: version
-ManifestVersion: 1.6.0
