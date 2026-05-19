@@ -5,6 +5,7 @@ mod format;
 mod keygen;
 mod passphrase;
 
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -34,18 +35,20 @@ enum Command {
     Encrypt {
         #[arg(short = 'r', value_name = "PUBKEY")]
         recipient: PathBuf,
-        input: PathBuf,
-        /// Write encrypted output to this path instead of <input>.pqf.
+        /// Input file to encrypt, or '-' to read from stdin.
+        input: String,
+        /// Write encrypted output to this path, or '-' for stdout. Defaults to <input>.pqf.
         #[arg(short = 'o', long, value_name = "FILE")]
-        output: Option<PathBuf>,
+        output: Option<String>,
     },
     Decrypt {
         #[arg(short = 'k', value_name = "PRIVKEY")]
         key: PathBuf,
-        input: PathBuf,
-        /// Write decrypted output to this path instead of stripping .pqf.
+        /// Encrypted .pqf file to decrypt, or '-' to read from stdin.
+        input: String,
+        /// Write decrypted output to this path, or '-' for stdout. Defaults to stripping .pqf.
         #[arg(short = 'o', long, value_name = "FILE")]
-        output: Option<PathBuf>,
+        output: Option<String>,
     },
     Inspect {
         input: PathBuf,
@@ -68,29 +71,59 @@ fn run() -> Result<(), PqfileError> {
     match cli.command {
         Command::Keygen { out, force, passphrase } => {
             let pp = if passphrase {
-                let p = prompt_new_passphrase()?;
-                Some(p)
+                Some(prompt_new_passphrase()?)
             } else {
                 None
             };
-            let fp = keygen::keygen(&out, force, pp.as_deref())?;
+            let fp = keygen::keygen(&out, force, pp.as_deref().map(|z| z.as_str()))?;
             println!("Keys written to {}", out.display());
             println!("Public key fingerprint: {fp}");
             Ok(())
         }
         Command::Encrypt { recipient, input, output } => {
-            encrypt::encrypt(&recipient, &input, output.as_deref())
+            let pubkey_pem = std::fs::read_to_string(&recipient)?;
+            let plaintext = read_input(&input)?;
+            let ciphertext = encrypt::encrypt_bytes(&pubkey_pem, &plaintext)?;
+            let out = output.as_deref().unwrap_or_else(|| {
+                if input == "-" { "-" } else { "" } // resolved below
+            });
+            if out == "-" || (out.is_empty() && input == "-") {
+                io::stdout().write_all(&ciphertext)?;
+            } else {
+                let path: PathBuf = if out.is_empty() {
+                    let mut s = std::ffi::OsString::from(&input);
+                    s.push(".pqf");
+                    PathBuf::from(s)
+                } else {
+                    PathBuf::from(out)
+                };
+                std::fs::write(&path, &ciphertext)?;
+            }
+            Ok(())
         }
         Command::Decrypt { key, input, output } => {
             let privkey_pem = std::fs::read_to_string(&key)?;
-            let pp = if needs_passphrase(&privkey_pem) {
+            let pp = if keygen::is_encrypted_key(&privkey_pem) {
                 Some(prompt_passphrase("Enter passphrase for private key: ")?)
             } else {
                 None
             };
-            decrypt::decrypt(&key, &input, output.as_deref(), pp.as_deref())
+            let pqf_data = read_input(&input)?;
+            let plaintext = decrypt::decrypt_bytes(&privkey_pem, &pqf_data, pp.as_deref().map(|z| z.as_str()))?;
+            let out = output.as_deref().unwrap_or("");
+            if out == "-" || (out.is_empty() && input == "-") {
+                io::stdout().write_all(&plaintext)?;
+            } else {
+                let path: PathBuf = if out.is_empty() {
+                    PathBuf::from(&input).with_extension("")
+                } else {
+                    PathBuf::from(out)
+                };
+                std::fs::write(&path, &plaintext)?;
+            }
+            Ok(())
         }
-        Command::Inspect { input } => inspect(&input),
+        Command::Inspect { input } => inspect(input.as_path()),
         Command::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "pqfile", &mut std::io::stdout());
@@ -99,29 +132,36 @@ fn run() -> Result<(), PqfileError> {
     }
 }
 
-/// Returns true if the PEM file uses the encrypted private key tag.
-fn needs_passphrase(pem_str: &str) -> bool {
-    pem::parse(pem_str)
-        .map(|p| p.tag() == keygen::PRIV_ENC_TAG)
-        .unwrap_or(false)
+/// Reads all bytes from `path`. If `path` is `"-"`, reads from stdin.
+fn read_input(path: &str) -> Result<Vec<u8>, PqfileError> {
+    if path == "-" {
+        let mut buf = Vec::new();
+        io::stdin().read_to_end(&mut buf)?;
+        Ok(buf)
+    } else {
+        Ok(std::fs::read(path)?)
+    }
 }
 
 /// Prompts for a new passphrase with confirmation.
-fn prompt_new_passphrase() -> Result<String, PqfileError> {
-    let pp = rpassword::prompt_password("Enter passphrase: ")
-        .map_err(PqfileError::Io)?;
-    let confirm = rpassword::prompt_password("Confirm passphrase: ")
-        .map_err(PqfileError::Io)?;
-    if pp != confirm {
-        eprintln!("error: passphrases do not match");
-        std::process::exit(1);
+fn prompt_new_passphrase() -> Result<zeroize::Zeroizing<String>, PqfileError> {
+    let pp = zeroize::Zeroizing::new(
+        rpassword::prompt_password("Enter passphrase: ").map_err(PqfileError::Io)?
+    );
+    let confirm = zeroize::Zeroizing::new(
+        rpassword::prompt_password("Confirm passphrase: ").map_err(PqfileError::Io)?
+    );
+    if *pp != *confirm {
+        return Err(PqfileError::PassphraseMismatch);
     }
     Ok(pp)
 }
 
 /// Prompts for an existing passphrase without confirmation.
-fn prompt_passphrase(prompt: &str) -> Result<String, PqfileError> {
-    rpassword::prompt_password(prompt).map_err(PqfileError::Io)
+fn prompt_passphrase(prompt: &str) -> Result<zeroize::Zeroizing<String>, PqfileError> {
+    Ok(zeroize::Zeroizing::new(
+        rpassword::prompt_password(prompt).map_err(PqfileError::Io)?
+    ))
 }
 
 fn inspect(input: &std::path::Path) -> Result<(), PqfileError> {

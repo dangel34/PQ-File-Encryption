@@ -55,6 +55,35 @@ impl PqfileApp {
             ui.add_space(14.0);
         }
 
+        section_label(ui, "PASSPHRASE (OPTIONAL)", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.keygen_use_passphrase, "");
+                ui.label(
+                    RichText::new("Protect private key with a passphrase")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
+                );
+            });
+            if self.keygen_use_passphrase {
+                ui.add_space(6.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.keygen_passphrase)
+                        .hint_text("Enter passphrase…")
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add_space(4.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.keygen_passphrase_confirm)
+                        .hint_text("Confirm passphrase…")
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+            }
+        });
+        ui.add_space(14.0);
+
         if ui
             .add(
                 egui::Button::new(
@@ -75,6 +104,20 @@ impl PqfileApp {
     }
 
     pub(crate) fn handle_keygen(&mut self) {
+        let passphrase: Option<&str> = if self.keygen_use_passphrase {
+            if self.keygen_passphrase.is_empty() {
+                self.keygen_status = OpStatus::Err("Enter a passphrase or uncheck the option.".to_owned());
+                return;
+            }
+            if self.keygen_passphrase != self.keygen_passphrase_confirm {
+                self.keygen_status = OpStatus::Err("Passphrases do not match.".to_owned());
+                return;
+            }
+            Some(&self.keygen_passphrase)
+        } else {
+            None
+        };
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.keygen_dir.trim().is_empty() {
@@ -85,7 +128,7 @@ impl PqfileApp {
             // force=true when confirm_overwrite is off (the default): overwrite freely.
             // force=false when confirm_overwrite is on: refuse if either key file exists.
             let force = !self.settings.confirm_overwrite;
-            self.keygen_status = match keygen::keygen(dir, force, None) {
+            self.keygen_status = match keygen::keygen(dir, force, passphrase) {
                 Ok(fp) => OpStatus::Ok(format!(
                     "Keys saved to {}\nFingerprint: {fp}",
                     dir.display()
@@ -95,7 +138,7 @@ impl PqfileApp {
         }
 
         #[cfg(target_arch = "wasm32")]
-        match keygen::keygen_bytes(None) {
+        match keygen::keygen_bytes(passphrase) {
             Ok((pub_pem, priv_pem)) => {
                 let fp = keygen::fingerprint_pem(&pub_pem);
                 crate::widgets::download_bytes("pubkey.pem", pub_pem.as_bytes());

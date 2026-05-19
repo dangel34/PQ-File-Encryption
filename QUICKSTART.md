@@ -61,11 +61,13 @@ Keys written to ./keys/
 Public key fingerprint: e2:a3:43:ab:78:8a:64:f3
 ```
 
-Use `--force` to overwrite existing keys. Use `--passphrase` to encrypt the private key at rest (prompts interactively):
+Use `--force` to overwrite existing keys. Use `--passphrase` to encrypt the private key at rest (prompts interactively with confirmation):
 
 ```
 pqfile keygen --out ./keys/ --passphrase
 ```
+
+The passphrase option is also available in the GUI keygen tab via the "Protect private key with a passphrase" checkbox.
 
 ### 2. Encrypt a file
 
@@ -107,6 +109,21 @@ Nonce:              a3f09c12de87b64c01e5a920
 Original file size: 2048 bytes
 ```
 
+### 5. Pipe via stdin / stdout
+
+Pass `-` as the input file to read from stdin, and omit `-o` (or pass `-o -`) to write to stdout. This enables composability with other tools:
+
+```bash
+# Encrypt from stdin, write to file
+cat secret.txt | pqfile encrypt -r pubkey.pem - > out.pqf
+
+# Decrypt from stdin, write to stdout (pipe into another command)
+cat out.pqf | pqfile decrypt -k privkey.pem - | gpg --encrypt > double-wrapped.gpg
+
+# Encrypt and pipe directly to a remote host
+cat secret.txt | pqfile encrypt -r pubkey.pem - | ssh user@host 'cat > secret.pqf'
+```
+
 ---
 
 ## CLI - Shell completions
@@ -143,9 +160,9 @@ The GUI has five tabs and behaves identically on native and web, except that the
 
 | Tab | What it does |
 |---|---|
-| **Keygen** | Generate a key pair and save (native) or download (web) the PEM files |
+| **Keygen** | Generate a key pair and save (native) or download (web) the PEM files. Optional passphrase checkbox encrypts the private key at rest. |
 | **Encrypt** | Load a public key + plaintext file, produce a `.pqf` encrypted file |
-| **Decrypt** | Load a private key + `.pqf` file, recover the original file |
+| **Decrypt** | Load a private key + `.pqf` file, recover the original file. A passphrase field appears automatically when an encrypted private key is loaded. |
 | **Inspect** | View the header of a `.pqf` file without decrypting it |
 | **Settings** | Toggle dark/light theme, auto-clear inputs, overwrite protection |
 

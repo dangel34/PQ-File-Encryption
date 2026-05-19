@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use eframe::egui::{self, RichText, Vec2};
-use pqfile::decrypt;
+use pqfile::{decrypt, keygen};
 use crate::app::PqfileApp;
 use crate::colors::*;
 use crate::types::OpStatus;
@@ -18,7 +18,13 @@ impl PqfileApp {
             return;
         };
 
-        match decrypt::decrypt_bytes(&priv_pem, &pqf, None) {
+        let passphrase = if self.decrypt_passphrase.is_empty() {
+            None
+        } else {
+            Some(self.decrypt_passphrase.as_str())
+        };
+
+        match decrypt::decrypt_bytes(&priv_pem, &pqf, passphrase) {
             Ok(plain) => {
                 let out_name = PathBuf::from(&pqf_name)
                     .file_stem()
@@ -33,6 +39,7 @@ impl PqfileApp {
                 if self.settings.auto_clear && matches!(self.decrypt_status, OpStatus::Ok(_)) {
                     self.decrypt_privkey.clear();
                     self.decrypt_pqf.clear();
+                    self.decrypt_passphrase.clear();
                 }
             }
             Err(e) => self.decrypt_status = OpStatus::Err(e.to_string()),
@@ -55,6 +62,26 @@ impl PqfileApp {
             file_row(ui, "Encrypted file (.pqf)", &mut self.decrypt_pqf, "PQF", &["pqf"], dark);
         });
         ui.add_space(14.0);
+
+        // Show passphrase field only when the loaded key is encrypted.
+        let key_is_encrypted = self.decrypt_privkey.as_str()
+            .map(|pem_str| keygen::is_encrypted_key(pem_str))
+            .unwrap_or(false);
+        if key_is_encrypted {
+            section_label(ui, "PASSPHRASE", dark);
+            card(ui, c_card(dark), c_surface1(dark), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.decrypt_passphrase)
+                        .hint_text("Enter passphrase for private key…")
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+            });
+            ui.add_space(14.0);
+        } else if self.decrypt_privkey.loaded() {
+            // Key is loaded but unencrypted — clear any stale passphrase.
+            self.decrypt_passphrase.clear();
+        }
 
         let ready = self.decrypt_privkey.loaded() && self.decrypt_pqf.loaded();
         if ui

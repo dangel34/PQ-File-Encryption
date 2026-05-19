@@ -50,7 +50,7 @@ pub fn keygen_bytes(passphrase: Option<&str>) -> Result<(String, String), Pqfile
 
     let seed_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
     let priv_pem = if let Some(pp) = passphrase {
-        let mut seed_arr = [0u8; 64];
+        let mut seed_arr = Zeroizing::new([0u8; 64]);
         seed_arr.copy_from_slice(&seed_bytes);
         let body = passphrase::encrypt_seed(&seed_arr, pp)?;
         pem::encode(&Pem::new(PRIV_ENC_TAG, body))
@@ -69,6 +69,14 @@ pub fn fingerprint(raw_bytes: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect::<Vec<_>>()
         .join(":")
+}
+
+/// Returns true if `pem_str` uses the encrypted private key tag.
+/// Used by the GUI to decide whether to show the passphrase input field.
+pub fn is_encrypted_key(pem_str: &str) -> bool {
+    pem::parse(pem_str)
+        .map(|p| p.tag() == PRIV_ENC_TAG)
+        .unwrap_or(false)
 }
 
 /// Convenience wrapper: parses a PEM string and returns its fingerprint.
