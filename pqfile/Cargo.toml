@@ -1,6 +1,6 @@
 [package]
 name = "pqfile"
-version = "2.0.4"
+version = "2.0.5"
 edition = "2021"
 description = "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
 license = "MIT"

@@ -2943,7 +2943,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile"
-version = "2.0.4"
+version = "2.0.5"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -2962,7 +2962,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile-desktop"
-version = "2.0.4"
+version = "2.0.5"
 dependencies = [
  "eframe",
  "pqfile-gui",
@@ -2970,7 +2970,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile-gui"
-version = "2.0.4"
+version = "2.0.5"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
