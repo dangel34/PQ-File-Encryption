@@ -45,14 +45,14 @@ This document tracks planned improvements, new features, and security work acros
 - **Drag-and-drop file loading** ✓ _released_
   Accept files dropped onto the Encrypt, Decrypt, and Inspect panels in both the native and web builds. `egui` exposes `dropped_files` on `Context`; the web build needs a JS drop-event bridge.
 
-- **Key fingerprint in Inspect tab**
-  Compute and display the SHA-256 fingerprint of the embedded KEM ciphertext. Lets the recipient confirm which key was used to encrypt a file before attempting decryption.
+- **Key fingerprint in Inspect tab** ✓ _released_
+  SHA3-256 fingerprint of the embedded KEM ciphertext displayed in the Inspect output. Lets the recipient confirm which key was used before attempting decryption.
 
-- **Multi-file encrypt (native only)**
-  Allow selecting multiple plaintext files in one Browse dialog and encrypt them sequentially with the same public key. Show a per-file status list.
+- **Multi-file encrypt** ✓ _released_
+  "Files to Encrypt" list with "+ Add Files…" button (opens a multi-file picker) and drag-and-drop support. Each file shows a per-row status (✓ / error). "Encrypt All (N)" button processes all files sequentially with the same public key. Works on both native and web.
 
-- **GUI keygen: confirm before overwriting existing keys**
-  The native GUI calls `keygen_bytes()` directly and writes keys unconditionally; it bypasses the `--force` check enforced by the CLI. The `confirm_overwrite` setting only protects encrypt/decrypt output, not keygen. Clicking "Generate Key Pair" a second time silently replaces an existing key pair. Should either route through `keygen()` with an overwrite prompt or respect the confirm-overwrite setting.
+- **GUI keygen: confirm before overwriting existing keys** ✓ _released_
+  Native GUI routes through `keygen::keygen()` with `force = !settings.confirm_overwrite`, giving the same protection as the CLI `--force` flag.
 
 - **Persist settings across sessions** ✓ _released_
   Save `Settings` (theme, auto-clear, confirm-overwrite) to disk via `eframe`'s `Storage` API so they survive restarts.
@@ -131,8 +131,8 @@ This document tracks planned improvements, new features, and security work acros
 - **Fuzzing with `cargo-fuzz`** ✓ _released_
   Add fuzz targets for `PqfHeader::read`, `decrypt_bytes` (malformed ciphertext), and PEM parsing. Run on OSS-Fuzz or as a nightly CI job. Guards against panics or logic errors on adversarial input. Targets live in `fuzz/fuzz_targets/`; run with `cargo fuzz run fuzz_header_read` etc.
 
-- **Dependabot / Renovate**
-  Enable automated dependency update PRs for both Cargo dependencies and GitHub Actions. Configure auto-merge for patch-level updates that pass CI.
+- **Dependabot / Renovate** ✓ _released_
+  `.github/dependabot.yml` enables weekly PRs for Cargo and GitHub Actions dependencies.
 
 - **Benchmark suite**
   Add `criterion` benchmarks for encrypt and decrypt at 1 KB, 1 MB, and 100 MB (once streaming exists). Track performance regressions in CI.

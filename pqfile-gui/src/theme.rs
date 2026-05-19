@@ -30,6 +30,7 @@ pub(crate) fn apply_theme(ctx: &egui::Context, dark: bool) {
     v.widgets.hovered.bg_fill = surf1;
     v.widgets.hovered.fg_stroke = Stroke::new(1.5, accent);
     v.widgets.hovered.bg_stroke = Stroke::new(1.0, accent);
+    v.widgets.hovered.expansion = 0.0;
 
     v.widgets.active.bg_fill = accent;
     v.widgets.active.fg_stroke = Stroke::new(1.5, mantle);

@@ -49,12 +49,16 @@ pub fn start() -> Result<(), JsValue> {
 #[cfg(test)]
 mod tests {
     use crate::app::PqfileApp;
-    use crate::types::{FileInput, OpStatus, Settings, Tab};
+    use crate::types::{FileInput, MultiFileEntry, OpStatus, Settings, Tab};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn loaded_input(name: &str, data: Vec<u8>, path: Option<PathBuf>) -> FileInput {
         FileInput { name: name.to_owned(), data: Some(data), path, pending: Default::default() }
+    }
+
+    fn file_entry(name: &str, data: Vec<u8>, path: Option<PathBuf>) -> MultiFileEntry {
+        MultiFileEntry { name: name.to_owned(), data, path, status: OpStatus::None }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -105,10 +109,11 @@ mod tests {
     }
 
     #[test]
-    fn encrypt_missing_inputs_sets_error() {
+    fn encrypt_all_no_pubkey_is_noop() {
         let mut app = PqfileApp::default();
-        app.handle_encrypt();
-        assert!(matches!(app.encrypt_status, OpStatus::Err(_)));
+        app.encrypt_files.push(file_entry("test.txt", b"hello".to_vec(), None));
+        app.handle_encrypt_all(); // no pubkey loaded — should return early without panicking
+        assert!(matches!(app.encrypt_files[0].status, OpStatus::None), "status should remain None");
     }
 
     #[test]
@@ -122,9 +127,9 @@ mod tests {
     fn encrypt_bad_key_sets_error() {
         let mut app = PqfileApp::default();
         app.encrypt_pubkey = loaded_input("bad.pem", b"not a valid key".to_vec(), None);
-        app.encrypt_plain = loaded_input("test.txt", b"hello".to_vec(), None);
-        app.handle_encrypt();
-        assert!(matches!(app.encrypt_status, OpStatus::Err(_)));
+        app.encrypt_files.push(file_entry("test.txt", b"hello".to_vec(), None));
+        app.handle_encrypt_all();
+        assert!(matches!(app.encrypt_files[0].status, OpStatus::Err(_)));
     }
 
     #[test]
@@ -148,9 +153,9 @@ mod tests {
 
         let mut app = PqfileApp::default();
         app.encrypt_pubkey = loaded_input("pubkey.pem", pub_pem.as_bytes().to_vec(), None);
-        app.encrypt_plain = loaded_input("input.txt", plaintext.clone(), Some(plain_path));
-        app.handle_encrypt();
-        assert!(matches!(app.encrypt_status, OpStatus::Ok(_)), "encryption failed");
+        app.encrypt_files.push(file_entry("input.txt", plaintext.clone(), Some(plain_path)));
+        app.handle_encrypt_all();
+        assert!(matches!(app.encrypt_files[0].status, OpStatus::Ok(_)), "encryption failed");
 
         // Decrypt
         let pqf_path = tmp.path().join("input.txt.pqf");
@@ -163,6 +168,32 @@ mod tests {
 
         let decrypted = std::fs::read(tmp.path().join("input.txt")).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_all_multi_file_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (pub_pem, _) = pqfile::keygen::keygen_bytes(None).unwrap();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_pubkey = loaded_input("pubkey.pem", pub_pem.as_bytes().to_vec(), None);
+
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            let path = tmp.path().join(name);
+            std::fs::write(&path, name.as_bytes()).unwrap();
+            app.encrypt_files.push(file_entry(name, name.as_bytes().to_vec(), Some(path)));
+        }
+
+        app.handle_encrypt_all();
+
+        for entry in &app.encrypt_files {
+            assert!(
+                matches!(entry.status, OpStatus::Ok(_)),
+                "{} failed: {:?}", entry.name,
+                if let OpStatus::Err(e) = &entry.status { e.as_str() } else { "" }
+            );
+            assert!(tmp.path().join(format!("{}.pqf", entry.name)).exists());
+        }
     }
 
     // ── Settings persistence ───────────────────────────────────────────────
@@ -241,17 +272,26 @@ mod tests {
         app.route_drop("pubkey.pem".to_owned(), b"key-data".to_vec(), None);
         app.encrypt_pubkey.poll();
         assert!(app.encrypt_pubkey.loaded(), "pem should land in pubkey slot");
-        assert!(!app.encrypt_plain.loaded(), "plaintext slot should be empty");
+        assert!(app.encrypt_files.is_empty(), "file list should be empty");
     }
 
     #[test]
-    fn drop_encrypt_tab_non_pem_goes_to_plaintext_slot() {
+    fn drop_encrypt_tab_non_pem_goes_to_file_list() {
         let mut app = PqfileApp::default();
         app.tab = Tab::Encrypt;
         app.route_drop("secret.txt".to_owned(), b"hello world".to_vec(), None);
-        app.encrypt_plain.poll();
-        assert!(app.encrypt_plain.loaded(), "txt should land in plaintext slot");
+        assert_eq!(app.encrypt_files.len(), 1, "txt should land in file list");
+        assert_eq!(app.encrypt_files[0].name, "secret.txt");
         assert!(!app.encrypt_pubkey.loaded(), "pubkey slot should be empty");
+    }
+
+    #[test]
+    fn drop_encrypt_tab_multiple_files_accumulate() {
+        let mut app = PqfileApp::default();
+        app.tab = Tab::Encrypt;
+        app.route_drop("a.txt".to_owned(), b"aaa".to_vec(), None);
+        app.route_drop("b.txt".to_owned(), b"bbb".to_vec(), None);
+        assert_eq!(app.encrypt_files.len(), 2);
     }
 
     #[test]
@@ -288,12 +328,11 @@ mod tests {
         let mut app = PqfileApp::default(); // default tab is Keygen
         app.route_drop("key.pem".to_owned(), b"data".to_vec(), None);
         app.encrypt_pubkey.poll();
-        app.encrypt_plain.poll();
         app.decrypt_privkey.poll();
         app.decrypt_pqf.poll();
         app.inspect_pqf.poll();
         assert!(!app.encrypt_pubkey.loaded());
-        assert!(!app.encrypt_plain.loaded());
+        assert!(app.encrypt_files.is_empty(), "file list should be empty");
         assert!(!app.decrypt_privkey.loaded());
         assert!(!app.decrypt_pqf.loaded());
         assert!(!app.inspect_pqf.loaded());

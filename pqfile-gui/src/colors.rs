@@ -19,7 +19,7 @@ pub(crate) const L_OVERLAY: Color32  = Color32::from_rgb(140, 143, 161);
 pub(crate) const L_SUBTEXT: Color32  = Color32::from_rgb(108, 111, 133);
 pub(crate) const L_TEXT: Color32     = Color32::from_rgb(76,  79,  105);
 pub(crate) const L_ACCENT: Color32   = Color32::from_rgb(30,  102, 245);
-pub(crate) const L_GREEN: Color32    = Color32::from_rgb(64,  160, 43);
+pub(crate) const L_GREEN: Color32    = Color32::from_rgb(28,  108, 12);
 pub(crate) const L_RED: Color32      = Color32::from_rgb(210, 15,  57);
 
 pub(crate) fn c_bg(d: bool)       -> Color32 { if d { D_BASE }     else { L_BASE } }

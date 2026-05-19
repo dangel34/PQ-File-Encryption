@@ -107,8 +107,8 @@ impl PqfileApp {
                 .clicked()
             {
                 self.encrypt_pubkey.clear();
-                self.encrypt_plain.clear();
-                self.encrypt_status = OpStatus::None;
+                self.encrypt_files.clear();
+                if let Ok(mut g) = self.encrypt_batch_pending.try_lock() { g.take(); }
                 self.decrypt_privkey.clear();
                 self.decrypt_pqf.clear();
                 self.decrypt_status = OpStatus::None;
