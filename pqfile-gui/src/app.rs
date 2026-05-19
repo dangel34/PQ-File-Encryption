@@ -1,7 +1,8 @@
+use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
 use crate::colors::*;
 use crate::theme::apply_theme;
-use crate::types::{Tab, OpStatus, PickedFile, FileInput, Settings};
+use crate::types::{Tab, OpStatus, PickedFile, FileInput, BatchPending, MultiFileEntry, Settings};
 use crate::widgets::{bullet, card, kv_row, section_label, tab_btn};
 use crate::APP_VERSION;
 
@@ -18,8 +19,8 @@ pub struct PqfileApp {
     pub(crate) keygen_status: OpStatus,
 
     pub(crate) encrypt_pubkey: FileInput,
-    pub(crate) encrypt_plain: FileInput,
-    pub(crate) encrypt_status: OpStatus,
+    pub(crate) encrypt_files: Vec<MultiFileEntry>,
+    pub(crate) encrypt_batch_pending: BatchPending,
 
     pub(crate) decrypt_privkey: FileInput,
     pub(crate) decrypt_pqf: FileInput,
@@ -44,8 +45,8 @@ impl Default for PqfileApp {
             keygen_use_passphrase: false,
             keygen_status: OpStatus::None,
             encrypt_pubkey: FileInput::default(),
-            encrypt_plain: FileInput::default(),
-            encrypt_status: OpStatus::None,
+            encrypt_files: Vec::new(),
+            encrypt_batch_pending: Arc::new(Mutex::new(None)),
             decrypt_privkey: FileInput::default(),
             decrypt_pqf: FileInput::default(),
             decrypt_passphrase: String::new(),
@@ -236,7 +237,12 @@ impl PqfileApp {
                 if ext == "pem" {
                     *self.encrypt_pubkey.pending.lock().unwrap() = Some(picked);
                 } else {
-                    *self.encrypt_plain.pending.lock().unwrap() = Some(picked);
+                    self.encrypt_files.push(MultiFileEntry {
+                        name: picked.name,
+                        data: picked.data,
+                        path: picked.path,
+                        status: OpStatus::None,
+                    });
                 }
             }
             Tab::Decrypt => {
@@ -259,19 +265,44 @@ impl PqfileApp {
 impl PqfileApp {
     fn poll_files(&mut self) -> bool {
         self.encrypt_pubkey.poll();
-        self.encrypt_plain.poll();
         self.decrypt_privkey.poll();
         self.decrypt_pqf.poll();
         self.inspect_pqf.poll();
-        [
+
+        // Drain any batch of files delivered by the async file picker.
+        let batch_arrived = if let Ok(mut g) = self.encrypt_batch_pending.try_lock() {
+            if let Some(batch) = g.take() {
+                for picked in batch {
+                    self.encrypt_files.push(MultiFileEntry {
+                        name: picked.name,
+                        data: picked.data,
+                        path: picked.path,
+                        status: OpStatus::None,
+                    });
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let singles_pending = [
             &self.encrypt_pubkey,
-            &self.encrypt_plain,
             &self.decrypt_privkey,
             &self.decrypt_pqf,
             &self.inspect_pqf,
         ]
         .iter()
-        .any(|f| f.pending.try_lock().map(|g| g.is_some()).unwrap_or(false))
+        .any(|f| f.pending.try_lock().map(|g| g.is_some()).unwrap_or(false));
+
+        let batch_pending = self.encrypt_batch_pending
+            .try_lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
+
+        singles_pending || batch_arrived || batch_pending
     }
 }
 

@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
 use crate::colors::*;
-use crate::types::{FileInput, OpStatus, Pending, PickedFile};
+use crate::types::{BatchPending, FileInput, OpStatus, Pending, PickedFile};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
@@ -9,15 +9,19 @@ pub(crate) fn tab_btn(ui: &mut egui::Ui, current: &mut crate::types::Tab, target
     let active = *current == target;
     let text_color = if active { c_accent(dark) } else { c_subtext(dark) };
     let fill = if active { c_surface1(dark) } else { Color32::TRANSPARENT };
-    let stroke = if active { Stroke::new(1.0, c_accent(dark)) } else { Stroke::NONE };
-    if ui
-        .add(
-            egui::Button::new(RichText::new(label).size(13.0).color(text_color))
-                .fill(fill)
-                .stroke(stroke),
-        )
-        .clicked()
-    {
+    let resp = ui.add(
+        egui::Button::new(RichText::new(label).size(13.0).color(text_color))
+            .fill(fill)
+            .stroke(Stroke::NONE),
+    );
+    if active {
+        let r = resp.rect;
+        ui.painter().line_segment(
+            [egui::pos2(r.left() + 4.0, r.bottom()), egui::pos2(r.right() - 4.0, r.bottom())],
+            Stroke::new(2.0, c_accent(dark)),
+        );
+    }
+    if resp.clicked() {
         *current = target;
     }
 }
@@ -28,7 +32,12 @@ pub(crate) fn tab_heading(ui: &mut egui::Ui, text: &str, dark: bool) {
 }
 
 pub(crate) fn section_label(ui: &mut egui::Ui, text: &str, dark: bool) {
-    ui.label(RichText::new(text).size(10.5).color(c_overlay(dark)).strong());
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(egui::vec2(3.0, 11.0), egui::Sense::hover());
+        ui.painter().rect_filled(r, CornerRadius::same(1), c_accent(dark));
+        ui.add_space(4.0);
+        ui.label(RichText::new(text).size(10.5).color(c_subtext(dark)).strong());
+    });
     ui.add_space(3.0);
 }
 
@@ -185,6 +194,42 @@ pub(crate) fn pick_file(pending: Pending, filter_name: &'static str, filter_exts
     });
 }
 
+pub(crate) fn pick_files(pending: BatchPending) {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(move || {
+        if let Some(paths) = rfd::FileDialog::new().pick_files() {
+            let mut batch: Vec<PickedFile> = Vec::new();
+            for path in paths {
+                if let Ok(data) = std::fs::read(&path) {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    batch.push(PickedFile { name, data, path: Some(path) });
+                }
+            }
+            if !batch.is_empty() {
+                *pending.lock().unwrap() = Some(batch);
+            }
+        }
+    });
+
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Some(files) = rfd::AsyncFileDialog::new().pick_files().await {
+            let mut batch: Vec<PickedFile> = Vec::new();
+            for file in files {
+                let name = file.file_name();
+                let data = file.read().await;
+                batch.push(PickedFile { name, data, path: None });
+            }
+            if !batch.is_empty() {
+                *pending.lock().unwrap() = Some(batch);
+            }
+        }
+    });
+}
+
 pub(crate) fn save_result(
     filename: &str,
     data: &[u8],
@@ -256,14 +301,14 @@ pub(crate) fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {
     };
     ui.add_space(8.0);
     egui::Frame::NONE
-        .fill(Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 22))
+        .fill(Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 30))
         .stroke(Stroke::new(
             1.0,
-            Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 80),
+            Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 100),
         ))
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(10, 6))
         .show(ui, |ui| {
-            ui.label(RichText::new(msg).size(13.0).color(c_text(dark)));
+            ui.label(RichText::new(msg).size(13.0).color(color));
         });
 }

@@ -11,7 +11,7 @@ pub(crate) enum Tab {
     Settings,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) enum OpStatus {
     #[default]
     None,
@@ -26,6 +26,14 @@ pub(crate) struct PickedFile {
 }
 
 pub(crate) type Pending = Arc<Mutex<Option<PickedFile>>>;
+pub(crate) type BatchPending = Arc<Mutex<Option<Vec<PickedFile>>>>;
+
+pub(crate) struct MultiFileEntry {
+    pub(crate) name: String,
+    pub(crate) data: Vec<u8>,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) status: OpStatus,
+}
 
 pub(crate) struct FileInput {
     pub(crate) name: String,

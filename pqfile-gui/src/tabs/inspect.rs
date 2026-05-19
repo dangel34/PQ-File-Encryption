@@ -1,6 +1,6 @@
 use std::io::Cursor;
 use eframe::egui::{self, RichText, Vec2};
-use pqfile::format;
+use pqfile::{format, keygen};
 use crate::app::PqfileApp;
 use crate::colors::*;
 use crate::types::OpStatus;
@@ -49,15 +49,18 @@ impl PqfileApp {
                     Ok(h) => {
                         let nonce: String =
                             h.nonce.iter().map(|b| format!("{b:02x}")).collect();
+                        let ct_fp = keygen::fingerprint(&h.kem_ciphertext);
                         self.inspect_result = format!(
                             "Magic            PQFL\n\
                              Version          {:#04x}\n\
                              KEM variant      ML-KEM-{}\n\
                              Nonce            {}\n\
+                             Ciphertext FP    {}\n\
                              Original size    {} bytes",
                             format::VERSION,
                             format::KEM_VARIANT,
                             nonce,
+                            ct_fp,
                             h.original_size,
                         );
                         self.inspect_status = OpStatus::None;
