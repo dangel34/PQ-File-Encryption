@@ -6,14 +6,50 @@ Get up and running in a few minutes. For full reference documentation see [READM
 
 ## Install
 
+### macOS — Homebrew
+
+```bash
+brew install dangel34/pqfile/pqfile
+```
+
+Installs the CLI. Shell completions for bash, zsh, and fish are installed automatically.
+
+### Windows — winget
+
+```powershell
+winget install dangel34.pqfile
+```
+
+Installs the desktop GUI (includes the pqfile CLI).
+
+### Pre-built binaries
+
+Download the latest release from the [Releases page](https://github.com/dangel34/PQ-File-Encryption/releases). Available archives:
+
+| File | Platform |
+|------|----------|
+| `pqfile-x86_64-unknown-linux-gnu` | Linux x86-64 |
+| `pqfile-x86_64-apple-darwin` | macOS Intel |
+| `pqfile-aarch64-apple-darwin` | macOS Apple Silicon |
+| `pqfile-x86_64-pc-windows-msvc.exe` | Windows x86-64 (CLI) |
+| `pqfile-setup-{version}.exe` | Windows installer (GUI + CLI) |
+
+Verify the download against `checksums.txt` (SHA-256):
+
+```bash
+sha256sum --check --ignore-missing checksums.txt
+```
+
+### Build from source
+
 Requires Rust 1.74 or later.
 
 ```
-git clone <repo>
+git clone https://github.com/dangel34/PQ-File-Encryption
 cd PQ-File-Encryption
 ```
 
-### CLI only
+**CLI only**
 
 ```
 cargo build --release -p pqfile
@@ -25,14 +61,14 @@ Binary lands at `target/release/pqfile`. To install to your Cargo bin directory:
 cargo install --path pqfile
 ```
 
-### Native GUI
+**Native GUI**
 
 ```
 cargo build --release -p pqfile-desktop
 ./target/release/pqfile-desktop
 ```
 
-### Web GUI (WASM)
+**Web GUI (WASM)**
 
 ```
 rustup target add wasm32-unknown-unknown   # one-time

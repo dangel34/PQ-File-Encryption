@@ -62,8 +62,8 @@ This document tracks planned improvements, new features, and security work acros
 - **Homebrew formula** ✓ _released_
   Publish a `homebrew-tap` repository with a formula for `pqfile` (CLI only). Keep it updated by the release workflow. Formula lives in `Formula/pqfile.rb`; create a `dangel34/homebrew-pqfile` tap repo and copy it there.
 
-- **Windows winget manifest**
-  Submit a manifest to the `microsoft/winget-pkgs` community repository so users can install via `winget install pqfile`.
+- **Windows winget manifest** ✓ _released_
+  Manifests generated automatically at release time and attached as release assets. `winget.yml` fires on release publish and uses `wingetcreate submit` to open a PR to `microsoft/winget-pkgs` automatically (requires `WINGET_TOKEN` secret — a PAT with `public_repo` scope). First PR requires manual reviewer approval; subsequent version updates merge automatically once the package is established.
 
 - **Automated release workflow** ✓ _released v2.x_
   `.github/workflows/release.yml` triggered by a version tag (`v*`). Builds CLI and desktop GUI binaries for all four platforms, the Windows installer via Inno Setup, the WASM web app, generates `checksums.txt`, and creates a draft GitHub release.

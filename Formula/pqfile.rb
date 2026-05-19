@@ -1,23 +1,23 @@
 class Pqfile < Formula
   desc "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
-  homepage "https://github.com/dangel34/pqfile"
-  version "2.0.4"
+  homepage "https://github.com/dangel34/PQ-File-Encryption"
+  version "{{VERSION}}"
 
   on_macos do
     on_arm do
-      url "https://github.com/dangel34/pqfile/releases/download/v#{version}/pqfile-aarch64-apple-darwin"
-      sha256 "" # fill in after first release that includes this formula
+      url "https://github.com/dangel34/PQ-File-Encryption/releases/download/v#{version}/pqfile-aarch64-apple-darwin"
+      sha256 "{{SHA256_AARCH64_DARWIN}}"
     end
     on_intel do
-      url "https://github.com/dangel34/pqfile/releases/download/v#{version}/pqfile-x86_64-apple-darwin"
-      sha256 "" # fill in after first release that includes this formula
+      url "https://github.com/dangel34/PQ-File-Encryption/releases/download/v#{version}/pqfile-x86_64-apple-darwin"
+      sha256 "{{SHA256_X86_64_DARWIN}}"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/dangel34/pqfile/releases/download/v#{version}/pqfile-x86_64-unknown-linux-gnu"
-      sha256 "" # fill in after first release that includes this formula
+      url "https://github.com/dangel34/PQ-File-Encryption/releases/download/v#{version}/pqfile-x86_64-unknown-linux-gnu"
+      sha256 "{{SHA256_X86_64_LINUX}}"
     end
   end
 
