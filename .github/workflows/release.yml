@@ -253,6 +253,51 @@ jobs:
             cp "$bom" "artifacts/sbom-${crate}.cdx.json"
           done
 
+      - name: Generate winget manifests
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          INSTALLER="pqfile-setup-${VERSION}.exe"
+          SHA256=$(grep " ${INSTALLER}" artifacts/checksums.txt | awk '{print $1}' | tr '[:lower:]' '[:upper:]')
+          if [ -z "$SHA256" ]; then
+            echo "::warning::${INSTALLER} not found in checksums.txt — skipping winget manifest generation"
+            exit 0
+          fi
+          echo "Installer SHA256: ${SHA256}"
+          for f in pqfile-desktop/packaging/winget/dangel34.pqfile*.yaml; do
+            sed "s/{{VERSION}}/${VERSION}/g;s/{{SHA256}}/${SHA256}/g" "$f" \
+              > "artifacts/$(basename "$f")"
+          done
+
+      - name: Update Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not set — skipping Homebrew tap update."
+            exit 0
+          fi
+
+          sha() { grep " $1" artifacts/checksums.txt | awk '{print $1}'; }
+          SHA_AARCH64=$(sha "pqfile-aarch64-apple-darwin")
+          SHA_X86_DARWIN=$(sha "pqfile-x86_64-apple-darwin")
+          SHA_X86_LINUX=$(sha "pqfile-x86_64-unknown-linux-gnu")
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/dangel34/homebrew-pqfile.git" tap
+          sed \
+            -e "s/{{VERSION}}/${VERSION}/g" \
+            -e "s/{{SHA256_AARCH64_DARWIN}}/${SHA_AARCH64}/g" \
+            -e "s/{{SHA256_X86_64_DARWIN}}/${SHA_X86_DARWIN}/g" \
+            -e "s/{{SHA256_X86_64_LINUX}}/${SHA_X86_LINUX}/g" \
+            Formula/pqfile.rb > tap/Formula/pqfile.rb
+
+          cd tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/pqfile.rb
+          git commit -m "Update pqfile to ${VERSION}"
+          git push
+
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

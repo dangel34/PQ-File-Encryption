@@ -1,0 +1,28 @@
+PackageIdentifier: dangel34.pqfile
+PackageVersion: "{{VERSION}}"
+PackageLocale: en-US
+Publisher: Derek Angel
+PublisherUrl: https://github.com/dangel34
+PublisherSupportUrl: https://github.com/dangel34/PQ-File-Encryption/issues
+PackageName: pqfile
+PackageUrl: https://github.com/dangel34/PQ-File-Encryption
+License: MIT
+LicenseUrl: https://github.com/dangel34/PQ-File-Encryption/blob/main/LICENSE
+ShortDescription: Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305
+Description: |-
+  pqfile is a post-quantum file encryption tool built on ML-KEM-768 (NIST FIPS 203) for key
+  encapsulation and ChaCha20-Poly1305 for authenticated symmetric encryption. The desktop GUI
+  lets you generate key pairs, encrypt files to a recipient's public key, and decrypt .pqf
+  files with a private key. All operations run locally — no keys, files, or metadata are
+  transmitted over the network.
+Moniker: pqfile
+Tags:
+  - encryption
+  - security
+  - post-quantum
+  - cryptography
+  - privacy
+  - file-encryption
+  - ml-kem
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

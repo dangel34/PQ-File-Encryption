@@ -171,7 +171,7 @@ All errors are reported to stderr with a descriptive message. The process exits 
 cargo test --workspace
 ```
 
-86 tests across all crates. The integration tests in `pqfile/tests/roundtrip.rs` cover the CLI binary end-to-end:
+88 tests across all crates. The integration tests in `pqfile/tests/roundtrip.rs` cover the CLI binary end-to-end:
 
 | Test | What it verifies |
 |------|-----------------|
@@ -228,6 +228,22 @@ cargo test --workspace
 ---
 
 ## Packaging
+
+### macOS — Homebrew
+
+```bash
+brew install dangel34/pqfile/pqfile
+```
+
+The formula is in [Formula/pqfile.rb](Formula/pqfile.rb) and is updated automatically by the release workflow. Shell completions for bash, zsh, and fish are installed via `post_install`.
+
+### Windows — winget
+
+```powershell
+winget install dangel34.pqfile
+```
+
+Installs the desktop GUI and CLI. Manifests live in [pqfile-desktop/packaging/winget/](pqfile-desktop/packaging/winget/) and are submitted automatically to `microsoft/winget-pkgs` when a release is published (requires the `WINGET_TOKEN` secret — see [ROADMAP.md](ROADMAP.md)).
 
 ### Debian / Ubuntu
 
