@@ -1,6 +1,6 @@
 [package]
 name = "pqfile-desktop"
-version = "2.0.4"
+version = "2.0.5"
 edition = "2021"
 license = "MIT"
 
@@ -9,5 +9,5 @@ name = "pqfile-desktop"
 path = "src/main.rs"
 
 [dependencies]
-pqfile-gui = { path = "../pqfile-gui", version = "2.0.4" }
+pqfile-gui = { path = "../pqfile-gui", version = "2.0.5" }
 eframe = "0.34"
