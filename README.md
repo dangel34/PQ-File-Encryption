@@ -171,12 +171,14 @@ All errors are reported to stderr with a descriptive message. The process exits 
 cargo test --workspace
 ```
 
-84 tests across all crates. The integration tests in `pqfile/tests/roundtrip.rs` cover the CLI binary end-to-end:
+86 tests across all crates. The integration tests in `pqfile/tests/roundtrip.rs` cover the CLI binary end-to-end:
 
 | Test | What it verifies |
 |------|-----------------|
-| `roundtrip` | keygen → encrypt → decrypt → byte-for-byte match (also exercises stdin/stdout path via file args) |
+| `roundtrip` | keygen → encrypt → decrypt → byte-for-byte match |
 | `roundtrip_custom_output_paths` | `-o` flag on both encrypt and decrypt |
+| `roundtrip_stdin_stdout` | encrypt reads from stdin with `-`, decrypt writes to stdout with `-o -` |
+| `roundtrip_stdin_to_stdout` | full stdin → encrypt → stdout → stdin → decrypt → stdout pipeline |
 | `keygen_refuses_overwrite_without_force` | second keygen exits non-zero without `--force` |
 | `keygen_force_overwrites_existing_keys` | `--force` succeeds on second keygen |
 | `inspect_shows_header_fields` | `pqfile inspect` prints correct magic, version, KEM variant, size |
