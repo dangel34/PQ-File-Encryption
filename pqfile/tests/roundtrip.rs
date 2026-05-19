@@ -1,4 +1,6 @@
 use std::fs;
+use std::io::Write;
+use std::process::Stdio;
 use tempfile::TempDir;
 
 fn bin() -> &'static str {
@@ -165,6 +167,99 @@ fn inspect_fails_on_invalid_file() {
         .status()
         .unwrap();
     assert!(!status.success(), "inspect should fail on invalid file");
+}
+
+// ── Stdin / stdout pipe support ────────────────────────────────────────────
+
+#[test]
+fn roundtrip_stdin_stdout() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let original = b"stdin-stdout pipe roundtrip payload";
+
+    // Generate keys.
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    let pubkey = dir.join("pubkey.pem");
+    let privkey = dir.join("privkey.pem");
+
+    // Encrypt: pipe plaintext via stdin ('-'), write .pqf to a file via -o.
+    let pqf_path = dir.join("out.pqf");
+    let mut enc = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r", pubkey.to_str().unwrap(),
+            "-",
+            "-o", pqf_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    enc.stdin.take().unwrap().write_all(original).unwrap();
+    assert!(enc.wait().unwrap().success(), "encrypt from stdin failed");
+    assert!(pqf_path.exists(), ".pqf file not written");
+
+    // Decrypt: read .pqf from a file, write plaintext to stdout ('-' via -o).
+    let dec = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k", privkey.to_str().unwrap(),
+            pqf_path.to_str().unwrap(),
+            "-o", "-",
+        ])
+        .stdout(Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(dec.status.success(), "decrypt to stdout failed");
+    assert_eq!(dec.stdout, original, "stdout bytes do not match original");
+}
+
+#[test]
+fn roundtrip_stdin_to_stdout() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let original = b"full stdin-to-stdout pipeline payload";
+
+    // Generate keys.
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    let pubkey = dir.join("pubkey.pem");
+    let privkey = dir.join("privkey.pem");
+
+    // Encrypt: stdin → stdout (no -o flag; omitting -o when input is '-' writes to stdout).
+    let mut enc = std::process::Command::new(bin())
+        .args(["encrypt", "-r", pubkey.to_str().unwrap(), "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    enc.stdin.take().unwrap().write_all(original).unwrap();
+    let enc_out = enc.wait_with_output().unwrap();
+    assert!(enc_out.status.success(), "encrypt stdin-to-stdout failed");
+    let pqf_bytes = enc_out.stdout;
+    assert!(!pqf_bytes.is_empty(), "no encrypted output");
+
+    // Decrypt: stdin (the .pqf bytes) → stdout.
+    let mut dec = std::process::Command::new(bin())
+        .args(["decrypt", "-k", privkey.to_str().unwrap(), "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    dec.stdin.take().unwrap().write_all(&pqf_bytes).unwrap();
+    let dec_out = dec.wait_with_output().unwrap();
+    assert!(dec_out.status.success(), "decrypt stdin-to-stdout failed");
+    assert_eq!(dec_out.stdout, original, "piped bytes do not match original");
 }
 
 // ── Shell completions ──────────────────────────────────────────────────────
