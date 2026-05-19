@@ -12,6 +12,9 @@ pub struct PqfileApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keygen_dir: String,
+    pub(crate) keygen_passphrase: String,
+    pub(crate) keygen_passphrase_confirm: String,
+    pub(crate) keygen_use_passphrase: bool,
     pub(crate) keygen_status: OpStatus,
 
     pub(crate) encrypt_pubkey: FileInput,
@@ -20,6 +23,7 @@ pub struct PqfileApp {
 
     pub(crate) decrypt_privkey: FileInput,
     pub(crate) decrypt_pqf: FileInput,
+    pub(crate) decrypt_passphrase: String,
     pub(crate) decrypt_status: OpStatus,
 
     pub(crate) inspect_pqf: FileInput,
@@ -35,12 +39,16 @@ impl Default for PqfileApp {
             settings: Settings::default(),
             #[cfg(not(target_arch = "wasm32"))]
             keygen_dir: String::new(),
+            keygen_passphrase: String::new(),
+            keygen_passphrase_confirm: String::new(),
+            keygen_use_passphrase: false,
             keygen_status: OpStatus::None,
             encrypt_pubkey: FileInput::default(),
             encrypt_plain: FileInput::default(),
             encrypt_status: OpStatus::None,
             decrypt_privkey: FileInput::default(),
             decrypt_pqf: FileInput::default(),
+            decrypt_passphrase: String::new(),
             decrypt_status: OpStatus::None,
             inspect_pqf: FileInput::default(),
             inspect_result: String::new(),

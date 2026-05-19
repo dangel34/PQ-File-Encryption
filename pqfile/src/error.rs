@@ -34,4 +34,7 @@ pub enum PqfileError {
 
     #[error("private key is passphrase-protected; provide a passphrase to decrypt it")]
     PassphraseRequired,
+
+    #[error("passphrases do not match")]
+    PassphraseMismatch,
 }

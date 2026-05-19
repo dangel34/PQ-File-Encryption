@@ -49,6 +49,20 @@ Replace-InFile "$root\pqfile\Cargo.toml"         $cargoPattern $cargoReplacement
 Replace-InFile "$root\pqfile-gui\Cargo.toml"     $cargoPattern $cargoReplacement
 Replace-InFile "$root\pqfile-desktop\Cargo.toml" $cargoPattern $cargoReplacement
 
+# Inter-crate dependency version constraints — keep them in sync with the package version
+# e.g. pqfile = { path = "../pqfile", version = "2.0.3" }
+Replace-InFile "$root\pqfile-gui\Cargo.toml" `
+    '(pqfile\s*=\s*\{[^}]*version\s*=\s*)"[\d.]+"' `
+    ('${1}"' + $Version + '"')
+Replace-InFile "$root\pqfile-desktop\Cargo.toml" `
+    '(pqfile-gui\s*=\s*\{[^}]*version\s*=\s*)"[\d.]+"' `
+    ('${1}"' + $Version + '"')
+
+# Homebrew formula
+Replace-InFile "$root\Formula\pqfile.rb" `
+    '(?m)^  version "\d+\.\d+\.\d+"' `
+    ('  version "' + $Version + '"')
+
 # pqfile-gui/src/lib.rs — APP_VERSION constant
 Replace-InFile "$root\pqfile-gui\src\lib.rs" `
     'pub\(crate\) const APP_VERSION: &str = "\d+\.\d+\.\d+";' `

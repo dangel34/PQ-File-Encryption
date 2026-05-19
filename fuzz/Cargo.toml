@@ -1,0 +1,30 @@
+[package]
+name = "pqfile-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pqfile = { path = "../pqfile" }
+
+[[bin]]
+name = "fuzz_header_read"
+path = "fuzz_targets/fuzz_header_read.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_decrypt_bytes"
+path = "fuzz_targets/fuzz_decrypt_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_pem_parsing"
+path = "fuzz_targets/fuzz_pem_parsing.rs"
+test = false
+doc = false

@@ -11,6 +11,7 @@ use zeroize::Zeroizing;
 use crate::error::PqfileError;
 use crate::format::{HEADER_LEN, NONCE_LEN, PqfHeader};
 
+#[allow(dead_code)]
 pub fn encrypt(
     pubkey_path: &Path,
     input_path: &Path,

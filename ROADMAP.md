@@ -17,7 +17,7 @@ This document tracks planned improvements, new features, and security work acros
 - **cargo-audit in CI** ✓ _released_
   `cargo audit` runs in `release.yml` before every build, blocking releases with known RustSec advisories in the dependency tree.
 
-- **Signed releases via sigstore/cosign**
+- **Signed releases via sigstore/cosign** ✓ _released_
   Automatically sign release binaries and checksums in CI using cosign keyless signing. Publish a `checksums.txt.sig` alongside each GitHub release.
 
 - **cargo-deny** ✓ _released_
@@ -31,7 +31,7 @@ This document tracks planned improvements, new features, and security work acros
 - **Output path flag (`-o / --output`)** ✓ _released_
   `pqfile encrypt … -o /tmp/out.pqf` and `pqfile decrypt … -o recovered.txt`.
 
-- **Stdin / stdout pipe support**
+- **Stdin / stdout pipe support** ✓ _released_
   Accept `-` as the input file to read from stdin and write to stdout. Enables composability: `cat secret.txt | pqfile encrypt -r pubkey.pem - > out.pqf`.
 
 - **Shell completions** ✓ _released_
@@ -42,7 +42,7 @@ This document tracks planned improvements, new features, and security work acros
 
 ### GUI
 
-- **Drag-and-drop file loading**
+- **Drag-and-drop file loading** ✓ _released_
   Accept files dropped onto the Encrypt, Decrypt, and Inspect panels in both the native and web builds. `egui` exposes `dropped_files` on `Context`; the web build needs a JS drop-event bridge.
 
 - **Key fingerprint in Inspect tab**
@@ -54,13 +54,13 @@ This document tracks planned improvements, new features, and security work acros
 - **GUI keygen: confirm before overwriting existing keys**
   The native GUI calls `keygen_bytes()` directly and writes keys unconditionally; it bypasses the `--force` check enforced by the CLI. The `confirm_overwrite` setting only protects encrypt/decrypt output, not keygen. Clicking "Generate Key Pair" a second time silently replaces an existing key pair. Should either route through `keygen()` with an overwrite prompt or respect the confirm-overwrite setting.
 
-- **Persist settings across sessions**
+- **Persist settings across sessions** ✓ _released_
   Save `Settings` (theme, auto-clear, confirm-overwrite) to disk via `eframe`'s `Storage` API so they survive restarts.
 
 ### Packaging & Distribution
 
-- **Homebrew formula**
-  Publish a `homebrew-tap` repository with a formula for `pqfile` (CLI only). Keep it updated by the release workflow.
+- **Homebrew formula** ✓ _released_
+  Publish a `homebrew-tap` repository with a formula for `pqfile` (CLI only). Keep it updated by the release workflow. Formula lives in `Formula/pqfile.rb`; create a `dangel34/homebrew-pqfile` tap repo and copy it there.
 
 - **Windows winget manifest**
   Submit a manifest to the `microsoft/winget-pkgs` community repository so users can install via `winget install pqfile`.
@@ -68,7 +68,7 @@ This document tracks planned improvements, new features, and security work acros
 - **Automated release workflow** ✓ _released v2.x_
   `.github/workflows/release.yml` triggered by a version tag (`v*`). Builds CLI and desktop GUI binaries for all four platforms, the Windows installer via Inno Setup, the WASM web app, generates `checksums.txt`, and creates a draft GitHub release.
 
-- **SBOM generation**
+- **SBOM generation** ✓ _released_
   Produce a CycloneDX or SPDX software bill of materials in CI using `cargo-cyclonedx` or `cargo-sbom` and attach it to each release.
 
 ---
@@ -128,8 +128,8 @@ This document tracks planned improvements, new features, and security work acros
 
 ### Infrastructure
 
-- **Fuzzing with `cargo-fuzz`**
-  Add fuzz targets for `PqfHeader::read`, `decrypt_bytes` (malformed ciphertext), and PEM parsing. Run on OSS-Fuzz or as a nightly CI job. Guards against panics or logic errors on adversarial input.
+- **Fuzzing with `cargo-fuzz`** ✓ _released_
+  Add fuzz targets for `PqfHeader::read`, `decrypt_bytes` (malformed ciphertext), and PEM parsing. Run on OSS-Fuzz or as a nightly CI job. Guards against panics or logic errors on adversarial input. Targets live in `fuzz/fuzz_targets/`; run with `cargo fuzz run fuzz_header_read` etc.
 
 - **Dependabot / Renovate**
   Enable automated dependency update PRs for both Cargo dependencies and GitHub Actions. Configure auto-merge for patch-level updates that pass CI.

@@ -9,7 +9,7 @@ autobins = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pqfile = { path = "../pqfile", version = "2.0.2" }
+pqfile = { path = "../pqfile", version = "2.0.3" }
 eframe = { version = "0.34", features = ["default_fonts"] }
 rfd = "0.17"
 

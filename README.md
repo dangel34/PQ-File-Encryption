@@ -43,9 +43,16 @@ Because the symmetric key is freshly generated for each file and encapsulated wi
 ```
 PQ-File-Encryption/
 ├── Cargo.toml              Workspace manifest
+├── Formula/
+│   └── pqfile.rb           Homebrew formula (copy to homebrew-pqfile tap)
+├── fuzz/                   cargo-fuzz targets (excluded from main workspace)
+│   └── fuzz_targets/
+│       ├── fuzz_header_read.rs    Fuzzes PqfHeader::read on arbitrary bytes
+│       ├── fuzz_decrypt_bytes.rs  Fuzzes decrypt_bytes on arbitrary ciphertext
+│       └── fuzz_pem_parsing.rs    Fuzzes PEM parsing and fingerprinting
 ├── pqfile/                 CLI tool and crypto library
 │   ├── src/
-│   │   ├── main.rs         CLI entry point (clap subcommands)
+│   │   ├── main.rs         CLI entry point (clap subcommands, stdin/stdout support)
 │   │   ├── lib.rs          Public library re-exports
 │   │   ├── keygen.rs       Key pair generation and PEM serialization
 │   │   ├── encrypt.rs      Hybrid encryption pipeline
@@ -152,8 +159,9 @@ All errors are reported to stderr with a descriptive message. The process exits 
 | `InvalidPem`        | PEM file could not be parsed                                         |
 | `InvalidKeyLength`  | Decoded key bytes are the wrong length                               |
 | `OutputExists`      | Key file already exists and `--force` was not passed                 |
-| `WrongPassphrase`   | Passphrase decryption of private key seed failed                     |
-| `PassphraseRequired`| Encrypted private key loaded but no passphrase supplied              |
+| `WrongPassphrase`      | Passphrase decryption of private key seed failed                  |
+| `PassphraseRequired`   | Encrypted private key loaded but no passphrase supplied           |
+| `PassphraseMismatch`   | New passphrase and confirmation do not match (keygen `--passphrase`) |
 
 ---
 
@@ -167,7 +175,7 @@ cargo test --workspace
 
 | Test | What it verifies |
 |------|-----------------|
-| `roundtrip` | keygen → encrypt → decrypt → byte-for-byte match |
+| `roundtrip` | keygen → encrypt → decrypt → byte-for-byte match (also exercises stdin/stdout path via file args) |
 | `roundtrip_custom_output_paths` | `-o` flag on both encrypt and decrypt |
 | `keygen_refuses_overwrite_without_force` | second keygen exits non-zero without `--force` |
 | `keygen_force_overwrites_existing_keys` | `--force` succeeds on second keygen |

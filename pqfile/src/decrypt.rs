@@ -14,6 +14,7 @@ use crate::format::{HEADER_LEN, KEM_CT_LEN, PqfHeader};
 use crate::keygen::{PRIV_ENC_TAG, PRIV_TAG};
 use crate::passphrase;
 
+#[allow(dead_code)]
 pub fn decrypt(
     privkey_path: &Path,
     input_path: &Path,

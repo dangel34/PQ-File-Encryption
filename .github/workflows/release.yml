@@ -209,6 +209,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write  # required for cosign keyless signing via GitHub OIDC
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -222,6 +223,37 @@ jobs:
         run: |
           cd artifacts
           sha256sum ./* | sort > checksums.txt
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@3454372f43399e7b3a2d49aae5b03abe8f887d96 # v3.8.2
+
+      - name: Sign checksums with cosign (keyless)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature artifacts/checksums.txt.sig \
+            --output-certificate artifacts/checksums.txt.pem \
+            artifacts/checksums.txt
+        # Verification: cosign verify-blob \
+        #   --certificate artifacts/checksums.txt.pem \
+        #   --signature artifacts/checksums.txt.sig \
+        #   --certificate-identity-regexp 'https://github.com/.*' \
+        #   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        #   artifacts/checksums.txt
+
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --format json --workspace --top-level
+          # cargo-cyclonedx writes bom.json next to each Cargo.toml; collect them all
+          mkdir -p artifacts
+          for bom in pqfile/bom.json pqfile-gui/bom.json pqfile-desktop/bom.json; do
+            crate=$(dirname "$bom")
+            cp "$bom" "artifacts/sbom-${crate}.cdx.json"
+          done
 
       - name: Publish draft release
         env:

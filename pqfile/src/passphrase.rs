@@ -66,9 +66,11 @@ pub fn decrypt_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; SEED
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|_| PqfileError::WrongPassphrase)?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_| PqfileError::WrongPassphrase)?
+    );
 
     if plaintext.len() != SEED_LEN {
         return Err(PqfileError::WrongPassphrase);
