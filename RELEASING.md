@@ -86,8 +86,7 @@ No manual action needed. Monitor progress in the **Actions** tab.
 - **Verify cosign signature** (optional sanity check):
   ```
   cosign verify-blob \
-    --certificate checksums.txt.pem \
-    --signature checksums.txt.sig \
+    --bundle checksums.txt.bundle \
     --certificate-identity-regexp 'https://github.com/dangel34/.*' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     checksums.txt
