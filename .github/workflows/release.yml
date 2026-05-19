@@ -245,7 +245,7 @@ jobs:
       - name: Generate SBOM (CycloneDX)
         run: |
           cargo install cargo-cyclonedx --locked
-          cargo cyclonedx --format json --override-filename bom --workspace --top-level
+          cargo cyclonedx --format json --override-filename bom --all --top-level
           # cargo-cyclonedx writes bom.json next to each Cargo.toml; collect them all
           mkdir -p artifacts
           for bom in pqfile/bom.json pqfile-gui/bom.json pqfile-desktop/bom.json; do
