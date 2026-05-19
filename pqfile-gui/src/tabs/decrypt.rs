@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::{decrypt, keygen};
 use crate::app::PqfileApp;
-use crate::colors::*;
+use crate::colors::{c_accent, c_card, c_chrome, c_overlay, c_subtext, c_surface1};
 use crate::types::OpStatus;
 use crate::widgets::{card, file_row, save_result, section_label, show_status, tab_heading};
 

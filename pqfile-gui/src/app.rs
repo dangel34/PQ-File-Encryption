@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
-use crate::colors::*;
+use crate::colors::{c_accent, c_bg, c_card, c_chrome, c_overlay, c_subtext, c_surface0, c_surface1, c_text};
 use crate::theme::apply_theme;
 use crate::types::{Tab, OpStatus, PickedFile, FileInput, BatchPending, MultiFileEntry, Settings};
 use crate::widgets::{bullet, card, kv_row, section_label, tab_btn};

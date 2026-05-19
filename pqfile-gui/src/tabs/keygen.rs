@@ -1,7 +1,7 @@
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::keygen;
 use crate::app::PqfileApp;
-use crate::colors::*;
+use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface0, c_surface1, c_text};
 use crate::types::OpStatus;
 use crate::widgets::{card, section_label, show_status, tab_heading};
 

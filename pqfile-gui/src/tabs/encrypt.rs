@@ -3,7 +3,7 @@ use std::sync::Arc;
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::encrypt;
 use crate::app::PqfileApp;
-use crate::colors::*;
+use crate::colors::{c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
 use crate::types::OpStatus;
 use crate::widgets::{card, file_row, pick_files, save_result, section_label, show_status, tab_heading};
 
