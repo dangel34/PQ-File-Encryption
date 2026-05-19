@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
-use crate::colors::*;
+use crate::colors::{c_accent, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
 use crate::types::{BatchPending, FileInput, OpStatus, Pending, PickedFile};
 
 #[cfg(target_arch = "wasm32")]

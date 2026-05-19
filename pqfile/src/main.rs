@@ -69,67 +69,66 @@ enum Command {
 fn run() -> Result<(), PqfileError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Keygen { out, force, passphrase } => {
-            let pp = if passphrase {
-                Some(prompt_new_passphrase()?)
-            } else {
-                None
-            };
-            let fp = keygen::keygen(&out, force, pp.as_deref().map(|z| z.as_str()))?;
-            println!("Keys written to {}", out.display());
-            println!("Public key fingerprint: {fp}");
-            Ok(())
-        }
-        Command::Encrypt { recipient, input, output } => {
-            let pubkey_pem = std::fs::read_to_string(&recipient)?;
-            let plaintext = read_input(&input)?;
-            let ciphertext = encrypt::encrypt_bytes(&pubkey_pem, &plaintext)?;
-            let out = output.as_deref().unwrap_or_else(|| {
-                if input == "-" { "-" } else { "" } // resolved below
-            });
-            if out == "-" || (out.is_empty() && input == "-") {
-                io::stdout().write_all(&ciphertext)?;
-            } else {
-                let path: PathBuf = if out.is_empty() {
-                    let mut s = std::ffi::OsString::from(&input);
-                    s.push(".pqf");
-                    PathBuf::from(s)
-                } else {
-                    PathBuf::from(out)
-                };
-                std::fs::write(&path, &ciphertext)?;
-            }
-            Ok(())
-        }
-        Command::Decrypt { key, input, output } => {
-            let privkey_pem = std::fs::read_to_string(&key)?;
-            let pp = if keygen::is_encrypted_key(&privkey_pem) {
-                Some(prompt_passphrase("Enter passphrase for private key: ")?)
-            } else {
-                None
-            };
-            let pqf_data = read_input(&input)?;
-            let plaintext = decrypt::decrypt_bytes(&privkey_pem, &pqf_data, pp.as_deref().map(|z| z.as_str()))?;
-            let out = output.as_deref().unwrap_or("");
-            if out == "-" || (out.is_empty() && input == "-") {
-                io::stdout().write_all(&plaintext)?;
-            } else {
-                let path: PathBuf = if out.is_empty() {
-                    PathBuf::from(&input).with_extension("")
-                } else {
-                    PathBuf::from(out)
-                };
-                std::fs::write(&path, &plaintext)?;
-            }
-            Ok(())
-        }
+        Command::Keygen { out, force, passphrase } => run_keygen(out, force, passphrase),
+        Command::Encrypt { recipient, input, output } => run_encrypt(recipient, input, output),
+        Command::Decrypt { key, input, output } => run_decrypt(key, input, output),
         Command::Inspect { input } => inspect(input.as_path()),
         Command::Completions { shell } => {
-            let mut cmd = Cli::command();
-            clap_complete::generate(shell, &mut cmd, "pqfile", &mut std::io::stdout());
+            clap_complete::generate(shell, &mut Cli::command(), "pqfile", &mut std::io::stdout());
             Ok(())
         }
     }
+}
+
+fn run_keygen(out: PathBuf, force: bool, passphrase: bool) -> Result<(), PqfileError> {
+    let pp = if passphrase { Some(prompt_new_passphrase()?) } else { None };
+    let fp = keygen::keygen(&out, force, pp.as_deref().map(|z| z.as_str()))?;
+    println!("Keys written to {}", out.display());
+    println!("Public key fingerprint: {fp}");
+    Ok(())
+}
+
+fn run_encrypt(recipient: PathBuf, input: String, output: Option<String>) -> Result<(), PqfileError> {
+    let pubkey_pem = std::fs::read_to_string(&recipient)?;
+    let plaintext = read_input(&input)?;
+    let ciphertext = encrypt::encrypt_bytes(&pubkey_pem, &plaintext)?;
+    let out = output.as_deref().unwrap_or_else(|| if input == "-" { "-" } else { "" });
+    if out == "-" || (out.is_empty() && input == "-") {
+        io::stdout().write_all(&ciphertext)?;
+    } else {
+        let path: PathBuf = if out.is_empty() {
+            let mut s = std::ffi::OsString::from(&input);
+            s.push(".pqf");
+            PathBuf::from(s)
+        } else {
+            PathBuf::from(out)
+        };
+        std::fs::write(&path, &ciphertext)?;
+    }
+    Ok(())
+}
+
+fn run_decrypt(key: PathBuf, input: String, output: Option<String>) -> Result<(), PqfileError> {
+    let privkey_pem = std::fs::read_to_string(&key)?;
+    let pp = if keygen::is_encrypted_key(&privkey_pem) {
+        Some(prompt_passphrase("Enter passphrase for private key: ")?)
+    } else {
+        None
+    };
+    let pqf_data = read_input(&input)?;
+    let plaintext = decrypt::decrypt_bytes(&privkey_pem, &pqf_data, pp.as_deref().map(|z| z.as_str()))?;
+    let out = output.as_deref().unwrap_or("");
+    if out == "-" || (out.is_empty() && input == "-") {
+        io::stdout().write_all(&plaintext)?;
+    } else {
+        let path: PathBuf = if out.is_empty() {
+            PathBuf::from(&input).with_extension("")
+        } else {
+            PathBuf::from(out)
+        };
+        std::fs::write(&path, &plaintext)?;
+    }
+    Ok(())
 }
 
 /// Reads all bytes from `path`. If `path` is `"-"`, reads from stdin.
