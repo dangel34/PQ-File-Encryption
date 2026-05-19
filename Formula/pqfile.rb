@@ -1,7 +1,7 @@
 class Pqfile < Formula
   desc "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
   homepage "https://github.com/dangel34/pqfile"
-  version "2.0.3"
+  version "2.0.4"
 
   on_macos do
     on_arm do
