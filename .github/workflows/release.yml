@@ -295,8 +295,12 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/pqfile.rb
-          git commit -m "Update pqfile to ${VERSION}"
-          git push
+          if git diff --staged --quiet; then
+            echo "Formula already up to date — nothing to commit."
+          else
+            git commit -m "Update pqfile to ${VERSION}"
+            git push
+          fi
 
       - name: Publish draft release
         env:
