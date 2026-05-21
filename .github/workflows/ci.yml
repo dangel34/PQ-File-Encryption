@@ -67,7 +67,7 @@ jobs:
             git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
               commit --allow-empty -m "chore: initialize gh-pages for benchmark history"
             git push origin gh-pages
-            git checkout -
+            git checkout "$GITHUB_SHA"
           fi
 
       - name: Run benchmarks
