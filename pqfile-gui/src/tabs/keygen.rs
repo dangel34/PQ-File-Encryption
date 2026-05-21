@@ -62,6 +62,12 @@ impl PqfileApp {
             ui.horizontal(|ui| {
                 ui.radio_value(
                     &mut self.keygen_algorithm,
+                    KeygenAlgorithm::MlKem512,
+                    RichText::new("ML-KEM-512").size(13.0).color(c_subtext(dark)),
+                );
+                ui.add_space(8.0);
+                ui.radio_value(
+                    &mut self.keygen_algorithm,
                     KeygenAlgorithm::MlKem768,
                     RichText::new("ML-KEM-768").size(13.0).color(c_subtext(dark)),
                 );
@@ -79,6 +85,7 @@ impl PqfileApp {
                 );
             });
             let desc = match self.keygen_algorithm {
+                KeygenAlgorithm::MlKem512 => "Post-quantum only, lower security level. 800-byte public key, 64-byte seed. NIST FIPS 203.",
                 KeygenAlgorithm::MlKem768 => "Post-quantum only. 1184-byte public key, 64-byte seed. NIST FIPS 203.",
                 KeygenAlgorithm::MlKem1024 => "Post-quantum only, higher security level. 1568-byte public key. NIST FIPS 203.",
                 KeygenAlgorithm::HybridX25519MlKem768 => "Classical + post-quantum. X25519 shared secret combined with ML-KEM-768 via HKDF-SHA256.",

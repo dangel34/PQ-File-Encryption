@@ -66,6 +66,7 @@ pub(crate) struct MultiFileEntry {
 /// Which KEM algorithm to use when generating a key pair.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub(crate) enum KeygenAlgorithm {
+    MlKem512,
     #[default]
     MlKem768,
     MlKem1024,
@@ -75,6 +76,7 @@ pub(crate) enum KeygenAlgorithm {
 impl KeygenAlgorithm {
     pub(crate) fn level(self) -> u16 {
         match self {
+            Self::MlKem512 => 512,
             Self::MlKem768 | Self::HybridX25519MlKem768 => 768,
             Self::MlKem1024 => 1024,
         }
