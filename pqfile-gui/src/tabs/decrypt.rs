@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::{decrypt, keygen};
@@ -13,7 +14,6 @@ impl PqfileApp {
         let priv_pem = self.decrypt_privkey.as_str().map(str::to_owned);
         let pqf = self.decrypt_pqf.data.clone();
         let pqf_name = self.decrypt_pqf.name.clone();
-        let pqf_path = self.decrypt_pqf.path.clone();
 
         let (Some(priv_pem), Some(pqf)) = (priv_pem, pqf) else {
             self.decrypt_status = OpStatus::Err("Load both files first.".to_owned());
@@ -28,6 +28,7 @@ impl PqfileApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let pqf_path = self.decrypt_pqf.path.clone();
             let confirm = self.settings.confirm_overwrite;
             let job: Arc<Mutex<Option<OpStatus>>> = Arc::new(Mutex::new(None));
             self.decrypt_job = Some(Arc::clone(&job));

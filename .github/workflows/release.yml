@@ -62,10 +62,15 @@ jobs:
             libxkbcommon-dev \
             libssl-dev
 
-      - name: Security audit
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit
+      - name: Cache Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-test-
 
       - name: Run tests
         run: cargo test --workspace
@@ -262,3 +267,34 @@ jobs:
             --generate-notes \
             --draft \
             ./artifacts/*
+
+  deploy:
+    name: Deploy to RaspberryPi
+    needs: [release]
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: artifacts-wasm
+          path: wasm-dist/
+
+      - name: Extract WASM
+        run: |
+          mkdir -p pqfile-gui/dist
+          tar -xzf wasm-dist/pqfile-web.tar.gz -C pqfile-gui/dist
+
+      - name: Deploy to /var/www/pqfile
+        run: rsync -a --delete pqfile-gui/dist/ /var/www/pqfile/
+
+      - name: Purge Cloudflare cache
+        env:
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          curl -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}' \
+            --fail --silent --show-error

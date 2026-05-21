@@ -14,8 +14,8 @@ This document tracks planned improvements, new features, and security work acros
 - **Key fingerprint display** ✓ _released_
   SHA3-256 fingerprint (first 8 bytes, colon-separated hex) printed by `pqfile keygen` and shown in the GUI Keygen success message.
 
-- **cargo-audit in CI** ✓ _released_
-  `cargo audit` runs in `release.yml` before every build, blocking releases with known RustSec advisories in the dependency tree.
+- **Advisory scanning via cargo-deny** ✓ _released_
+  `cargo-deny` runs in `ci.yml` on every push and PR to main, checking for known RustSec advisories (equivalent to `cargo audit`) alongside license, ban, and source policy. This replaces a standalone `cargo audit` step that was previously in `release.yml`.
 
 - **Signed releases via sigstore/cosign** ✓ _released_
   Automatically sign release binaries and checksums in CI using cosign keyless signing. Publish a `checksums.txt.sig` alongside each GitHub release.

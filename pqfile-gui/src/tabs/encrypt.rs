@@ -1,6 +1,7 @@
 use std::io::Cursor;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::encrypt;
 use crate::app::PqfileApp;
@@ -17,6 +18,7 @@ impl PqfileApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            use std::sync::Mutex;
             use crate::types::EncryptJob;
 
             let confirm = self.settings.confirm_overwrite;

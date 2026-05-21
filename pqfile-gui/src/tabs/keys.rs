@@ -1,8 +1,15 @@
-use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
+use eframe::egui::{self, RichText};
+#[cfg(not(target_arch = "wasm32"))]
+use eframe::egui::{Color32, Stroke, Vec2};
 use crate::app::PqfileApp;
-use crate::colors::{c_accent, c_card, c_chrome, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
+use crate::colors::{c_card, c_overlay, c_subtext, c_surface1};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::colors::{c_accent, c_chrome, c_red, c_surface0, c_text};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::types::{Tab, RecipientEntry, pem_variant_name};
-use crate::widgets::{card, section_label, tab_heading};
+use crate::widgets::{card, tab_heading};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::widgets::section_label;
 
 impl PqfileApp {
     pub(crate) fn show_keys(&mut self, ui: &mut egui::Ui, dark: bool) {

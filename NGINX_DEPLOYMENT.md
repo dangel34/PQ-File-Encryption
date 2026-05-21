@@ -476,10 +476,12 @@ sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 ## 11. Redeploying after a code update
 
 If the self-hosted GitHub Actions runner is configured for this repository, deployment is
-**automatic**: pushing to `main` triggers `.github/workflows/deploy.yml`, which builds the
-WASM app on the runner, rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`,
-and then purges the Cloudflare cache (`purge_everything`) so visitors immediately receive
-the new build rather than a stale cached copy.
+**automatic**: running `bump-version.ps1` pushes a version tag, which triggers
+`.github/workflows/release.yml`. After the GitHub release is created, a deploy job runs on
+the self-hosted runner. It downloads the WASM artifact built earlier in the same workflow,
+rsyncs it to `/var/www/pqfile/` with `--delete`, and purges the Cloudflare cache
+(`purge_everything`) so visitors immediately receive the new build rather than a stale
+cached copy.
 
 For manual redeployment (e.g. if the runner is offline or you are deploying from a different
 machine):

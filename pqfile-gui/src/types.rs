@@ -58,6 +58,7 @@ pub(crate) type DecryptJobHandle = Arc<Mutex<Option<OpStatus>>>;
 pub(crate) struct MultiFileEntry {
     pub(crate) name: String,
     pub(crate) data: Vec<u8>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) path: Option<PathBuf>,
     pub(crate) status: OpStatus,
 }
