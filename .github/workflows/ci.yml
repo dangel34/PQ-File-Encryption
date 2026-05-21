@@ -25,6 +25,27 @@ jobs:
           # sources:    only allow crates.io
           command-arguments: "advisories licenses bans sources"
 
+  # ── Supply-chain vetting ───────────────────────────────────────────────────
+  cargo-vet:
+    name: cargo-vet
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-vet
+        uses: taiki-e/install-action@4c7e9f3bb4ca35f54341be8fc8d3608f71e4d24e # cargo-vet
+        with:
+          tool: cargo-vet
+
+      - name: Run cargo vet
+        run: cargo vet --locked
+
   # ── Secret scanning ────────────────────────────────────────────────────────
   gitleaks:
     name: gitleaks
