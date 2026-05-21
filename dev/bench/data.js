@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779376782962,
+  "lastUpdate": 1779382676556,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -407,6 +407,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 52412,
             "range": "± 247",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "f90792d8787180a4fe693cae13a98e2a30ef2a42",
+          "message": "feat: add comprehensive documentation for deployment and usage\n\n- Introduced detailed guides for deploying pqfile on Ubuntu with nginx, including security hardening and TLS configuration.\n- Added a quick start guide for installation and common workflows, covering key generation, encryption, and decryption processes.\n- Created a security policy document outlining supported versions and vulnerability reporting procedures.\n- Established a roadmap for future improvements and features, ensuring clarity on planned developments.\n- Included a changelog to document notable changes and version history for better tracking of updates.",
+          "timestamp": "2026-05-21T12:51:47-04:00",
+          "tree_id": "849ca685b4d4717bb5e3e011cf27e5e22b870a9d",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/f90792d8787180a4fe693cae13a98e2a30ef2a42"
+        },
+        "date": 1779382675910,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66390,
+            "range": "± 4279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1077873,
+            "range": "± 8542",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 117122664,
+            "range": "± 2412562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 110045,
+            "range": "± 1188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1095170,
+            "range": "± 7201",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 105992145,
+            "range": "± 1621150",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68702,
+            "range": "± 678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1106245,
+            "range": "± 2415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 113240262,
+            "range": "± 1182833",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 111090,
+            "range": "± 1176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1144861,
+            "range": "± 3358",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 112793525,
+            "range": "± 980782",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 56841,
+            "range": "± 307",
             "unit": "ns/iter"
           }
         ]
