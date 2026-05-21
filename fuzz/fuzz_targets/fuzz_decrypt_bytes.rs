@@ -8,7 +8,7 @@ static KEYS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
 fuzz_target!(|data: &[u8]| {
     let (_, priv_pem) = KEYS.get_or_init(|| {
-        pqfile::keygen::keygen_bytes(None).expect("keygen failed in fuzz setup")
+        pqfile::keygen::keygen_bytes(768, None).expect("keygen failed in fuzz setup")
     });
     // Any error is expected (DecryptionFailure, InvalidMagic, etc.).
     // A panic would be caught by the fuzzer as a crash.

@@ -108,14 +108,14 @@ impl PqfileApp {
             if self.keygen_use_passphrase {
                 ui.add_space(6.0);
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.keygen_passphrase)
+                    egui::TextEdit::singleline(&mut *self.keygen_passphrase)
                         .hint_text("Enter passphrase…")
                         .password(true)
                         .desired_width(f32::INFINITY),
                 );
                 ui.add_space(4.0);
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.keygen_passphrase_confirm)
+                    egui::TextEdit::singleline(&mut *self.keygen_passphrase_confirm)
                         .hint_text("Confirm passphrase…")
                         .password(true)
                         .desired_width(f32::INFINITY),
@@ -153,7 +153,7 @@ impl PqfileApp {
                 self.keygen_status = OpStatus::Err("Passphrases do not match.".to_owned());
                 return;
             }
-            Some(&self.keygen_passphrase)
+            Some(self.keygen_passphrase.as_str())
         } else {
             None
         };

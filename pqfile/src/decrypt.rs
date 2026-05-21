@@ -68,6 +68,7 @@ pub fn decrypt(
 ///
 /// Returns `UnsupportedVersion` if passed a v3 streaming file so callers get a
 /// clear diagnostic rather than a confusing authentication failure.
+#[must_use = "decryption result must be used"]
 pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8], passphrase: Option<&str>) -> Result<Vec<u8>, PqfileError> {
     let dk = derive_dk(privkey_pem, passphrase)?;
 
@@ -99,6 +100,7 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8], passphrase: Option<&str
 
 /// Decrypts a `.pqf` stream, supporting v2 (whole-file), v3/v5 (chunked), and v4
 /// (multi-recipient) formats, and all key variants (ML-KEM-512/768/1024, hybrid).
+#[must_use = "decryption result must be used"]
 pub fn decrypt_stream(
     privkey_pem: &str,
     reader: &mut dyn Read,
