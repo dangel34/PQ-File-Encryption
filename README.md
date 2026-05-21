@@ -1,13 +1,13 @@
-# pqfile
+# pqfile - Post-Quantum File Encryption
 
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=dangel34_PQ-File-Encryption&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
 [![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=dangel34_PQ-File-Encryption&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
 
-A quantum-resistant file encryption tool with a CLI and a cross-platform GUI. It combines post-quantum key encapsulation (ML-KEM, NIST FIPS 203) with ChaCha20-Poly1305 authenticated encryption. Three key types are supported — ML-KEM-768, ML-KEM-1024, and a hybrid X25519+ML-KEM-768 mode — and a file can be encrypted to multiple recipients in a single pass.
+A quantum-resistant file encryption tool with a CLI and a cross-platform GUI. It combines post-quantum key encapsulation (ML-KEM, NIST FIPS 203) with ChaCha20-Poly1305 authenticated encryption. Three key types are supported: ML-KEM-768, ML-KEM-1024, and a hybrid X25519+ML-KEM-768 mode. A file can be encrypted to multiple recipients in a single pass.
 
 Digital signatures use ML-DSA-65 (NIST FIPS 204).
 
-**[QUICKSTART.md](QUICKSTART.md)** — build, install, common CLI commands, GUI overview, deploying.
+**[QUICKSTART.md](QUICKSTART.md)**: build, install, common CLI commands, GUI overview, deploying.
 
 ---
 
@@ -20,7 +20,7 @@ pqfile uses a hybrid approach:
 1. **ML-KEM** encapsulates a fresh random session key. Only the holder of the matching private decapsulation key can recover it.
 2. **ChaCha20-Poly1305** encrypts the file contents under that session key using the STREAM construction (64 KiB chunks). Each chunk is independently authenticated and position-bound so truncation and reordering attacks are detected.
 
-The optional **hybrid mode** (`--hybrid`) adds X25519 Diffie-Hellman to the key exchange so the encryption is secure under either classical _or_ quantum assumptions — whichever holds in the future.
+The optional **hybrid mode** (`--hybrid`) adds X25519 Diffie-Hellman to the key exchange so the encryption is secure under either classical _or_ quantum assumptions, whichever holds in the future.
 
 ---
 
@@ -115,7 +115,7 @@ pqfile encrypt -r pubkey.pem secret.txt
 # Custom output path
 pqfile encrypt -r pubkey.pem secret.txt -o encrypted.pqf
 
-# Multiple recipients — any one of them can decrypt
+# Multiple recipients - any one of them can decrypt
 pqfile encrypt -r alice/pubkey.pem -r bob/pubkey.pem secret.txt
 
 # Recursive directory encryption
@@ -221,12 +221,12 @@ Errors go to stderr as `{"status":"error","message":"..."}`. Exit code is always
 
 The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egui code and support:
 
-- **Keygen tab** — generates ML-KEM-768 key pairs, with optional passphrase protection
-- **Encrypt tab** — single public key, multi-file batch encrypt with per-file status and progress bar
-- **Decrypt tab** — loads any v2/v3/v4 `.pqf` file; shows passphrase field only when needed
-- **Inspect tab** — displays header metadata for v2/v3 `.pqf` files without decrypting
-- **Keys tab** — persistent key-pair registry with fingerprints and quick-load buttons
-- **Settings tab** — theme, auto-clear, confirm-overwrite preferences
+- **Keygen tab**: generates key pairs (ML-KEM-768, ML-KEM-1024, or Hybrid), with optional passphrase protection
+- **Encrypt tab**: multi-recipient list, multi-file batch encrypt with per-file status and progress bar
+- **Decrypt tab**: loads any v2/v3/v4 `.pqf` file; shows passphrase field only when needed
+- **Inspect tab**: displays header metadata for v2/v3/v4 `.pqf` files without decrypting
+- **Keys tab**: persistent key-pair registry with fingerprints and quick-load buttons
+- **Settings tab**: theme, auto-clear, confirm-overwrite preferences
 
 > The GUI keygen always produces ML-KEM-768 keys. Use the CLI for `--level 1024`, `--hybrid`, or multi-recipient encryption.
 
@@ -236,7 +236,7 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 
 There are four format versions. The version byte at offset 4 selects the layout.
 
-### v2 — single-recipient, whole-file AEAD
+### v2: single-recipient, whole-file AEAD
 
 ```
 Offset   Length    Field
@@ -250,11 +250,11 @@ Offset   Length    Field
 ────     N+16      Encrypted payload; header used as AEAD additional data
 ```
 
-### v3 — single-recipient, chunked STREAM
+### v3: single-recipient, chunked STREAM
 
 Same header as v2 with `version = 0x03`. The payload is split into 64 KiB chunks. Each chunk's nonce is `base_nonce[8] || counter[4]` and its AAD is `"pqfile" || counter[4] || is_last[1]`. The last-chunk flag prevents truncation; the counter prevents reordering.
 
-### v4 — multi-recipient, chunked STREAM
+### v4: multi-recipient, chunked STREAM
 
 ```
 Offset   Length    Field
@@ -446,7 +446,7 @@ rpmbuild -bb pqfile/packaging/pqfile.spec
 - **The entire file is authenticated.** For v2, the 1115-byte header is AEAD additional data so any header or payload modification fails decryption. For v3/v4, each 64 KiB chunk carries its own AEAD tag plus a position-binding counter so truncation, reordering, and payload swapping are all detected.
 - **Secret material is zeroized on drop.** The decapsulation key seed, shared secrets, session keys, and passphrase-derived keys are wrapped in `Zeroizing<T>` from the `zeroize` crate. `x25519-dalek` and `ml-kem` are compiled with their `zeroize` features enabled.
 - **Multi-recipient security.** In v4 format, the file payload is encrypted with a single random 32-byte session key. Each recipient's copy of that key is wrapped under their KEM shared secret using AES-256-GCM (zero nonce; safe because the KEM shared secret is fresh and unique per encapsulation). A recipient with a non-matching key cannot distinguish a file addressed to them from one addressed to others.
-- **Hybrid mode security.** The combined session key is `HKDF-SHA256(X25519_ss || ML-KEM_ss, info="pqfile-hybrid-v1")`. Security holds if either X25519 or ML-KEM is unbroken — not both.
+- **Hybrid mode security.** The combined session key is `HKDF-SHA256(X25519_ss || ML-KEM_ss, info="pqfile-hybrid-v1")`. Security holds if either X25519 or ML-KEM is unbroken, not both.
 - **Signing keys are not passphrase-protected.** Protect `sign_privkey.pem` with filesystem permissions or disk encryption. Compromise of the signing key allows forged signatures but does not affect encryption key confidentiality.
 - **The web GUI operates entirely in WebAssembly inside the browser.** No file data or key material is transmitted over the network.
-- **Fingerprints are informational.** SHA3-256(pubkey)[0:8] gives 64 bits. Suitable for display and manual comparison — not a cryptographic commitment. Always verify keys through a trusted channel.
+- **Fingerprints are informational.** SHA3-256(pubkey)[0:8] gives 64 bits. Suitable for display and manual comparison; not a cryptographic commitment. Always verify keys through a trusted channel.
