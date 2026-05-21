@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-use pqfile::encrypt;
+use pqfile::{encrypt, format};
 use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_overlay, c_red, c_green, c_subtext, c_surface0, c_surface1, c_text};
 use crate::types::OpStatus;
@@ -51,7 +51,7 @@ impl PqfileApp {
                     let status = if pub_pems.len() == 1 {
                         let mut reader = Cursor::new(&data);
                         let mut out = Vec::new();
-                        match encrypt::encrypt_stream(&pub_pems[0], original_size, &mut reader, &mut out) {
+                        match encrypt::encrypt_stream(&pub_pems[0], original_size, format::CHUNK_SIZE, &mut reader, &mut out) {
                             Ok(()) => save_result(&out_name, &out, out_path, confirm),
                             Err(e) => OpStatus::Err(e.to_string()),
                         }
@@ -86,7 +86,7 @@ impl PqfileApp {
                 entry.status = if pub_pems.len() == 1 {
                     let mut reader = Cursor::new(&entry.data);
                     let mut out = Vec::new();
-                    match encrypt::encrypt_stream(&pub_pems[0], original_size, &mut reader, &mut out) {
+                    match encrypt::encrypt_stream(&pub_pems[0], original_size, format::CHUNK_SIZE, &mut reader, &mut out) {
                         Ok(()) => save_result(&out_name, &out, None, false),
                         Err(e) => OpStatus::Err(e.to_string()),
                     }
