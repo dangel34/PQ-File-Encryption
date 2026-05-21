@@ -60,7 +60,7 @@ jobs:
           toolchain: stable
 
       - name: Run benchmarks
-        run: cargo bench -p pqfile -- --output-format bencher --measurement-time 10 --warm-up-time 3 2>&1 | tee bench_output.txt
+        run: cargo bench -p pqfile --bench crypto -- --output-format bencher --measurement-time 10 --warm-up-time 3 2>&1 | tee bench_output.txt
 
       - name: Store / compare benchmark results
         uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
