@@ -48,35 +48,26 @@ Pushing to `main` and the tag triggers two workflows in parallel:
 
 ### Release workflow (`.github/workflows/release.yml`)
 
-Triggered by the `vX.Y.Z` tag. Runs:
+Triggered by the `vX.Y.Z` tag. Runs the following jobs in order:
 
 1. Version consistency check across all `Cargo.toml`, `lib.rs`, `.iss`, `.spec`, and `sonar-project.properties`.
-2. Full test suite + `cargo audit`.
+2. Full test suite (with Cargo cache).
 3. Multi-platform builds: Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64 (CLI + desktop GUI).
 4. Windows installer via Inno Setup.
 5. WASM web app build, archived as `pqfile-web.tar.gz`.
 6. SHA-256 checksums for all artifacts + CycloneDX SBOMs (`sbom-pqfile.cdx.json`, `sbom-pqfile-gui.cdx.json`, `sbom-pqfile-desktop.cdx.json`).
-7. Cosign keyless signing of `checksums.txt` → `checksums.txt.sig` + `checksums.txt.pem` (verifiable without a key via sigstore transparency log).
+7. Cosign keyless signing of `checksums.txt` into `checksums.txt.bundle` (verifiable without a key via the sigstore transparency log).
 8. Creates a **draft** GitHub release with all artifacts attached.
+9. Deploy job (runs on the self-hosted Raspberry Pi runner after the release is created): downloads the WASM artifact, rsyncs it to `/var/www/pqfile/`, and purges the Cloudflare cache.
 
-Monitor progress in the **Actions** tab. Once complete, open the draft release, review the auto-generated notes, and click **Publish release**.
-
-### Deploy workflow (`.github/workflows/deploy.yml`)
-
-Triggered by the version tag. Runs on the self-hosted Raspberry Pi runner:
-
-1. Builds the WASM app with trunk.
-2. Rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`.
-3. Purges the Cloudflare cache (`purge_everything`) so visitors immediately see the new build.
-
-No manual action needed. Monitor progress in the **Actions** tab.
+Monitor progress in the **Actions** tab. Once complete, open the draft release, review the auto-generated notes, and click **Publish release**. The deploy job runs automatically and requires no manual action.
 
 ---
 
 ## After the release
 
 - Confirm the SonarQube badge still shows passing.
-- Verify the GitHub Release page shows the correct assets and tag (including `checksums.txt.sig` and `sbom-*.cdx.json`).
+- Verify the GitHub Release page shows the correct assets and tag (including `checksums.txt.bundle` and `sbom-*.cdx.json`).
 - Smoke-test the downloaded binary: generate a key pair, encrypt a file, decrypt it.
 - **Verify cosign signature** (optional sanity check):
   ```

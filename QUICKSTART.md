@@ -194,7 +194,7 @@ After `trunk build --release` inside `pqfile-gui/`, the `dist/` folder is a self
 
 ### Self-hosted (automated via CI)
 
-Pushing a version tag (via `bump-version.ps1`) triggers `.github/workflows/deploy.yml`, which builds on the self-hosted runner and rsyncs `pqfile-gui/dist/` to `/var/www/pqfile/` with `--delete`. See [NGINX_DEPLOYMENT.md](NGINX_DEPLOYMENT.md) for the nginx configuration.
+Running `bump-version.ps1` pushes a version tag, which triggers `.github/workflows/release.yml`. After the GitHub release is created, a deploy job runs on the self-hosted Raspberry Pi runner: it downloads the already-built WASM artifact and rsyncs it to `/var/www/pqfile/` with `--delete`. See [NGINX_DEPLOYMENT.md](NGINX_DEPLOYMENT.md) for the nginx configuration.
 
 ### Cloudflare Pages / Netlify / Vercel
 
