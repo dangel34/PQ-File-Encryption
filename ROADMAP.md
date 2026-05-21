@@ -131,8 +131,8 @@ This document tracks planned improvements, new features, and security work acros
 - **Benchmark suite** ✓ _released_
   `criterion` benchmarks in `pqfile/benches/crypto.rs` cover `encrypt_bytes`, `decrypt_bytes`, `encrypt_stream`, `decrypt_stream`, and `keygen` at 1 KB, 1 MB, and 100 MB. Run with `cargo bench`. HTML reports written to `target/criterion/`.
 
-- **cargo-vet**
-  Adopt `cargo vet` for third-party crate supply-chain vetting. Each dependency gets an explicit audit entry (safe-to-deploy, safe-to-run, or a trusted publisher exemption). Adds ongoing maintenance burden but is standard practice for widely-distributed security tools.
+- **cargo-vet** ✓ _released_
+  `supply-chain/config.toml` records an explicit exemption (safe-to-deploy or safe-to-run) for every dependency in the tree. `cargo vet --locked` runs in `.github/workflows/ci.yml` on every push and PR to main. New dependencies added without a corresponding exemption or audit entry will fail CI.
 
 ---
 
