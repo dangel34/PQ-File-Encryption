@@ -58,11 +58,6 @@ Replace-InFile "$root\pqfile-desktop\Cargo.toml" `
     '(pqfile-gui\s*=\s*\{[^}]*version\s*=\s*)"[\d.]+"' `
     ('${1}"' + $Version + '"')
 
-# Homebrew formula
-Replace-InFile "$root\Formula\pqfile.rb" `
-    '(?m)^  version "\d+\.\d+\.\d+"' `
-    ('  version "' + $Version + '"')
-
 # pqfile-gui/src/lib.rs — APP_VERSION constant
 Replace-InFile "$root\pqfile-gui\src\lib.rs" `
     'pub\(crate\) const APP_VERSION: &str = "\d+\.\d+\.\d+";' `
