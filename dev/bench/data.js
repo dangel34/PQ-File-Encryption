@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779384655435,
+  "lastUpdate": 1779388210154,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -611,6 +611,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 56996,
             "range": "± 456",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "ffd533897966ccb882bd0cf8c463088d0c1903b5",
+          "message": "feat: release version 3.2.0 with new features and improvements\n\n- Updated pqfile, pqfile-gui, and pqfile-desktop to version 3.2.0, introducing key revocation functionality and compress-then-encrypt support using zstd.\n- Added a new `rekey` command to allow changing recipients without re-encrypting the payload.\n- Implemented a streaming decryptor (`PqfReader`) for efficient decryption of files.\n- Enhanced the changelog and roadmap documentation to reflect new features and planned improvements.\n- Updated the CI configuration and project metadata to align with the new version.",
+          "timestamp": "2026-05-21T14:23:55-04:00",
+          "tree_id": "c7de183d18acfd6f7e0bb9917421e174ac621779",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/ffd533897966ccb882bd0cf8c463088d0c1903b5"
+        },
+        "date": 1779388208816,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 61349,
+            "range": "± 5158",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1047383,
+            "range": "± 10854",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 135772870,
+            "range": "± 655211",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 100927,
+            "range": "± 1074",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1022892,
+            "range": "± 10055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 112030570,
+            "range": "± 539604",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 62953,
+            "range": "± 378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1017522,
+            "range": "± 7428",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 115360029,
+            "range": "± 1259617",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 102225,
+            "range": "± 3341",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1062447,
+            "range": "± 3146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 114571953,
+            "range": "± 527863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 53415,
+            "range": "± 475",
             "unit": "ns/iter"
           }
         ]
