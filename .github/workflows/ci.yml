@@ -59,6 +59,16 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Ensure gh-pages branch exists
+        run: |
+          if ! git ls-remote --exit-code origin gh-pages > /dev/null 2>&1; then
+            git checkout --orphan gh-pages
+            git reset --hard
+            git commit --allow-empty -m "chore: initialize gh-pages for benchmark history"
+            git push origin gh-pages
+            git checkout -
+          fi
+
       - name: Run benchmarks
         run: cargo bench -p pqfile --bench crypto -- --output-format bencher --measurement-time 10 --warm-up-time 3 2>&1 | tee bench_output.txt
 
