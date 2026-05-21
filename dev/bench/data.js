@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779382676556,
+  "lastUpdate": 1779384655435,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -509,6 +509,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 56841,
             "range": "± 307",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "376bccc6d28b4b918a9a10bd78e0706036a15591",
+          "message": "chore: update alert threshold in CI workflow\n\n- Increased the alert threshold from 110% to 125% in the CI workflow configuration to adjust the sensitivity of alerts during the build process.",
+          "timestamp": "2026-05-21T13:25:06-04:00",
+          "tree_id": "7c8f6ca2bc5405677e4cbb5035e02078a7f37251",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/376bccc6d28b4b918a9a10bd78e0706036a15591"
+        },
+        "date": 1779384654698,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67155,
+            "range": "± 3964",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1076850,
+            "range": "± 9981",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 116838036,
+            "range": "± 3926467",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 110466,
+            "range": "± 2703",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1090839,
+            "range": "± 2098",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 105496195,
+            "range": "± 655140",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68377,
+            "range": "± 2264",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1116951,
+            "range": "± 10132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 112208517,
+            "range": "± 2877408",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 110837,
+            "range": "± 1401",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1145493,
+            "range": "± 16888",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 111518661,
+            "range": "± 2148660",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 56996,
+            "range": "± 456",
             "unit": "ns/iter"
           }
         ]
