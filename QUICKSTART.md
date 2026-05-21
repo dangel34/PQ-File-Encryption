@@ -176,7 +176,7 @@ pqfile completions powershell >> $PROFILE
 
 ## GUI - Overview
 
-The GUI has five tabs and behaves identically on native and web, except that the web version downloads output files to the browser's downloads folder instead of writing them to disk. Files can be loaded via the Browse buttons or by dragging and dropping onto the window.
+The GUI has six tabs and behaves identically on native and web, except that the web version downloads output files to the browser's downloads folder instead of writing them to disk. Files can be loaded via the Browse buttons or by dragging and dropping onto the window.
 
 | Tab | What it does |
 |---|---|
@@ -184,6 +184,7 @@ The GUI has five tabs and behaves identically on native and web, except that the
 | **Encrypt** | Load a public key + plaintext file, produce a `.pqf` encrypted file |
 | **Decrypt** | Load a private key + `.pqf` file, recover the original file. A passphrase field appears automatically when an encrypted private key is loaded. |
 | **Inspect** | View the header of a `.pqf` file without decrypting it |
+| **Keys** | Persistent registry of named key pairs with fingerprints and quick-load buttons for the Encrypt and Decrypt tabs |
 | **Settings** | Toggle dark/light theme, auto-clear inputs, overwrite protection |
 
 ---

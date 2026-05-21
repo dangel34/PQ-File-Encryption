@@ -3,32 +3,33 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
+    aead::{Aead, AeadInPlace, KeyInit, Payload, Tag},
 };
-use hkdf::Hkdf;
 use ml_kem::{
-    Ciphertext, DecapsulationKey768, DecapsulationKey1024, MlKem768, MlKem1024,
+    Ciphertext, DecapsulationKey512, DecapsulationKey768, DecapsulationKey1024,
+    MlKem512, MlKem768, MlKem1024,
     Seed, kem::Decapsulate,
 };
-use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 use crate::format::{
-    BASE_NONCE_LEN, CHUNK_SIZE, HYBRID_CT_LEN_768, HYBRID_SEED_LEN_768, KEM_CT_LEN,
-    KEM_CT_LEN_1024, KEM_VARIANT, KEM_VARIANT_1024, KEM_VARIANT_HYBRID_768, NONCE_LEN,
-    VERSION, VERSION_V3, VERSION_V4, PqfHeader, PqfHeaderV4, WRAPPED_KEY_LEN,
-    chunk_aad, chunk_nonce,
+    BASE_NONCE_LEN, CHUNK_SIZE, HYBRID_CT_LEN_768, HYBRID_SEED_LEN_768,
+    KEM_CT_LEN, KEM_CT_LEN_512, KEM_CT_LEN_1024,
+    KEM_VARIANT, KEM_VARIANT_512, KEM_VARIANT_1024, KEM_VARIANT_HYBRID_768, NONCE_LEN,
+    VERSION, VERSION_V3, VERSION_V4, VERSION_V5, PqfHeader, PqfHeaderV4, WRAPPED_KEY_LEN,
+    chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf,
 };
 use crate::keygen::{
-    PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_HYBRID_768,
-    PRIV_TAG, PRIV_TAG_1024, PRIV_TAG_HYBRID_768,
+    PRIV_ENC_TAG, PRIV_ENC_TAG_512, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_HYBRID_768,
+    PRIV_TAG, PRIV_TAG_512, PRIV_TAG_1024, PRIV_TAG_HYBRID_768,
 };
 use crate::passphrase;
 
 enum DkVariant {
+    Kem512(DecapsulationKey512),
     Kem768(DecapsulationKey768),
     Kem1024(DecapsulationKey1024),
     HybridKem768 { x25519_sk: X25519StaticSecret, ml_dk: DecapsulationKey768 },
@@ -37,6 +38,7 @@ enum DkVariant {
 impl DkVariant {
     fn kem_variant(&self) -> u16 {
         match self {
+            DkVariant::Kem512(_) => KEM_VARIANT_512,
             DkVariant::Kem768(_) => KEM_VARIANT,
             DkVariant::Kem1024(_) => KEM_VARIANT_1024,
             DkVariant::HybridKem768 { .. } => KEM_VARIANT_HYBRID_768,
@@ -72,8 +74,8 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8], passphrase: Option<&str
     let mut cursor = Cursor::new(pqf_data);
     let header = PqfHeader::read(&mut cursor)?;
 
-    if header.version == VERSION_V3 {
-        return Err(PqfileError::UnsupportedVersion(VERSION_V3));
+    if header.version == VERSION_V3 || header.version == VERSION_V5 {
+        return Err(PqfileError::UnsupportedVersion(header.version));
     }
 
     check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
@@ -95,8 +97,8 @@ pub fn decrypt_bytes(privkey_pem: &str, pqf_data: &[u8], passphrase: Option<&str
         .map_err(|_| PqfileError::DecryptionFailure)
 }
 
-/// Decrypts a `.pqf` stream, supporting v2 (whole-file), v3 (chunked), and v4
-/// (multi-recipient) formats, and all key variants (ML-KEM-768/1024, hybrid).
+/// Decrypts a `.pqf` stream, supporting v2 (whole-file), v3/v5 (chunked), and v4
+/// (multi-recipient) formats, and all key variants (ML-KEM-512/768/1024, hybrid).
 pub fn decrypt_stream(
     privkey_pem: &str,
     reader: &mut dyn Read,
@@ -108,7 +110,7 @@ pub fn decrypt_stream(
     let version = PqfHeader::read_magic_version(reader)?;
 
     match version {
-        VERSION | VERSION_V3 => {
+        VERSION | VERSION_V3 | VERSION_V5 => {
             let header = PqfHeader::read_body(reader, version)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
             let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
@@ -120,7 +122,7 @@ pub fn decrypt_stream(
                     header.write(&mut header_bytes).unwrap();
                     decrypt_v2_payload(&cipher, &header.nonce, &header_bytes, reader, writer)
                 }
-                _ => decrypt_v3_chunks(&cipher, &header.nonce, reader, writer),
+                _ => decrypt_v3_chunks(&cipher, &header.nonce, header.chunk_size as usize, reader, writer),
             }
         }
         VERSION_V4 => {
@@ -154,7 +156,7 @@ fn decrypt_v4(
     let session_key = session_key.ok_or(PqfileError::NoMatchingRecipient)?;
     let key = Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
-    decrypt_v3_chunks(&cipher, &header.nonce, reader, writer)
+    decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
 }
 
 fn unwrap_session_key(wrapped: &[u8; WRAPPED_KEY_LEN], ss: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
@@ -203,13 +205,14 @@ fn decrypt_v2_payload(
 fn decrypt_v3_chunks(
     cipher: &ChaCha20Poly1305,
     header_nonce: &[u8; NONCE_LEN],
+    chunk_size: usize,
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
     let base_nonce: &[u8; BASE_NONCE_LEN] =
         header_nonce[..BASE_NONCE_LEN].try_into().unwrap();
 
-    let max_chunk = CHUNK_SIZE + 16;
+    let max_chunk = chunk_size + 16;
     let mut current = vec![0u8; max_chunk];
     let mut current_len = fill_chunk(reader, &mut current)?;
 
@@ -217,30 +220,39 @@ fn decrypt_v3_chunks(
         return Err(PqfileError::DecryptionFailure);
     }
 
+    let mut next = vec![0u8; max_chunk];
     let mut counter: u32 = 0;
 
     loop {
-        let mut next = vec![0u8; max_chunk];
         let next_len = fill_chunk(reader, &mut next)?;
         let is_last = next_len == 0;
 
         let cn = chunk_nonce(base_nonce, counter);
         let aad = chunk_aad(counter, is_last);
-        let plaintext = cipher
-            .decrypt(
+
+        if current_len < 16 {
+            return Err(PqfileError::DecryptionFailure);
+        }
+        let ct_len = current_len - 16;
+        // Split the last 16 bytes as the AEAD tag.
+        let tag = Tag::<ChaCha20Poly1305>::clone_from_slice(&current[ct_len..current_len]);
+        cipher
+            .decrypt_in_place_detached(
                 Nonce::from_slice(&cn),
-                Payload { msg: &current[..current_len], aad: &aad },
+                &aad,
+                &mut current[..ct_len],
+                &tag,
             )
             .map_err(|_| PqfileError::DecryptionFailure)?;
 
-        writer.write_all(&plaintext)?;
+        writer.write_all(&current[..ct_len])?;
 
         if is_last {
             break;
         }
 
         counter = counter.checked_add(1).ok_or(PqfileError::DecryptionFailure)?;
-        current = next;
+        std::mem::swap(&mut current, &mut next);
         current_len = next_len;
     }
 
@@ -252,6 +264,13 @@ fn derive_dk(privkey_pem: &str, passphrase: Option<&str>) -> Result<DkVariant, P
     let raw = pem.contents();
 
     match pem.tag() {
+        t if t == PRIV_ENC_TAG_512 => {
+            let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
+            let seed = passphrase::decrypt_seed(raw, pp)?;
+            let seed_arr = Seed::try_from(seed.as_slice())
+                .map_err(|_| PqfileError::InvalidKeyLength { expected: 64, got: seed.len() })?;
+            Ok(DkVariant::Kem512(DecapsulationKey512::from_seed(seed_arr)))
+        }
         t if t == PRIV_ENC_TAG => {
             let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
             let seed = passphrase::decrypt_seed(raw, pp)?;
@@ -265,6 +284,11 @@ fn derive_dk(privkey_pem: &str, passphrase: Option<&str>) -> Result<DkVariant, P
             let seed_arr = Seed::try_from(seed.as_slice())
                 .map_err(|_| PqfileError::InvalidKeyLength { expected: 64, got: seed.len() })?;
             Ok(DkVariant::Kem1024(DecapsulationKey1024::from_seed(seed_arr)))
+        }
+        t if t == PRIV_TAG_512 => {
+            let seed = Seed::try_from(raw)
+                .map_err(|_| PqfileError::InvalidKeyLength { expected: 64, got: raw.len() })?;
+            Ok(DkVariant::Kem512(DecapsulationKey512::from_seed(seed)))
         }
         t if t == PRIV_TAG => {
             let seed = Seed::try_from(raw)
@@ -310,6 +334,14 @@ fn decapsulate_shared_secret(
     kem_ct_bytes: &[u8],
 ) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     match dk {
+        DkVariant::Kem512(dk) => {
+            let ct = Ciphertext::<MlKem512>::try_from(kem_ct_bytes)
+                .map_err(|_| PqfileError::InvalidKeyLength { expected: KEM_CT_LEN_512, got: kem_ct_bytes.len() })?;
+            let ss = dk.decapsulate(&ct);
+            let mut ss_bytes = Zeroizing::new([0u8; 32]);
+            ss_bytes.copy_from_slice(ss.as_slice());
+            Ok(ss_bytes)
+        }
         DkVariant::Kem768(dk) => {
             let ct = Ciphertext::<MlKem768>::try_from(kem_ct_bytes)
                 .map_err(|_| PqfileError::InvalidKeyLength { expected: KEM_CT_LEN, got: kem_ct_bytes.len() })?;
@@ -330,12 +362,10 @@ fn decapsulate_shared_secret(
             if kem_ct_bytes.len() != HYBRID_CT_LEN_768 {
                 return Err(PqfileError::InvalidKeyLength { expected: HYBRID_CT_LEN_768, got: kem_ct_bytes.len() });
             }
-            // First 32 bytes: ephemeral X25519 public key.
             let eph_pk_bytes: [u8; 32] = kem_ct_bytes[..32].try_into().unwrap();
             let eph_pk = X25519PublicKey::from(eph_pk_bytes);
             let x25519_ss = Zeroizing::new(x25519_sk.diffie_hellman(&eph_pk));
 
-            // Remaining bytes: ML-KEM-768 ciphertext.
             let ml_ct_bytes = &kem_ct_bytes[32..];
             let ml_ct = Ciphertext::<MlKem768>::try_from(ml_ct_bytes)
                 .map_err(|_| PqfileError::InvalidKeyLength { expected: KEM_CT_LEN, got: ml_ct_bytes.len() })?;
@@ -344,28 +374,6 @@ fn decapsulate_shared_secret(
             hybrid_hkdf(x25519_ss.as_bytes(), ml_ss.as_slice())
         }
     }
-}
-
-fn hybrid_hkdf(x25519_ss: &[u8; 32], ml_ss: &[u8]) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
-    let mut ikm = Zeroizing::new(Vec::with_capacity(64));
-    ikm.extend_from_slice(x25519_ss);
-    ikm.extend_from_slice(ml_ss);
-    let hk = Hkdf::<Sha256>::new(None, &ikm);
-    let mut okm = Zeroizing::new([0u8; 32]);
-    hk.expand(b"pqfile-hybrid-v1", okm.as_mut())
-        .map_err(|_| PqfileError::DecryptionFailure)?;
-    Ok(okm)
-}
-
-fn fill_chunk<R: Read + ?Sized>(reader: &mut R, buf: &mut [u8]) -> Result<usize, PqfileError> {
-    let mut total = 0;
-    while total < buf.len() {
-        match reader.read(&mut buf[total..])? {
-            0 => break,
-            n => total += n,
-        }
-    }
-    Ok(total)
 }
 
 #[cfg(test)]
@@ -452,9 +460,19 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
         let mut reader: &[u8] = b"payload";
         let mut writer = Vec::new();
-        encrypt_stream(&pub_pem, 7, &mut reader, &mut writer).unwrap();
+        encrypt_stream(&pub_pem, 7, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
         let result = decrypt_bytes(&priv_pem, &writer, None);
         assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x03))));
+    }
+
+    #[test]
+    fn decrypt_bytes_rejects_v5_file() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let mut reader: &[u8] = b"payload";
+        let mut writer = Vec::new();
+        encrypt_stream(&pub_pem, 7, 4096, &mut reader, &mut writer).unwrap();
+        let result = decrypt_bytes(&priv_pem, &writer, None);
+        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x05))));
     }
 
     #[test]
@@ -462,7 +480,7 @@ mod tests {
         let (pub_768, _) = keygen_bytes(768, None).unwrap();
         let (_, priv_1024) = keygen_bytes(1024, None).unwrap();
         let mut enc = Vec::new();
-        encrypt_stream(&pub_768, 5, &mut b"hello".as_slice(), &mut enc).unwrap();
+        encrypt_stream(&pub_768, 5, CHUNK_SIZE, &mut b"hello".as_slice(), &mut enc).unwrap();
         let mut dec = Vec::new();
         let result = decrypt_stream(&priv_1024, &mut enc.as_slice(), &mut dec, None);
         assert!(matches!(result, Err(PqfileError::UnsupportedKem(_))));
@@ -488,7 +506,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
         let plaintext: &[u8] = &[];
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, 0, &mut { plaintext }, &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, 0, CHUNK_SIZE, &mut { plaintext }, &mut enc_out).unwrap();
 
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
@@ -500,7 +518,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
         let plaintext = b"small streaming payload";
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
 
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
@@ -512,7 +530,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
         let plaintext = vec![0xDDu8; CHUNK_SIZE];
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
 
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
@@ -524,7 +542,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
         let plaintext: Vec<u8> = (0..u8::MAX).cycle().take(CHUNK_SIZE * 3 + 7).collect();
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
 
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
@@ -536,7 +554,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(768, Some("stream-pass")).unwrap();
         let plaintext = b"passphrase streaming roundtrip";
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
 
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, Some("stream-pass")).unwrap();
@@ -548,7 +566,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
         let plaintext = vec![0u8; CHUNK_SIZE + 100];
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
 
         use crate::format::HEADER_LEN;
         let truncated = &enc_out[..HEADER_LEN + CHUNK_SIZE + 16];
@@ -563,7 +581,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
         let plaintext = b"tamper test payload";
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
 
         use crate::format::HEADER_LEN;
         let flip_pos = HEADER_LEN + 4;
@@ -581,7 +599,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(1024, None).unwrap();
         let plaintext = b"ML-KEM-1024 streaming roundtrip";
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
 
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
@@ -593,7 +611,7 @@ mod tests {
         let (pub_pem, priv_pem) = keygen_bytes(1024, Some("1024-pass")).unwrap();
         let plaintext = b"ML-KEM-1024 passphrase roundtrip";
         let mut enc_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
 
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, Some("1024-pass")).unwrap();
@@ -603,11 +621,93 @@ mod tests {
     #[test]
     fn decrypt_stream_rejects_unknown_version() {
         let (_, priv_pem) = keygen_bytes(768, None).unwrap();
-        // Craft a header with version byte 0x05 (not v2/v3/v4).
         let mut fake: Vec<u8> = b"PQFL".to_vec();
-        fake.push(0x05);
+        fake.push(0x06);
         let mut out = Vec::new();
         let result = decrypt_stream(&priv_pem, &mut fake.as_slice(), &mut out, None);
-        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x05))));
+        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x06))));
+    }
+
+    // ── ML-KEM-512 roundtrips ─────────────────────────────────────────────
+
+    #[test]
+    fn stream_roundtrip_512() {
+        let (pub_pem, priv_pem) = keygen_bytes(512, None).unwrap();
+        let plaintext = b"ML-KEM-512 streaming roundtrip";
+        let mut enc_out = Vec::new();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+
+        let mut dec_out = Vec::new();
+        decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
+        assert_eq!(dec_out, plaintext);
+    }
+
+    #[test]
+    fn stream_roundtrip_512_with_passphrase() {
+        let (pub_pem, priv_pem) = keygen_bytes(512, Some("512-pass")).unwrap();
+        let plaintext = b"ML-KEM-512 passphrase roundtrip";
+        let mut enc_out = Vec::new();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+
+        let mut dec_out = Vec::new();
+        decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, Some("512-pass")).unwrap();
+        assert_eq!(dec_out, plaintext.as_slice());
+    }
+
+    #[test]
+    fn decrypt_rejects_512_key_on_768_file() {
+        let (pub_768, _) = keygen_bytes(768, None).unwrap();
+        let (_, priv_512) = keygen_bytes(512, None).unwrap();
+        let mut enc = Vec::new();
+        encrypt_stream(&pub_768, 5, CHUNK_SIZE, &mut b"hello".as_slice(), &mut enc).unwrap();
+        let mut dec = Vec::new();
+        let result = decrypt_stream(&priv_512, &mut enc.as_slice(), &mut dec, None);
+        assert!(matches!(result, Err(PqfileError::UnsupportedKem(_))));
+    }
+
+    // ── Configurable chunk size / v5 format ───────────────────────────────
+
+    #[test]
+    fn stream_roundtrip_custom_chunk_size_small() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext = b"custom chunk size roundtrip";
+        let mut enc_out = Vec::new();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, 512, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+
+        let mut dec_out = Vec::new();
+        decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
+        assert_eq!(dec_out, plaintext);
+    }
+
+    #[test]
+    fn stream_roundtrip_custom_chunk_size_multi_chunk() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(1024 * 3 + 17).collect();
+        let chunk_size = 1024;
+        let mut enc_out = Vec::new();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, chunk_size, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+
+        let mut dec_out = Vec::new();
+        decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
+        assert_eq!(dec_out, plaintext);
+    }
+
+    #[test]
+    fn v5_roundtrip_rejects_tampered_chunk() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext = b"v5 tamper test";
+        let mut enc_out = Vec::new();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, 4096, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+
+        // Flip a byte in the ciphertext region (after the v5 header)
+        let header_len = {
+            use crate::format::{HEADER_LEN, V5_CHUNK_SIZE_FIELD_LEN};
+            HEADER_LEN + V5_CHUNK_SIZE_FIELD_LEN
+        };
+        enc_out[header_len + 2] ^= 0xFF;
+
+        let mut dec_out = Vec::new();
+        let result = decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None);
+        assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
     }
 }

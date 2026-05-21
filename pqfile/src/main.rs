@@ -36,7 +36,7 @@ enum Command {
         /// Protect the private key with a passphrase (prompted interactively).
         #[arg(long, default_value_t = false)]
         passphrase: bool,
-        /// KEM security level: 768 (ML-KEM-768, default) or 1024 (ML-KEM-1024).
+        /// KEM security level: 512 (ML-KEM-512), 768 (ML-KEM-768, default), or 1024 (ML-KEM-1024).
         #[arg(long, value_name = "LEVEL", default_value_t = 768u16)]
         level: u16,
         /// Generate a Hybrid X25519+ML-KEM-768 key pair for combined classical+PQ security.
@@ -57,6 +57,11 @@ enum Command {
         /// Each file is written alongside the original as <file>.pqf.
         #[arg(long, default_value_t = false)]
         recursive: bool,
+        /// Chunk size in bytes for streaming encryption (default: 65536).
+        /// Values other than the default produce v5 format files with the chunk size stored in the header.
+        /// Must be in the range 64..=268435456. Not supported with multiple recipients.
+        #[arg(long, value_name = "BYTES", default_value_t = format::CHUNK_SIZE)]
+        chunk_size: usize,
     },
     Decrypt {
         #[arg(short = 'k', value_name = "PRIVKEY")]
@@ -132,8 +137,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
     let json = cli.json;
     match cli.command {
         Command::Keygen { out, force, passphrase, level, hybrid } => run_keygen(out, force, level, hybrid, passphrase, json),
-        Command::Encrypt { recipients, input, output, recursive } => {
-            run_encrypt(recipients, input, output, recursive, json)
+        Command::Encrypt { recipients, input, output, recursive, chunk_size } => {
+            run_encrypt(recipients, input, output, recursive, chunk_size, json)
         }
         Command::Decrypt { key, input, output } => run_decrypt(key, input, output, json),
         Command::Inspect { input } => inspect(input.as_path(), json),
@@ -169,8 +174,15 @@ fn run_encrypt(
     input: String,
     output: Option<String>,
     recursive: bool,
+    chunk_size: usize,
     json: bool,
 ) -> Result<(), PqfileError> {
+    if chunk_size == 0 || chunk_size > 268_435_456 {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("--chunk-size must be between 1 and 268435456, got {chunk_size}"),
+        )));
+    }
     let pubkey_pems: Vec<String> = recipients.iter()
         .map(|p| std::fs::read_to_string(p))
         .collect::<Result<_, _>>()?;
@@ -181,9 +193,9 @@ fn run_encrypt(
                 "--recursive supports only one recipient",
             )));
         }
-        run_encrypt_recursive(&pubkey_pems[0], &input, json)
+        run_encrypt_recursive(&pubkey_pems[0], &input, chunk_size, json)
     } else {
-        run_encrypt_single(&pubkey_pems, &input, output.as_deref(), json)
+        run_encrypt_single(&pubkey_pems, &input, output.as_deref(), chunk_size, json)
     }
 }
 
@@ -191,6 +203,7 @@ fn run_encrypt_single(
     pubkey_pems: &[String],
     input: &str,
     output: Option<&str>,
+    chunk_size: usize,
     json: bool,
 ) -> Result<(), PqfileError> {
     let original_size: u64 = if input != "-" {
@@ -215,8 +228,14 @@ fn run_encrypt_single(
     let mut reader = open_reader(input)?;
     let mut writer = open_writer(to_stdout, &out_path)?;
     if pubkey_pems.len() == 1 {
-        encrypt::encrypt_stream(&pubkey_pems[0], original_size, &mut *reader, &mut *writer)?;
+        encrypt::encrypt_stream(&pubkey_pems[0], original_size, chunk_size, &mut *reader, &mut *writer)?;
     } else {
+        if chunk_size != format::CHUNK_SIZE {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--chunk-size is not supported with multiple recipients",
+            )));
+        }
         let refs: Vec<&str> = pubkey_pems.iter().map(|s| s.as_str()).collect();
         encrypt::encrypt_stream_multi(&refs, original_size, &mut *reader, &mut *writer)?;
     }
@@ -229,7 +248,7 @@ fn run_encrypt_single(
     Ok(())
 }
 
-fn run_encrypt_recursive(pubkey_pem: &str, input: &str, json: bool) -> Result<(), PqfileError> {
+fn run_encrypt_recursive(pubkey_pem: &str, input: &str, chunk_size: usize, json: bool) -> Result<(), PqfileError> {
     let dir = PathBuf::from(input);
     if !dir.is_dir() {
         return Err(PqfileError::Io(std::io::Error::new(
@@ -254,7 +273,7 @@ fn run_encrypt_recursive(pubkey_pem: &str, input: &str, json: bool) -> Result<()
         let result: Result<(), PqfileError> = (|| {
             let mut reader = BufReader::new(std::fs::File::open(file_path)?);
             let mut writer = BufWriter::new(std::fs::File::create(&out_path)?);
-            encrypt::encrypt_stream(pubkey_pem, size, &mut reader, &mut writer)
+            encrypt::encrypt_stream(pubkey_pem, size, chunk_size, &mut reader, &mut writer)
         })();
 
         let path_str = file_path.to_string_lossy();
@@ -385,6 +404,7 @@ fn prompt_passphrase(prompt: &str) -> Result<zeroize::Zeroizing<String>, PqfileE
 
 fn kem_variant_name(variant: u16) -> &'static str {
     match variant {
+        512 => "ML-KEM-512",
         768 => "ML-KEM-768",
         1024 => "ML-KEM-1024",
         0x0301 => "Hybrid X25519+ML-KEM-768",

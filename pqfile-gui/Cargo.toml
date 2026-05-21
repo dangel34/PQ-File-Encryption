@@ -9,12 +9,12 @@ autobins = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pqfile = { path = "../pqfile", version = "3.0.1" }
-eframe = { version = "0.34", features = ["default_fonts"] }
+pqfile = { workspace = true }
+eframe = { workspace = true }
 rfd = "0.17"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -33,7 +33,7 @@ web-sys = { version = "0.3", features = [
     "console",
 ] }
 js-sys = "0.3"
-getrandom = { version = "0.4", features = ["wasm_js"] }
+getrandom = { workspace = true, features = ["wasm_js"] }
 # getrandom 0.2 is pulled in transitively by rand_core 0.6 (via chacha20poly1305).
 # Without the js feature it refuses to compile for wasm32-unknown-unknown.
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }

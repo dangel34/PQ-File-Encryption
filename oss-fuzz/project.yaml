@@ -1,0 +1,14 @@
+homepage: "https://github.com/dangel34/PQ-File-Encryption"
+language: rust
+primary_contact: "cheery.09.purine@icloud.com"
+auto_ccs:
+  - "cheery.09.purine@icloud.com"
+main_repo: "https://github.com/dangel34/PQ-File-Encryption"
+fuzzing_engines:
+  - libfuzzer
+  - honggfuzz
+  - afl
+sanitizers:
+  - address
+  - memory
+  - undefined

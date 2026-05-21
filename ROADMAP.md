@@ -29,7 +29,7 @@ This document tracks planned improvements, new features, and security work acros
 ### CLI
 
 - **Output path flag (`-o / --output`)** ✓ _released_
-  `pqfile encrypt … -o /tmp/out.pqf` and `pqfile decrypt … -o recovered.txt`.
+  `pqfile encrypt ... -o /tmp/out.pqf` and `pqfile decrypt ... -o recovered.txt`.
 
 - **Stdin / stdout pipe support** ✓ _released_
   Accept `-` as the input file to read from stdin and write to stdout. Enables composability: `cat secret.txt | pqfile encrypt -r pubkey.pem - > out.pqf`.
@@ -49,7 +49,7 @@ This document tracks planned improvements, new features, and security work acros
   SHA3-256 fingerprint of the embedded KEM ciphertext displayed in the Inspect output. Lets the recipient confirm which key was used before attempting decryption.
 
 - **Multi-file encrypt** ✓ _released_
-  "Files to Encrypt" list with "+ Add Files…" button (opens a multi-file picker) and drag-and-drop support. Each file shows a per-row status (✓ / error). "Encrypt All (N)" button processes all files sequentially with the same public key. Works on both native and web.
+  "Files to Encrypt" list with "+ Add Files..." button (opens a multi-file picker) and drag-and-drop support. Each file shows a per-row status (✓ / error). "Encrypt All (N)" button processes all files sequentially with the same public key. Works on both native and web.
 
 - **GUI keygen: confirm before overwriting existing keys** ✓ _released_
   Native GUI routes through `keygen::keygen()` with `force = !settings.confirm_overwrite`, giving the same protection as the CLI `--force` flag.
@@ -100,19 +100,54 @@ This document tracks planned improvements, new features, and security work acros
   Encrypt and decrypt operations run on a background thread (native). A per-file-count progress bar is shown during multi-file batch encrypt; a spinner is shown during decrypt. The UI stays responsive throughout. WASM keeps the existing synchronous path.
 
 - **Key management panel** ✓ _released_
-  Dedicated "🗝 Keys" tab. Remembered key pairs (label, fingerprint, directory path) persist across sessions via eframe Storage. "🔒 Encrypt" / "🔓 Decrypt" buttons quick-load keys into the respective tabs. "＋ Import Key Pair…" browses for a folder containing pubkey.pem and optionally privkey.pem. Missing-file warning shown inline.
+  Dedicated "Keys" tab. Remembered key pairs (label, fingerprint, directory path) persist across sessions via eframe Storage. Encrypt / Decrypt buttons quick-load keys into the respective tabs. Import Key Pair browses for a folder containing pubkey.pem and optionally privkey.pem. Missing-file warning shown inline.
 
 ---
 
 ## Future / Long-term
 
-### Library / API surface
+### Security
+
+- **ML-KEM-512 support** ✓ _released_
+  `pqfile keygen --level 512` generates an ML-KEM-512 key pair (EK 800 bytes, CT 768 bytes, seed 64 bytes). New PEM tags: `ML-KEM-512 PUBLIC KEY`, `ML-KEM-512 PRIVATE KEY`, `ML-KEM-512 ENCRYPTED PRIVATE KEY`. KEM variant value `512` (u16). Decryption auto-detects from the file header. Passphrase protection supported. Completes FIPS 203 parameter set coverage.
+
+- **Anonymous recipients in v4 format**
+  In the current v4 header, the recipient count and each entry's KEM variant are visible in plaintext. An `--anonymous-recipients` flag on `pqfile encrypt` pads all recipient entries to the maximum variant size and randomizes their serialization order before writing the header. An eavesdropper cannot determine the number of recipients or which key types are in use. Adds a v5 format flag byte to signal anonymous mode; the decryptor must try each entry regardless of variant instead of filtering by the key's own variant first.
+
+- **Signcrypt (combined authenticate and encrypt)**
+  A `pqfile signcrypt -k sign_privkey.pem -r pubkey.pem <file>` command that signs the plaintext under ML-DSA-65 and embeds the detached signature inside the encrypted payload. `pqfile signdecrypt -k privkey.pem -v sign_pubkey.pem <file.pqf>` decrypts and verifies in one step. Because the signature lives inside the AEAD-authenticated ciphertext it cannot be stripped or substituted after the fact. This prevents "surreptitious forwarding": a recipient cannot re-encrypt the plaintext to a third party while preserving the sender's signature, because re-encryption requires decryption first, which reveals that the sender signed only the original plaintext (not one addressed to a different recipient). Eliminates the need for a separate `.sig` file when the sender identity must be bound to the ciphertext.
+
+- **Key revocation**
+  A `pqfile revoke -k sign_privkey.pem pubkey.pem` command that produces a signed `pubkey.pem.revoked` PEM file containing the key fingerprint, a UTC revocation timestamp, and a free-text reason. `pqfile encrypt` can check for a `.revoked` sidecar file alongside the public key and refuse to encrypt if one is found, with a clear error message. Revocations are signed with the ML-DSA signing key so they cannot be forged or silently discarded without the signing key. Provides a lightweight revocation mechanism for deployments that cannot yet implement a full PKI.
+
+- **Hardware-backed private keys (TPM / PKCS#11)**
+  Store the private key seed inside a hardware security module rather than on disk. Opt in with `pqfile keygen --hardware`. Supported backends: Windows TPM2 via the CNG API, macOS Secure Enclave via the Security framework, Linux TPM2 via tpm2-tools, and YubiKey or other PKCS#11 tokens. The PEM private key file is replaced by a hardware key reference (device attestation + slot identifier). The seed is generated inside the hardware and never exported to process memory. Decapsulation calls are proxied to the hardware, so a physical token or OS-level access control is required for every decrypt. Provides strong protection against disk theft, memory forensics, and cold-boot attacks.
+
+- **Threshold decryption (M-of-N)**
+  Split a private key seed across N shareholders using Shamir's Secret Sharing (GF(2^8) polynomial interpolation over the 64-byte seed). `pqfile split-key --threshold M --shares N privkey.pem` produces N share PEM files. `pqfile reconstruct-key share1.pem share2.pem ... privkey.pem` reassembles the seed from any M shares. Decryption then proceeds normally. Useful for high-security key escrow, disaster recovery where no single person holds the full key, or organizational workflows requiring M-of-N approval to access protected data.
+
+### CLI / Library
 
 - **Stable public Rust API with semver guarantees**
   Publish `pqfile` to crates.io with full semver stability. Expand the public API beyond `encrypt_bytes` / `decrypt_bytes` / `keygen_bytes` to expose typed key structs so downstream crates can work with keys without round-tripping through PEM.
 
+- **Streaming decryptor type implementing Read**
+  Expose a `PqfReader<R: Read>` type that wraps a source reader and implements `Read`, yielding decrypted plaintext bytes incrementally. Library consumers can pipe the output directly into any `Read`-expecting API (a decompressor, CSV parser, database import stream, or network socket) without buffering the full plaintext in memory first. Each 64 KiB chunk is yielded only after its AEAD tag passes verification; a tampered chunk causes the `Read` call to return an error. This is the primary missing abstraction for embedding pqfile in larger Rust applications.
+
+- **Async I/O support**
+  Add `encrypt_stream_async` and `decrypt_stream_async` that accept `AsyncRead + AsyncWrite + Unpin` from `tokio::io`, plus a feature-flagged `futures::io` variant. The chunk loop becomes an `async` block with `.await` on each read and write. Enables non-blocking encryption in async servers and proxies without spawning a dedicated OS thread per operation. The async API is a direct mirror of the sync streaming API; the same format.rs helpers (chunk_nonce, chunk_aad, fill_chunk) are reused with async equivalents.
+
+- **Encrypted archive (multi-file bundle)**
+  A `pqfile archive -r pubkey.pem -o bundle.pqf [files...]` command that packs multiple files and directory trees into a single encrypted authenticated archive. Each entry stores the original relative path, file size, modification time, and Unix permissions in a per-entry header, all covered by the same AEAD authentication as the payload. `pqfile extract bundle.pqf -k privkey.pem [-o dir]` restores the original layout. Useful for sending a set of related files as a single auditable package. All authentication happens before any file is written to disk on extraction. The format is a v4 stream where the payload is a structured entry sequence rather than raw file bytes.
+
+- **Re-encryption without payload decryption (rekey)**
+  `pqfile rekey -k old_privkey.pem -r new_pubkey.pem file.pqf` decapsulates the session key using the old private key, re-encapsulates it under the new public key, and rewrites only the file header. The payload ciphertext bytes are streamed through unchanged. The resulting file is a valid `.pqf` decryptable only with the new private key. Useful for key rotation (replace a compromised or expired key without re-reading the plaintext), and for adding a recipient to an already-encrypted file when the original plaintext is no longer available.
+
+- **Compress-then-encrypt (zstd)**
+  An optional `--compress` flag on `pqfile encrypt`. Plaintext is compressed with zstd at the configured level before encryption, reducing ciphertext size for compressible inputs. The compression ratio and original uncompressed size are stored in an extended header field. Decompression happens automatically after AEAD verification on decrypt, before returning plaintext to the caller. This is safe for file encryption: unlike CRIME/BREACH attacks (which exploit a compression oracle over many adaptive requests), compression here is a one-shot transform applied before a fresh random AEAD per file. A `--compress-level` option (1 to 22) trades speed for ratio.
+
 - **C FFI bindings**
-  Expose a `pqfile.h` C header via `cbindgen` so the crypto core can be used from C, Python (via `ctypes`/`cffi`), Go (`cgo`), or any language with C interop. Priority use case: embedding encryption in existing applications.
+  Expose a `pqfile.h` C header via `cbindgen` so the crypto core can be used from C, Python (via `ctypes` / `cffi`), Go (`cgo`), or any language with C interop. Priority use case: embedding encryption in existing applications.
 
 - **Python bindings (PyO3)**
   A thin `pqfile-py` crate wrapping the core with `#[pymodule]`. Publish to PyPI. Enables Python scripts to encrypt/decrypt files without shelling out.
@@ -120,7 +155,24 @@ This document tracks planned improvements, new features, and security work acros
 - **npm / WASM package**
   Package the WASM build as an npm module so browser and Node.js applications can call `encrypt`, `decrypt`, and `keygen` directly as JavaScript functions without loading the full egui app.
 
+### Performance
+
+- **Parallel chunk processing with rayon**
+  In `encrypt_stream` and `decrypt_stream`, each chunk is processed independently: the per-chunk nonce and AAD are deterministic from the base nonce and the chunk counter, so the order of encryption/decryption does not need to match the order of I/O. A rayon work-stealing thread pool can encrypt or decrypt N chunks concurrently across available cores. A two-phase pipeline reads chunks on the I/O thread while worker threads process previously read chunks, keeping both the disk and CPU busy. Expected throughput improvement is roughly linear with core count up to I/O bandwidth saturation. Gate behind a `--parallel` flag so single-core and memory-constrained environments are unaffected by default.
+
+- **Configurable chunk size** ✓ _released_
+  `--chunk-size <bytes>` flag on `pqfile encrypt`. Default 64 KiB (v3 format). Non-default values emit v5 format which stores the chunk size in the header so the decryptor reads it automatically. Supported range: 1–268435456 bytes. Not supported with multiple recipients (v4 format).
+
+- **In-place AEAD to eliminate per-chunk allocation** ✓ _released_
+  `encrypt_stream` and `encrypt_stream_multi` now use `encrypt_in_place_detached` (ciphertext written to the existing plaintext buffer; 16-byte tag appended separately). `decrypt_v3_chunks` uses `decrypt_in_place_detached` (tag split from end of chunk buffer). Zero heap allocations per chunk in the streaming hot path.
+
+- **Benchmark regression detection in CI** ✓ _released_
+  `.github/workflows/ci.yml` `bench` job runs `cargo bench -p pqfile -- --output-format bencher` and feeds results to `benchmark-action/github-action-benchmark`. Baseline auto-pushed on main; PRs compare against stored baseline and post alert comments if any benchmark regresses more than 10%.
+
 ### Infrastructure
+
+- **OSS-Fuzz continuous fuzzing** ✓ _released_
+  `oss-fuzz/project.yaml`, `Dockerfile`, and `build.sh` provide the integration files for a google/oss-fuzz PR. Nightly CI fuzz job in `.github/workflows/fuzz.yml` runs each target for 120 seconds with libFuzzer, uploads crash artifacts on failure. To enable continuous OSS-Fuzz coverage, submit a PR to https://github.com/google/oss-fuzz adding the `projects/pqfile/` directory from `oss-fuzz/`.
 
 - **Fuzzing with `cargo-fuzz`** ✓ _released_
   Add fuzz targets for `PqfHeader::read`, `decrypt_bytes` (malformed ciphertext), and PEM parsing. Run on OSS-Fuzz or as a nightly CI job. Guards against panics or logic errors on adversarial input. Targets live in `fuzz/fuzz_targets/`; run with `cargo fuzz run fuzz_header_read` etc.
@@ -144,3 +196,4 @@ The following properties are invariants, not roadmap items. Any proposal that we
 - The entire `.pqf` file (header + payload) is authenticated before any plaintext is returned.
 - Secret material is zeroized from memory on drop.
 - Each encryption produces a fresh KEM ciphertext and a fresh random nonce.
+- In hybrid mode, each encryption also produces a fresh ephemeral X25519 scalar.

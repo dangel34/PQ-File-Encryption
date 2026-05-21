@@ -355,7 +355,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 cargo test --workspace
 ```
 
-171 tests across all crates (63 unit + 63 unit-in-main + 45 integration). Run benchmarks with:
+142 tests across all crates (75 unit + 45 integration + 22 GUI). Run benchmarks with:
 
 ```
 cargo bench -p pqfile

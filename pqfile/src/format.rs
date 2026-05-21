@@ -1,5 +1,9 @@
 use std::io::{Read, Write};
 
+use hkdf::Hkdf;
+use sha2::Sha256;
+use zeroize::Zeroizing;
+
 use crate::error::PqfileError;
 
 pub const MAGIC: &[u8; 4] = b"PQFL";
@@ -7,11 +11,18 @@ pub const VERSION: u8 = 0x02;
 pub const VERSION_V3: u8 = 0x03;
 /// Multi-recipient format: MAGIC | 0x04 | COUNT(2) | [VARIANT(2) | CT(var) | WRAPPED_KEY(48)]... | NONCE(12) | ORIGINAL_SIZE(8)
 pub const VERSION_V4: u8 = 0x04;
+/// Single-recipient streaming with configurable chunk size: same as v3 but appends CHUNK_SIZE(4) after ORIGINAL_SIZE.
+pub const VERSION_V5: u8 = 0x05;
 
+pub const KEM_VARIANT_512: u16 = 512;
 pub const KEM_VARIANT: u16 = 768;
 pub const KEM_VARIANT_1024: u16 = 1024;
 /// Hybrid X25519+ML-KEM-768 variant identifier (0x0301).
 pub const KEM_VARIANT_HYBRID_768: u16 = 0x0301;
+
+/// ML-KEM-512 sizes.
+pub const KEM_CT_LEN_512: usize = 768;
+pub const EK_LEN_512: usize = 800;
 
 /// ML-KEM-768 sizes.
 pub const KEM_CT_LEN: usize = 1088;
@@ -42,6 +53,9 @@ const HEADER_PREFIX_LEN: usize = 7;
 /// Fixed suffix: NONCE(12) + ORIGINAL_SIZE(8) = 20 bytes.
 const HEADER_SUFFIX_LEN: usize = 20;
 
+/// Header length for a ML-KEM-512 file (v3 format).
+#[allow(dead_code)]
+pub const HEADER_LEN_512: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_512 + HEADER_SUFFIX_LEN;
 /// Header length for a ML-KEM-768 file (kept as a constant for tests).
 pub const HEADER_LEN: usize = HEADER_PREFIX_LEN + KEM_CT_LEN + HEADER_SUFFIX_LEN;
 /// Header length for a ML-KEM-1024 file.
@@ -50,6 +64,8 @@ pub const HEADER_LEN_1024: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_1024 + HEADER_
 /// Header length for a Hybrid X25519+ML-KEM-768 file.
 #[allow(dead_code)]
 pub const HEADER_LEN_HYBRID_768: usize = HEADER_PREFIX_LEN + HYBRID_CT_LEN_768 + HEADER_SUFFIX_LEN;
+/// Extra bytes added to any header when version is VERSION_V5 (the chunk_size u32 field).
+pub const V5_CHUNK_SIZE_FIELD_LEN: usize = 4;
 
 /// Chunk size for v3/v4 streaming encryption (64 KiB).
 pub const CHUNK_SIZE: usize = 65536;
@@ -68,12 +84,15 @@ pub struct PqfHeader {
     pub kem_ciphertext: Vec<u8>,
     pub nonce: [u8; NONCE_LEN],
     pub original_size: u64,
+    /// Chunk size for v3/v5 streaming. Stored on disk only in v5; v3 uses the CHUNK_SIZE constant.
+    pub chunk_size: u32,
 }
 
 impl PqfHeader {
     /// Total byte length of this header when serialized.
     pub fn header_len(&self) -> usize {
-        HEADER_PREFIX_LEN + self.kem_ciphertext.len() + HEADER_SUFFIX_LEN
+        let base = HEADER_PREFIX_LEN + self.kem_ciphertext.len() + HEADER_SUFFIX_LEN;
+        if self.version == VERSION_V5 { base + V5_CHUNK_SIZE_FIELD_LEN } else { base }
     }
 
     pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
@@ -83,12 +102,15 @@ impl PqfHeader {
         w.write_all(&self.kem_ciphertext)?;
         w.write_all(&self.nonce)?;
         w.write_all(&self.original_size.to_le_bytes())?;
+        if self.version == VERSION_V5 {
+            w.write_all(&self.chunk_size.to_le_bytes())?;
+        }
         Ok(())
     }
 
     pub fn read<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
         let version = Self::read_magic_version(r)?;
-        if version != VERSION && version != VERSION_V3 {
+        if version != VERSION && version != VERSION_V3 && version != VERSION_V5 {
             return Err(PqfileError::UnsupportedVersion(version));
         }
         Self::read_body(r, version)
@@ -118,7 +140,14 @@ impl PqfHeader {
         r.read_exact(&mut kem_ciphertext)?;
 
         let (nonce, original_size) = read_nonce_and_size(r)?;
-        Ok(PqfHeader { version, kem_variant, kem_ciphertext, nonce, original_size })
+        let chunk_size = if version == VERSION_V5 {
+            let mut cs = [0u8; 4];
+            r.read_exact(&mut cs)?;
+            u32::from_le_bytes(cs)
+        } else {
+            CHUNK_SIZE as u32
+        };
+        Ok(PqfHeader { version, kem_variant, kem_ciphertext, nonce, original_size, chunk_size })
     }
 }
 
@@ -184,6 +213,7 @@ impl PqfHeaderV4 {
 /// Returns the KEM ciphertext length for a given kem_variant, or UnsupportedKem.
 pub fn ct_len_for_variant(kem_variant: u16) -> Result<usize, PqfileError> {
     match kem_variant {
+        KEM_VARIANT_512 => Ok(KEM_CT_LEN_512),
         KEM_VARIANT => Ok(KEM_CT_LEN),
         KEM_VARIANT_1024 => Ok(KEM_CT_LEN_1024),
         KEM_VARIANT_HYBRID_768 => Ok(HYBRID_CT_LEN_768),
@@ -217,4 +247,30 @@ pub(crate) fn chunk_aad(counter: u32, is_last: bool) -> [u8; 11] {
     aad[6..10].copy_from_slice(&counter.to_be_bytes());
     aad[10] = is_last as u8;
     aad
+}
+
+/// Fills `buf` from `reader`, returning the number of bytes read.
+/// Reads until the buffer is full or EOF is reached.
+pub(crate) fn fill_chunk<R: Read + ?Sized>(reader: &mut R, buf: &mut [u8]) -> Result<usize, PqfileError> {
+    let mut total = 0;
+    while total < buf.len() {
+        match reader.read(&mut buf[total..])? {
+            0 => break,
+            n => total += n,
+        }
+    }
+    Ok(total)
+}
+
+/// Derives the 32-byte hybrid session key via HKDF-SHA256(IKM = x25519_ss || ml_ss).
+/// HKDF expand with a 32-byte output cannot fail, so the error arm is unreachable.
+pub(crate) fn hybrid_hkdf(x25519_ss: &[u8; 32], ml_ss: &[u8]) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    let mut ikm = Zeroizing::new(Vec::with_capacity(64));
+    ikm.extend_from_slice(x25519_ss);
+    ikm.extend_from_slice(ml_ss);
+    let hk = Hkdf::<Sha256>::new(None, &ikm);
+    let mut okm = Zeroizing::new([0u8; 32]);
+    hk.expand(b"pqfile-hybrid-v1", okm.as_mut())
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+    Ok(okm)
 }

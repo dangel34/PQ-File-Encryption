@@ -2,3 +2,13 @@
 members = ["pqfile", "pqfile-gui", "pqfile-desktop"]
 exclude = ["fuzz"]  # managed by cargo-fuzz, not the main workspace
 resolver = "2"
+
+[workspace.dependencies]
+# Internal crates
+pqfile     = { path = "pqfile",     version = "3.0.1" }
+pqfile-gui = { path = "pqfile-gui", version = "3.0.1" }
+
+# Shared external dependencies
+eframe    = { version = "0.34", features = ["default_fonts"] }
+getrandom = { version = "0.4" }
+tempfile  = { version = "3" }
