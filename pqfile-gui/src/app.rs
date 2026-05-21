@@ -31,6 +31,10 @@ pub struct PqfileApp {
     pub(crate) encrypt_files: Vec<MultiFileEntry>,
     pub(crate) encrypt_batch_pending: BatchPending,
     #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) encrypt_compress: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) encrypt_compress_level: i32,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) encrypt_job: Option<EncryptJobHandle>,
 
     pub(crate) decrypt_privkey: FileInput,
@@ -65,6 +69,10 @@ impl Default for PqfileApp {
             encrypt_recipients: Vec::new(),
             encrypt_files: Vec::new(),
             encrypt_batch_pending: Arc::new(Mutex::new(None)),
+            #[cfg(not(target_arch = "wasm32"))]
+            encrypt_compress: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            encrypt_compress_level: 3,
             #[cfg(not(target_arch = "wasm32"))]
             encrypt_job: None,
             decrypt_privkey: FileInput::default(),

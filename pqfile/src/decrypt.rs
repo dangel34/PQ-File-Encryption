@@ -16,10 +16,10 @@ use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 use crate::format::{
-    BASE_NONCE_LEN, CHUNK_SIZE, HYBRID_CT_LEN_768, HYBRID_SEED_LEN_768,
+    BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD, HYBRID_CT_LEN_768, HYBRID_SEED_LEN_768,
     KEM_CT_LEN, KEM_CT_LEN_512, KEM_CT_LEN_1024,
     KEM_VARIANT, KEM_VARIANT_512, KEM_VARIANT_1024, KEM_VARIANT_HYBRID_768, NONCE_LEN,
-    VERSION, VERSION_V3, VERSION_V4, VERSION_V5, PqfHeader, PqfHeaderV4, WRAPPED_KEY_LEN,
+    VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6, PqfHeader, PqfHeaderV4, WRAPPED_KEY_LEN,
     chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf,
 };
 use crate::keygen::{
@@ -131,6 +131,14 @@ pub fn decrypt_stream(
             let header = PqfHeaderV4::read_body(reader)?;
             decrypt_v4(&dk, header, reader, writer)
         }
+        VERSION_V6 => {
+            let header = PqfHeader::read_body(reader, VERSION_V6)?;
+            check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
+            let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
+            let key = Key::from_slice(ss_bytes.as_ref());
+            let cipher = ChaCha20Poly1305::new(key);
+            decrypt_v6(&cipher, &header, reader, writer)
+        }
         v => Err(PqfileError::UnsupportedVersion(v)),
     }
 }
@@ -175,6 +183,111 @@ fn unwrap_session_key(wrapped: &[u8; WRAPPED_KEY_LEN], ss: &[u8; 32]) -> Result<
     let mut key = Zeroizing::new([0u8; 32]);
     key.copy_from_slice(&plaintext);
     Ok(key)
+}
+
+fn decrypt_v6(
+    cipher: &ChaCha20Poly1305,
+    header: &PqfHeader,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let mut compressed = Vec::new();
+    decrypt_v3_chunks(cipher, &header.nonce, header.chunk_size as usize, reader, &mut compressed)?;
+
+    match header.compression_algo {
+        COMPRESSION_NONE => {
+            writer.write_all(&compressed)?;
+            Ok(())
+        }
+        COMPRESSION_ZSTD => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                zstd::stream::copy_decode(compressed.as_slice(), writer)
+                    .map_err(PqfileError::Io)
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = compressed;
+                Err(PqfileError::CompressionNotSupported)
+            }
+        }
+        _ => Err(PqfileError::CompressionNotSupported),
+    }
+}
+
+/// Initialises decryption state from a `.pqf` stream for use by `PqfReader`.
+///
+/// Returns `(version, kem_variant, original_size, chunk_size, cipher, nonce, v2_plaintext)`.
+/// For v2 files, `v2_plaintext` contains the fully-decrypted payload.
+/// For streaming formats, it is `None` and the caller must consume chunks from the reader.
+#[allow(dead_code)] // used by lib target (reader.rs) but not by the binary
+pub(crate) fn decapsulate_stream_init(
+    reader: &mut dyn Read,
+    privkey_pem: &str,
+    passphrase: Option<&str>,
+) -> Result<(u8, u16, u64, usize, ChaCha20Poly1305, [u8; NONCE_LEN], Option<Vec<u8>>), PqfileError> {
+    let dk = derive_dk(privkey_pem, passphrase)?;
+    let version = PqfHeader::read_magic_version(reader)?;
+
+    match version {
+        VERSION | VERSION_V3 | VERSION_V5 => {
+            let header = PqfHeader::read_body(reader, version)?;
+            check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
+            let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
+            let key = Key::from_slice(ss_bytes.as_ref());
+            let cipher = ChaCha20Poly1305::new(key);
+
+            if version == VERSION {
+                // Decrypt the whole v2 payload upfront.
+                let mut header_bytes = Vec::with_capacity(header.header_len());
+                header.write(&mut header_bytes).unwrap();
+                let mut payload = Vec::new();
+                reader.read_to_end(&mut payload)?;
+                if payload.len() < 16 {
+                    return Err(PqfileError::DecryptionFailure);
+                }
+                let nonce = Nonce::from_slice(&header.nonce);
+                let plaintext = cipher
+                    .decrypt(nonce, Payload { msg: &payload, aad: &header_bytes })
+                    .map_err(|_| PqfileError::DecryptionFailure)?;
+                Ok((version, header.kem_variant, header.original_size,
+                    header.chunk_size as usize, cipher, header.nonce, Some(plaintext)))
+            } else {
+                Ok((version, header.kem_variant, header.original_size,
+                    header.chunk_size as usize, cipher, header.nonce, None))
+            }
+        }
+        VERSION_V4 => {
+            let header = PqfHeaderV4::read_body(reader)?;
+            let dk_variant = dk.kem_variant();
+            let mut session_key: Option<Zeroizing<[u8; 32]>> = None;
+            for entry in &header.recipients {
+                if entry.kem_variant != dk_variant { continue; }
+                let ss = decapsulate_shared_secret(&dk, &entry.kem_ciphertext)?;
+                if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
+                    session_key = Some(k);
+                    break;
+                }
+            }
+            let session_key = session_key.ok_or(PqfileError::NoMatchingRecipient)?;
+            let key = Key::from_slice(session_key.as_ref());
+            let cipher = ChaCha20Poly1305::new(key);
+            Ok((VERSION_V4, dk_variant, header.original_size, CHUNK_SIZE, cipher, header.nonce, None))
+        }
+        VERSION_V6 => Err(PqfileError::CompressionNotSupported),
+        v => Err(PqfileError::UnsupportedVersion(v)),
+    }
+}
+
+/// Recovers the shared secret from a v3/v5 header for use during rekey.
+pub(crate) fn decapsulate_for_rekey(
+    privkey_pem: &str,
+    passphrase: Option<&str>,
+    header: &PqfHeader,
+) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    let dk = derive_dk(privkey_pem, passphrase)?;
+    check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
+    decapsulate_shared_secret(&dk, &header.kem_ciphertext)
 }
 
 fn check_kem_variant_match(key_variant: u16, file_variant: u16) -> Result<(), PqfileError> {
@@ -381,7 +494,7 @@ fn decapsulate_shared_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encrypt::{encrypt_bytes, encrypt_stream};
+    use crate::encrypt::{encrypt_bytes, encrypt_stream, encrypt_stream_compressed};
     use crate::format::{KEM_CT_LEN, KEM_VARIANT, MAGIC, NONCE_LEN, VERSION};
     use crate::keygen::keygen_bytes;
     use tempfile::tempdir;
@@ -624,10 +737,10 @@ mod tests {
     fn decrypt_stream_rejects_unknown_version() {
         let (_, priv_pem) = keygen_bytes(768, None).unwrap();
         let mut fake: Vec<u8> = b"PQFL".to_vec();
-        fake.push(0x06);
+        fake.push(0x07);
         let mut out = Vec::new();
         let result = decrypt_stream(&priv_pem, &mut fake.as_slice(), &mut out, None);
-        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x06))));
+        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x07))));
     }
 
     // ── ML-KEM-512 roundtrips ─────────────────────────────────────────────
@@ -692,6 +805,79 @@ mod tests {
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
         assert_eq!(dec_out, plaintext);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn v6_roundtrip_small() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext = b"compress-then-encrypt roundtrip";
+        let mut enc_out = Vec::new();
+        encrypt_stream_compressed(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 3, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+
+        // Header version byte should be v6.
+        let version_pos = crate::format::MAGIC.len();
+        assert_eq!(enc_out[version_pos], crate::format::VERSION_V6);
+
+        let mut dec_out = Vec::new();
+        decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
+        assert_eq!(dec_out, plaintext);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn v6_roundtrip_multi_chunk() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        // Repeated pattern compresses well.
+        let plaintext: Vec<u8> = (0u8..=63).cycle().take(CHUNK_SIZE * 2 + 17).collect();
+        let mut enc_out = Vec::new();
+        encrypt_stream_compressed(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 3, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+
+        let mut dec_out = Vec::new();
+        decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
+        assert_eq!(dec_out, plaintext);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn v6_compressed_ciphertext_smaller_than_v3_for_compressible_input() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        // Highly compressible: 256 KiB of zeros.
+        let plaintext = vec![0u8; 256 * 1024];
+
+        let mut v3_out = Vec::new();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut v3_out).unwrap();
+
+        let mut v6_out = Vec::new();
+        encrypt_stream_compressed(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 3, &mut plaintext.as_slice(), &mut v6_out).unwrap();
+
+        // Compressed ciphertext must be strictly smaller.
+        assert!(v6_out.len() < v3_out.len(), "v6 len {} should be < v3 len {}", v6_out.len(), v3_out.len());
+
+        // And must still decrypt correctly.
+        let mut dec_out = Vec::new();
+        decrypt_stream(&priv_pem, &mut v6_out.as_slice(), &mut dec_out, None).unwrap();
+        assert_eq!(dec_out, plaintext);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn v6_roundtrip_rejects_tampered_chunk() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext = b"v6 tamper test";
+        let mut enc_out = Vec::new();
+        encrypt_stream_compressed(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 1, &mut plaintext.as_slice(), &mut enc_out).unwrap();
+
+        // Flip a byte after the header.
+        let header_len = {
+            use crate::format::{HEADER_LEN, V5_CHUNK_SIZE_FIELD_LEN, V6_COMPRESSION_FIELD_LEN};
+            HEADER_LEN + V5_CHUNK_SIZE_FIELD_LEN + V6_COMPRESSION_FIELD_LEN
+        };
+        enc_out[header_len + 2] ^= 0xFF;
+
+        let mut dec_out = Vec::new();
+        let result = decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None);
+        assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
     }
 
     #[test]

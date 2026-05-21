@@ -4,6 +4,19 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [3.2.0] - 2026-05-21
+
+### Added
+
+- Key revocation: `pqfile revoke --key pubkey.pem --reason "..."` creates a `pubkey.pem.revoked` JSON sidecar containing the key fingerprint and reason. `pqfile encrypt` checks for a `.revoked` sidecar alongside each recipient public key and aborts with a clear error if one is found. The sidecar is a plain JSON file checked at encrypt time (not signed; signed revocation is a future roadmap item).
+- Compress-then-encrypt (`--compress`, `--compress-level`): `pqfile encrypt --compress -r pubkey.pem file` compresses plaintext with zstd before encryption, producing a v6 `.pqf` file. `--compress-level <1-19>` (default 3) trades speed for ratio. Decompression is automatic on decrypt. Only supported with a single recipient (incompatible with multi-recipient v4 format). Not available in WASM builds (zstd requires C FFI). New format constants: `VERSION_V6 = 0x06`, `COMPRESSION_NONE = 0x00`, `COMPRESSION_ZSTD = 0x01`.
+- Rekey without payload re-encryption: `pqfile rekey --key old_privkey.pem --recipient new_pubkey.pem -o out.pqf in.pqf` decapsulates the session key with the old private key, re-encapsulates it under the new public key, and rewrites only the header. Payload ciphertext bytes are streamed through unchanged. Produces a valid v4 `.pqf` file. Supported for v3 and v5 files with the default 64 KiB chunk size.
+- `PqfReader<R: Read>`: a streaming decryptor that wraps any `R: Read` source and implements `Read`, yielding decrypted plaintext bytes incrementally. Supports v2, v3, v4, and v5 files. Exposes a `.info()` method returning `PqfInfo` (version, KEM variant, original size, chunk size). Each AEAD chunk is verified before plaintext bytes are yielded; a tampered chunk returns an I/O error. Available as a public library type in `pqfile::reader`.
+- GUI compress checkbox (native only): an "compress before encrypting" checkbox on the Encrypt tab, enabled only when a single recipient is selected. A level slider (1–19) appears when compression is active.
+- cargo-vet exemptions for `zstd 0.13.3`, `zstd-safe 7.2.4`, and `zstd-sys 2.0.16+zstd.1.5.7`.
+
+---
+
 ## [3.1.0] - 2026-05-21
 
 ### Added

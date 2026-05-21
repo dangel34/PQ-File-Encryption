@@ -5,8 +5,8 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal crates
-pqfile     = { path = "pqfile",     version = "3.1.0" }
-pqfile-gui = { path = "pqfile-gui", version = "3.1.0" }
+pqfile     = { path = "pqfile",     version = "3.2.0" }
+pqfile-gui = { path = "pqfile-gui", version = "3.2.0" }
 
 # Shared external dependencies
 eframe    = { version = "0.34", features = ["default_fonts"] }
