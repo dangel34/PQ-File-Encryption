@@ -117,7 +117,7 @@ This document tracks planned improvements, new features, and security work acros
 - **Signcrypt (combined authenticate and encrypt)**
   A `pqfile signcrypt -k sign_privkey.pem -r pubkey.pem <file>` command that signs the plaintext under ML-DSA-65 and embeds the detached signature inside the encrypted payload. `pqfile signdecrypt -k privkey.pem -v sign_pubkey.pem <file.pqf>` decrypts and verifies in one step. Because the signature lives inside the AEAD-authenticated ciphertext it cannot be stripped or substituted after the fact. This prevents "surreptitious forwarding": a recipient cannot re-encrypt the plaintext to a third party while preserving the sender's signature, because re-encryption requires decryption first, which reveals that the sender signed only the original plaintext (not one addressed to a different recipient). Eliminates the need for a separate `.sig` file when the sender identity must be bound to the ciphertext.
 
-- **Key revocation**
+- **Key revocation** ✓ _released_
   A `pqfile revoke -k sign_privkey.pem pubkey.pem` command that produces a signed `pubkey.pem.revoked` PEM file containing the key fingerprint, a UTC revocation timestamp, and a free-text reason. `pqfile encrypt` can check for a `.revoked` sidecar file alongside the public key and refuse to encrypt if one is found, with a clear error message. Revocations are signed with the ML-DSA signing key so they cannot be forged or silently discarded without the signing key. Provides a lightweight revocation mechanism for deployments that cannot yet implement a full PKI.
 
 - **Hardware-backed private keys (TPM / PKCS#11)**
@@ -131,7 +131,7 @@ This document tracks planned improvements, new features, and security work acros
 - **Stable public Rust API with semver guarantees**
   Publish `pqfile` to crates.io with full semver stability. Expand the public API beyond `encrypt_bytes` / `decrypt_bytes` / `keygen_bytes` to expose typed key structs so downstream crates can work with keys without round-tripping through PEM.
 
-- **Streaming decryptor type implementing Read**
+- **Streaming decryptor type implementing Read** ✓ _released_
   Expose a `PqfReader<R: Read>` type that wraps a source reader and implements `Read`, yielding decrypted plaintext bytes incrementally. Library consumers can pipe the output directly into any `Read`-expecting API (a decompressor, CSV parser, database import stream, or network socket) without buffering the full plaintext in memory first. Each 64 KiB chunk is yielded only after its AEAD tag passes verification; a tampered chunk causes the `Read` call to return an error. This is the primary missing abstraction for embedding pqfile in larger Rust applications.
 
 - **Async I/O support**
@@ -140,10 +140,10 @@ This document tracks planned improvements, new features, and security work acros
 - **Encrypted archive (multi-file bundle)**
   A `pqfile archive -r pubkey.pem -o bundle.pqf [files...]` command that packs multiple files and directory trees into a single encrypted authenticated archive. Each entry stores the original relative path, file size, modification time, and Unix permissions in a per-entry header, all covered by the same AEAD authentication as the payload. `pqfile extract bundle.pqf -k privkey.pem [-o dir]` restores the original layout. Useful for sending a set of related files as a single auditable package. All authentication happens before any file is written to disk on extraction. The format is a v4 stream where the payload is a structured entry sequence rather than raw file bytes.
 
-- **Re-encryption without payload decryption (rekey)**
+- **Re-encryption without payload decryption (rekey)** ✓ _released_
   `pqfile rekey -k old_privkey.pem -r new_pubkey.pem file.pqf` decapsulates the session key using the old private key, re-encapsulates it under the new public key, and rewrites only the file header. The payload ciphertext bytes are streamed through unchanged. The resulting file is a valid `.pqf` decryptable only with the new private key. Useful for key rotation (replace a compromised or expired key without re-reading the plaintext), and for adding a recipient to an already-encrypted file when the original plaintext is no longer available.
 
-- **Compress-then-encrypt (zstd)**
+- **Compress-then-encrypt (zstd)** ✓ _released_
   An optional `--compress` flag on `pqfile encrypt`. Plaintext is compressed with zstd at the configured level before encryption, reducing ciphertext size for compressible inputs. The compression ratio and original uncompressed size are stored in an extended header field. Decompression happens automatically after AEAD verification on decrypt, before returning plaintext to the caller. This is safe for file encryption: unlike CRIME/BREACH attacks (which exploit a compression oracle over many adaptive requests), compression here is a one-shot transform applied before a fresh random AEAD per file. A `--compress-level` option (1 to 22) trades speed for ratio.
 
 - **C FFI bindings**

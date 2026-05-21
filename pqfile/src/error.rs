@@ -46,4 +46,10 @@ pub enum PqfileError {
 
     #[error("no matching recipient found in this file for the given private key")]
     NoMatchingRecipient,
+
+    #[error("key has been revoked (fingerprint: {fingerprint}): {reason}")]
+    KeyRevoked { fingerprint: String, reason: String },
+
+    #[error("compressed .pqf files (v6) are not supported in this build")]
+    CompressionNotSupported,
 }

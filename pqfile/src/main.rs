@@ -4,6 +4,8 @@ mod error;
 mod format;
 mod keygen;
 mod passphrase;
+mod rekey;
+mod revoke;
 mod sign;
 
 use std::io::{self, BufReader, BufWriter};
@@ -62,6 +64,12 @@ enum Command {
         /// Must be in the range 64..=268435456. Not supported with multiple recipients.
         #[arg(long, value_name = "BYTES", default_value_t = format::CHUNK_SIZE)]
         chunk_size: usize,
+        /// Compress plaintext with zstd before encrypting (produces v6 format). Not supported on WASM.
+        #[arg(long, default_value_t = false)]
+        compress: bool,
+        /// zstd compression level (1=fastest, 22=best). Only used with --compress.
+        #[arg(long, value_name = "LEVEL", default_value_t = 3)]
+        compress_level: i32,
     },
     Decrypt {
         #[arg(short = 'k', value_name = "PRIVKEY")]
@@ -118,6 +126,34 @@ enum Command {
         /// File whose signature is being verified.
         input: PathBuf,
     },
+    /// Mark a public key as revoked, creating a .revoked sidecar file.
+    ///
+    /// Any subsequent `encrypt` using that public key file path will fail.
+    Revoke {
+        /// Path to the public key file to revoke (pubkey.pem).
+        #[arg(short = 'k', value_name = "PUBKEY")]
+        key: PathBuf,
+        /// Human-readable reason for revocation.
+        #[arg(long, value_name = "TEXT", default_value = "")]
+        reason: String,
+    },
+    /// Rekey a v3/v5 encrypted file to a new recipient without re-encrypting the payload.
+    ///
+    /// Reads the file encrypted to the old key and produces a v4 file decryptable by the new key.
+    /// Only works for files using the default chunk size (65536 bytes).
+    Rekey {
+        /// Old private key used to decrypt the existing file.
+        #[arg(short = 'k', value_name = "PRIVKEY")]
+        key: PathBuf,
+        /// New recipient public key.
+        #[arg(short = 'r', value_name = "PUBKEY")]
+        recipient: PathBuf,
+        /// Encrypted .pqf file to rekey, or '-' to read from stdin.
+        input: String,
+        /// Output path for the rekeyed file, or '-' for stdout. Defaults to overwriting the input.
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: Option<String>,
+    },
 }
 
 fn main() {
@@ -137,8 +173,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
     let json = cli.json;
     match cli.command {
         Command::Keygen { out, force, passphrase, level, hybrid } => run_keygen(out, force, level, hybrid, passphrase, json),
-        Command::Encrypt { recipients, input, output, recursive, chunk_size } => {
-            run_encrypt(recipients, input, output, recursive, chunk_size, json)
+        Command::Encrypt { recipients, input, output, recursive, chunk_size, compress, compress_level } => {
+            run_encrypt(recipients, input, output, recursive, chunk_size, compress, compress_level, json)
         }
         Command::Decrypt { key, input, output } => run_decrypt(key, input, output, json),
         Command::Inspect { input } => inspect(input.as_path(), json),
@@ -149,6 +185,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
         Command::SignKeygen { out, force } => run_sign_keygen(out, force, json),
         Command::Sign { key, input, output } => run_sign(key, input, output, json),
         Command::Verify { key, sig, input } => run_verify(key, sig, input, json),
+        Command::Revoke { key, reason } => run_revoke(key, &reason, json),
+        Command::Rekey { key, recipient, input, output } => run_rekey(key, recipient, input, output, json),
     }
 }
 
@@ -175,6 +213,8 @@ fn run_encrypt(
     output: Option<String>,
     recursive: bool,
     chunk_size: usize,
+    compress: bool,
+    compress_level: i32,
     json: bool,
 ) -> Result<(), PqfileError> {
     if chunk_size == 0 || chunk_size > 268_435_456 {
@@ -183,8 +223,19 @@ fn run_encrypt(
             format!("--chunk-size must be between 1 and 268435456, got {chunk_size}"),
         )));
     }
+    if compress && compress_level < 1 || compress_level > 22 {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("--compress-level must be between 1 and 22, got {compress_level}"),
+        )));
+    }
+    // Check revocation for all recipient key files before encrypting.
     let pubkey_pems: Vec<String> = recipients.iter()
-        .map(|p| std::fs::read_to_string(p))
+        .map(|p| {
+            let pem = std::fs::read_to_string(p)?;
+            revoke::check_not_revoked(p, &pem)?;
+            Ok::<_, PqfileError>(pem)
+        })
         .collect::<Result<_, _>>()?;
     if recursive {
         if pubkey_pems.len() != 1 {
@@ -193,9 +244,9 @@ fn run_encrypt(
                 "--recursive supports only one recipient",
             )));
         }
-        run_encrypt_recursive(&pubkey_pems[0], &input, chunk_size, json)
+        run_encrypt_recursive(&pubkey_pems[0], &input, chunk_size, compress, compress_level, json)
     } else {
-        run_encrypt_single(&pubkey_pems, &input, output.as_deref(), chunk_size, json)
+        run_encrypt_single(&pubkey_pems, &input, output.as_deref(), chunk_size, compress, compress_level, json)
     }
 }
 
@@ -204,6 +255,8 @@ fn run_encrypt_single(
     input: &str,
     output: Option<&str>,
     chunk_size: usize,
+    compress: bool,
+    compress_level: i32,
     json: bool,
 ) -> Result<(), PqfileError> {
     let original_size: u64 = if input != "-" {
@@ -228,12 +281,25 @@ fn run_encrypt_single(
     let mut reader = open_reader(input)?;
     let mut writer = open_writer(to_stdout, &out_path)?;
     if pubkey_pems.len() == 1 {
-        encrypt::encrypt_stream(&pubkey_pems[0], original_size, chunk_size, &mut *reader, &mut *writer)?;
+        if compress {
+            encrypt::encrypt_stream_compressed(
+                &pubkey_pems[0], original_size, chunk_size, compress_level,
+                &mut *reader, &mut *writer,
+            )?;
+        } else {
+            encrypt::encrypt_stream(&pubkey_pems[0], original_size, chunk_size, &mut *reader, &mut *writer)?;
+        }
     } else {
         if chunk_size != format::CHUNK_SIZE {
             return Err(PqfileError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "--chunk-size is not supported with multiple recipients",
+            )));
+        }
+        if compress {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--compress is not supported with multiple recipients",
             )));
         }
         let refs: Vec<&str> = pubkey_pems.iter().map(|s| s.as_str()).collect();
@@ -248,7 +314,7 @@ fn run_encrypt_single(
     Ok(())
 }
 
-fn run_encrypt_recursive(pubkey_pem: &str, input: &str, chunk_size: usize, json: bool) -> Result<(), PqfileError> {
+fn run_encrypt_recursive(pubkey_pem: &str, input: &str, chunk_size: usize, compress: bool, compress_level: i32, json: bool) -> Result<(), PqfileError> {
     let dir = PathBuf::from(input);
     if !dir.is_dir() {
         return Err(PqfileError::Io(std::io::Error::new(
@@ -273,7 +339,11 @@ fn run_encrypt_recursive(pubkey_pem: &str, input: &str, chunk_size: usize, json:
         let result: Result<(), PqfileError> = (|| {
             let mut reader = BufReader::new(std::fs::File::open(file_path)?);
             let mut writer = BufWriter::new(std::fs::File::create(&out_path)?);
-            encrypt::encrypt_stream(pubkey_pem, size, chunk_size, &mut reader, &mut writer)
+            if compress {
+                encrypt::encrypt_stream_compressed(pubkey_pem, size, chunk_size, compress_level, &mut reader, &mut writer)
+            } else {
+                encrypt::encrypt_stream(pubkey_pem, size, chunk_size, &mut reader, &mut writer)
+            }
         })();
 
         let path_str = file_path.to_string_lossy();
@@ -418,11 +488,16 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
     let version = format::PqfHeader::read_magic_version(&mut reader)?;
 
     match version {
-        format::VERSION | format::VERSION_V3 | format::VERSION_V5 => {
+        format::VERSION | format::VERSION_V3 | format::VERSION_V5 | format::VERSION_V6 => {
             let header = format::PqfHeader::read_body(&mut reader, version)?;
             let nonce_hex: String = header.nonce.iter().map(|b| format!("{b:02x}")).collect();
             let variant_name = kem_variant_name(header.kem_variant);
-            let is_v5 = version == format::VERSION_V5;
+            let has_chunk_size = version == format::VERSION_V5 || version == format::VERSION_V6;
+            let compression_name = match header.compression_algo {
+                format::COMPRESSION_NONE => "none",
+                format::COMPRESSION_ZSTD => "zstd",
+                _ => "unknown",
+            };
             if json {
                 let mut fields = vec![
                     kv_str("status", "ok"),
@@ -433,8 +508,11 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                     kv_str("nonce", &nonce_hex),
                     kv_raw("original_size", &format!("{}", header.original_size)),
                 ];
-                if is_v5 {
+                if has_chunk_size {
                     fields.push(kv_raw("chunk_size", &format!("{}", header.chunk_size)));
+                }
+                if version == format::VERSION_V6 {
+                    fields.push(kv_str("compression", compression_name));
                 }
                 println!("{}", json_object(&fields));
             } else {
@@ -443,8 +521,11 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                 println!("KEM variant:        {} ({})", header.kem_variant, variant_name);
                 println!("Nonce:              {nonce_hex}");
                 println!("Original file size: {} bytes", header.original_size);
-                if is_v5 {
+                if has_chunk_size {
                     println!("Chunk size:         {} bytes", header.chunk_size);
+                }
+                if version == format::VERSION_V6 {
+                    println!("Compression:        {compression_name}");
                 }
             }
             Ok(())
@@ -528,6 +609,56 @@ fn run_verify(key: PathBuf, sig: PathBuf, input: PathBuf, json: bool) -> Result<
         ]));
     } else {
         println!("Signature is valid.");
+    }
+    Ok(())
+}
+
+fn run_revoke(key: PathBuf, reason: &str, json: bool) -> Result<(), PqfileError> {
+    let fp = revoke::revoke_key(&key, reason)?;
+    if json {
+        println!("{}", json_object(&[
+            kv_str("status", "ok"),
+            kv_str("fingerprint", &fp),
+            kv_str("revoked_path", &revoke::revoked_path_for(&key).to_string_lossy()),
+        ]));
+    } else {
+        println!("Key revoked: {fp}");
+        println!("Sidecar written to {}", revoke::revoked_path_for(&key).display());
+    }
+    Ok(())
+}
+
+fn run_rekey(key: PathBuf, recipient: PathBuf, input: String, output: Option<String>, json: bool) -> Result<(), PqfileError> {
+    let privkey_pem = std::fs::read_to_string(&key)?;
+    let pp = if keygen::is_encrypted_key(&privkey_pem) {
+        Some(prompt_passphrase("Enter passphrase for private key: ")?)
+    } else {
+        None
+    };
+    let pp_str = pp.as_deref().map(|z| z.as_str());
+
+    let pubkey_pem = std::fs::read_to_string(&recipient)?;
+    revoke::check_not_revoked(&recipient, &pubkey_pem)?;
+
+    let out = output.as_deref().unwrap_or("");
+    let to_stdout = out == "-" || (out.is_empty() && input == "-");
+
+    let out_path: PathBuf = if to_stdout {
+        PathBuf::new()
+    } else if out.is_empty() {
+        PathBuf::from(&input)
+    } else {
+        PathBuf::from(out)
+    };
+
+    let mut reader = open_reader(&input)?;
+    let mut writer = open_writer(to_stdout, &out_path)?;
+    rekey::rekey_stream(&privkey_pem, &pubkey_pem, pp_str, &mut *reader, &mut *writer)?;
+
+    if json {
+        let out_val = if to_stdout { "-" } else { &out_path.to_string_lossy() };
+        let target: &mut dyn io::Write = if to_stdout { &mut io::stderr() } else { &mut io::stdout() };
+        writeln!(target, "{}", json_object(&[kv_str("status", "ok"), kv_str("output", out_val)]))?;
     }
     Ok(())
 }

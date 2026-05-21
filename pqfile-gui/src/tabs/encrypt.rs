@@ -22,6 +22,8 @@ impl PqfileApp {
             use crate::types::EncryptJob;
 
             let confirm = self.settings.confirm_overwrite;
+            let compress = self.encrypt_compress;
+            let compress_level = self.encrypt_compress_level;
             let files: Vec<(usize, String, Vec<u8>, Option<PathBuf>)> = self
                 .encrypt_files
                 .iter()
@@ -51,7 +53,15 @@ impl PqfileApp {
                     let status = if pub_pems.len() == 1 {
                         let mut reader = Cursor::new(&data);
                         let mut out = Vec::new();
-                        match encrypt::encrypt_stream(&pub_pems[0], original_size, format::CHUNK_SIZE, &mut reader, &mut out) {
+                        let result = if compress {
+                            encrypt::encrypt_stream_compressed(
+                                &pub_pems[0], original_size, format::CHUNK_SIZE,
+                                compress_level, &mut reader, &mut out,
+                            )
+                        } else {
+                            encrypt::encrypt_stream(&pub_pems[0], original_size, format::CHUNK_SIZE, &mut reader, &mut out)
+                        };
+                        match result {
                             Ok(()) => save_result(&out_name, &out, out_path, confirm),
                             Err(e) => OpStatus::Err(e.to_string()),
                         }
@@ -299,6 +309,36 @@ impl PqfileApp {
             self.encrypt_files.remove(i);
         }
         ui.add_space(14.0);
+
+        // ── Compress option (native only, single recipient) ──────────────────
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let single_recipient = self.encrypt_recipients.len() == 1;
+            card(ui, c_card(dark), c_surface1(dark), |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_enabled(
+                        single_recipient,
+                        egui::Checkbox::new(&mut self.encrypt_compress, ""),
+                    );
+                    ui.label(
+                        RichText::new("Compress before encrypting (zstd, single recipient only)")
+                            .size(13.0)
+                            .color(if single_recipient { c_text(dark) } else { c_overlay(dark) }),
+                    );
+                    if single_recipient && self.encrypt_compress {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut self.encrypt_compress_level, 1..=19)
+                                    .text(""),
+                            )
+                            .on_hover_text("Compression level (1=fastest, 19=best)");
+                            ui.label(RichText::new("Level:").size(12.0).color(c_subtext(dark)));
+                        });
+                    }
+                });
+            });
+            ui.add_space(14.0);
+        }
 
         let n = self.encrypt_files.len();
         let ready = !self.encrypt_recipients.is_empty() && n > 0 && !job_running;

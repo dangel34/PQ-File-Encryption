@@ -13,6 +13,8 @@ pub const VERSION_V3: u8 = 0x03;
 pub const VERSION_V4: u8 = 0x04;
 /// Single-recipient streaming with configurable chunk size: same as v3 but appends CHUNK_SIZE(4) after ORIGINAL_SIZE.
 pub const VERSION_V5: u8 = 0x05;
+/// Compress-then-encrypt: same as v5 layout but appends COMPRESSION_ALGO(1) after CHUNK_SIZE.
+pub const VERSION_V6: u8 = 0x06;
 
 pub const KEM_VARIANT_512: u16 = 512;
 pub const KEM_VARIANT: u16 = 768;
@@ -66,6 +68,12 @@ pub const HEADER_LEN_1024: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_1024 + HEADER_
 pub const HEADER_LEN_HYBRID_768: usize = HEADER_PREFIX_LEN + HYBRID_CT_LEN_768 + HEADER_SUFFIX_LEN;
 /// Extra bytes added to any header when version is VERSION_V5 (the chunk_size u32 field).
 pub const V5_CHUNK_SIZE_FIELD_LEN: usize = 4;
+/// Extra byte added to VERSION_V6 headers for the compression algorithm identifier.
+pub const V6_COMPRESSION_FIELD_LEN: usize = 1;
+
+/// Compression algorithm identifiers used in v6 format.
+pub const COMPRESSION_NONE: u8 = 0x00;
+pub const COMPRESSION_ZSTD: u8 = 0x01;
 
 /// Chunk size for v3/v4 streaming encryption (64 KiB).
 pub const CHUNK_SIZE: usize = 65536;
@@ -84,15 +92,21 @@ pub struct PqfHeader {
     pub kem_ciphertext: Vec<u8>,
     pub nonce: [u8; NONCE_LEN],
     pub original_size: u64,
-    /// Chunk size for v3/v5 streaming. Stored on disk only in v5; v3 uses the CHUNK_SIZE constant.
+    /// Chunk size for v3/v5/v6 streaming. Stored on disk only in v5/v6; v3 uses CHUNK_SIZE.
     pub chunk_size: u32,
+    /// Compression algorithm for v6 format. Always COMPRESSION_NONE for v2/v3/v4/v5.
+    pub compression_algo: u8,
 }
 
 impl PqfHeader {
     /// Total byte length of this header when serialized.
     pub fn header_len(&self) -> usize {
         let base = HEADER_PREFIX_LEN + self.kem_ciphertext.len() + HEADER_SUFFIX_LEN;
-        if self.version == VERSION_V5 { base + V5_CHUNK_SIZE_FIELD_LEN } else { base }
+        match self.version {
+            v if v == VERSION_V5 => base + V5_CHUNK_SIZE_FIELD_LEN,
+            v if v == VERSION_V6 => base + V5_CHUNK_SIZE_FIELD_LEN + V6_COMPRESSION_FIELD_LEN,
+            _ => base,
+        }
     }
 
     pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
@@ -102,15 +116,18 @@ impl PqfHeader {
         w.write_all(&self.kem_ciphertext)?;
         w.write_all(&self.nonce)?;
         w.write_all(&self.original_size.to_le_bytes())?;
-        if self.version == VERSION_V5 {
+        if self.version == VERSION_V5 || self.version == VERSION_V6 {
             w.write_all(&self.chunk_size.to_le_bytes())?;
+        }
+        if self.version == VERSION_V6 {
+            w.write_all(&[self.compression_algo])?;
         }
         Ok(())
     }
 
     pub fn read<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
         let version = Self::read_magic_version(r)?;
-        if version != VERSION && version != VERSION_V3 && version != VERSION_V5 {
+        if version != VERSION && version != VERSION_V3 && version != VERSION_V5 && version != VERSION_V6 {
             return Err(PqfileError::UnsupportedVersion(version));
         }
         Self::read_body(r, version)
@@ -140,14 +157,20 @@ impl PqfHeader {
         r.read_exact(&mut kem_ciphertext)?;
 
         let (nonce, original_size) = read_nonce_and_size(r)?;
-        let chunk_size = if version == VERSION_V5 {
+        let (chunk_size, compression_algo) = if version == VERSION_V5 {
             let mut cs = [0u8; 4];
             r.read_exact(&mut cs)?;
-            u32::from_le_bytes(cs)
+            (u32::from_le_bytes(cs), COMPRESSION_NONE)
+        } else if version == VERSION_V6 {
+            let mut cs = [0u8; 4];
+            r.read_exact(&mut cs)?;
+            let mut algo = [0u8; 1];
+            r.read_exact(&mut algo)?;
+            (u32::from_le_bytes(cs), algo[0])
         } else {
-            CHUNK_SIZE as u32
+            (CHUNK_SIZE as u32, COMPRESSION_NONE)
         };
-        Ok(PqfHeader { version, kem_variant, kem_ciphertext, nonce, original_size, chunk_size })
+        Ok(PqfHeader { version, kem_variant, kem_ciphertext, nonce, original_size, chunk_size, compression_algo })
     }
 }
 
