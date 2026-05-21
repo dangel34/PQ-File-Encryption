@@ -1,6 +1,6 @@
 # pqfile - Quick Start
 
-Get up and running in a few minutes. For full reference documentation see [README.md](README.md).
+Get up and running in a few minutes. For full reference documentation see [README.md](../README.md).
 
 ---
 
