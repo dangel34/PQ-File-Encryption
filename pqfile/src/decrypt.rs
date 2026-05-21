@@ -599,4 +599,15 @@ mod tests {
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, Some("1024-pass")).unwrap();
         assert_eq!(dec_out, plaintext.as_slice());
     }
+
+    #[test]
+    fn decrypt_stream_rejects_unknown_version() {
+        let (_, priv_pem) = keygen_bytes(768, None).unwrap();
+        // Craft a header with version byte 0x05 (not v2/v3/v4).
+        let mut fake: Vec<u8> = b"PQFL".to_vec();
+        fake.push(0x05);
+        let mut out = Vec::new();
+        let result = decrypt_stream(&priv_pem, &mut fake.as_slice(), &mut out, None);
+        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x05))));
+    }
 }

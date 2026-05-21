@@ -190,4 +190,39 @@ mod tests {
             Err(PqfileError::InvalidKeyLength { .. })
         ));
     }
+
+    #[test]
+    fn hybrid_roundtrip_correct_passphrase() {
+        let seed = [0x77u8; HYBRID_SEED_LEN];
+        let body = encrypt_hybrid_seed(&seed, "hybrid-pass").unwrap();
+        assert_eq!(body.len(), ENCRYPTED_HYBRID_BODY_LEN);
+        let recovered = decrypt_hybrid_seed(&body, "hybrid-pass").unwrap();
+        assert_eq!(*recovered, seed);
+    }
+
+    #[test]
+    fn hybrid_wrong_passphrase_returns_error() {
+        let seed = [0xABu8; HYBRID_SEED_LEN];
+        let body = encrypt_hybrid_seed(&seed, "correct").unwrap();
+        assert!(matches!(
+            decrypt_hybrid_seed(&body, "wrong"),
+            Err(PqfileError::WrongPassphrase)
+        ));
+    }
+
+    #[test]
+    fn hybrid_wrong_body_length_returns_error() {
+        assert!(matches!(
+            decrypt_hybrid_seed(&[0u8; 10], "pass"),
+            Err(PqfileError::InvalidKeyLength { .. })
+        ));
+    }
+
+    #[test]
+    fn hybrid_different_encryptions_produce_different_bodies() {
+        let seed = [0x55u8; HYBRID_SEED_LEN];
+        let a = encrypt_hybrid_seed(&seed, "pass").unwrap();
+        let b = encrypt_hybrid_seed(&seed, "pass").unwrap();
+        assert_ne!(a, b);
+    }
 }

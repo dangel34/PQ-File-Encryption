@@ -285,4 +285,72 @@ mod tests {
         let p2 = Path::new("file");
         assert_eq!(default_sig_path(p2), PathBuf::from("file.sig"));
     }
+
+    #[test]
+    fn sign_bytes_wrong_pem_tag_returns_error() {
+        let wrong_pem = pem::encode(&Pem::new("WRONG TAG", vec![0u8; SK_SEED_LEN]));
+        assert!(matches!(sign_bytes(&wrong_pem, b"data"), Err(PqfileError::InvalidPem(_))));
+    }
+
+    #[test]
+    fn sign_bytes_wrong_seed_length_returns_error() {
+        let wrong_pem = pem::encode(&Pem::new(SK_TAG, vec![0u8; 16]));
+        assert!(matches!(
+            sign_bytes(&wrong_pem, b"data"),
+            Err(PqfileError::InvalidKeyLength { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_bytes_wrong_vk_pem_tag_returns_error() {
+        let r = sign_keygen_bytes().unwrap();
+        let msg = b"hello";
+        let sig = sign_bytes(&r.sk_pem, msg).unwrap();
+        let wrong_pem = pem::encode(&Pem::new("WRONG TAG", vec![0u8; VK_LEN]));
+        assert!(matches!(verify_bytes(&wrong_pem, msg, &sig), Err(PqfileError::InvalidPem(_))));
+    }
+
+    #[test]
+    fn verify_bytes_wrong_vk_length_returns_error() {
+        let r = sign_keygen_bytes().unwrap();
+        let msg = b"hello";
+        let sig = sign_bytes(&r.sk_pem, msg).unwrap();
+        let wrong_pem = pem::encode(&Pem::new(VK_TAG, vec![0u8; 16]));
+        assert!(matches!(
+            verify_bytes(&wrong_pem, msg, &sig),
+            Err(PqfileError::InvalidKeyLength { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_bytes_wrong_sig_length_returns_error() {
+        let r = sign_keygen_bytes().unwrap();
+        let short_sig = vec![0u8; 16];
+        assert!(matches!(
+            verify_bytes(&r.vk_pem, b"data", &short_sig),
+            Err(PqfileError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn verify_file_wrong_sig_pem_tag_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = sign_keygen_bytes().unwrap();
+        let input = dir.path().join("data.txt");
+        fs::write(&input, b"payload").unwrap();
+        let sig_path = dir.path().join("data.txt.sig");
+        let wrong_sig_pem = pem::encode(&Pem::new("WRONG TAG", vec![0u8; SIG_LEN]));
+        fs::write(&sig_path, wrong_sig_pem).unwrap();
+        assert!(matches!(verify_file(&r.vk_pem, &input, &sig_path), Err(PqfileError::InvalidPem(_))));
+    }
+
+    #[test]
+    fn sign_keygen_blocks_when_only_privkey_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("sign_privkey.pem"), b"dummy").unwrap();
+        assert!(matches!(
+            sign_keygen(dir.path(), false),
+            Err(PqfileError::OutputExists(_))
+        ));
+    }
 }

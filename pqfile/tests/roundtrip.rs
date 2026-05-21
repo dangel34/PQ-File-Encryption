@@ -879,7 +879,7 @@ fn roundtrip_hybrid_with_passphrase() {
     assert!(status.success(), "hybrid keygen failed");
 
     let pubkey = dir.join("pubkey.pem");
-    let mut enc_cmd = std::process::Command::new(bin())
+    let enc_cmd = std::process::Command::new(bin())
         .args(["encrypt", "-r", pubkey.to_str().unwrap(), input.to_str().unwrap()])
         .status()
         .unwrap();
