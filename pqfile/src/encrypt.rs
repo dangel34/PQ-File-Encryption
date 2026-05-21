@@ -56,6 +56,7 @@ pub fn encrypt(
 
 /// Encrypts `plaintext` in a single pass (v2 format). Kept for library consumers
 /// and backward-compatibility tests; new code should use [`encrypt_stream`].
+#[must_use = "encryption result must be used"]
 pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, PqfileError> {
     let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
 
@@ -97,6 +98,7 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
 ///
 /// `original_size` is written into the header for informational purposes (pass 0
 /// when unknown, e.g. when reading from stdin).
+#[must_use = "encryption result must be used"]
 pub fn encrypt_stream(
     pubkey_pem: &str,
     original_size: u64,
@@ -126,7 +128,8 @@ pub fn encrypt_stream(
     };
     header.write(writer)?;
 
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into().unwrap();
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = Key::from_slice(ss_bytes.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
 
@@ -251,6 +254,7 @@ fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>), PqfileEr
 /// Each recipient's public key is used to encapsulate a fresh shared secret that wraps
 /// a single random 32-byte session key K under AES-256-GCM. Any holder of a matching
 /// private key can recover K and decrypt the file.
+#[must_use = "encryption result must be used"]
 pub fn encrypt_stream_multi(
     pubkey_pems: &[&str],
     original_size: u64,
@@ -275,7 +279,8 @@ pub fn encrypt_stream_multi(
     let header = PqfHeaderV4 { recipients, nonce: nonce_bytes, original_size };
     header.write(writer)?;
 
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into().unwrap();
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
 
@@ -310,7 +315,12 @@ pub fn encrypt_stream_multi(
 }
 
 /// Wraps `session_key` under `ss` using AES-256-GCM with a zero nonce.
-/// The zero nonce is safe because `ss` is a fresh random KEM shared secret per encryption.
+///
+/// A fixed zero nonce is safe here because the AES-256-GCM key (`ss`) is a
+/// fresh, single-use KEM shared secret — it is never reused across calls.
+/// Nonce uniqueness is guaranteed per-key, not per-nonce, so a constant nonce
+/// with a unique key is cryptographically equivalent to a random nonce with a
+/// fixed key. See §5.1 of RFC 5116 for the formal nonce-uniqueness requirement.
 fn wrap_session_key(session_key: &[u8; 32], ss: &[u8; 32]) -> Result<[u8; WRAPPED_KEY_LEN], PqfileError> {
     let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(ss));
     let nonce = AesNonce::from([0u8; 12]);

@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use zeroize::Zeroizing;
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
 use crate::colors::{c_accent, c_bg, c_card, c_chrome, c_overlay, c_subtext, c_surface0, c_surface1, c_text};
 use crate::theme::apply_theme;
@@ -18,8 +19,8 @@ pub struct PqfileApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keygen_dir: String,
-    pub(crate) keygen_passphrase: String,
-    pub(crate) keygen_passphrase_confirm: String,
+    pub(crate) keygen_passphrase: Zeroizing<String>,
+    pub(crate) keygen_passphrase_confirm: Zeroizing<String>,
     pub(crate) keygen_use_passphrase: bool,
     pub(crate) keygen_algorithm: KeygenAlgorithm,
     pub(crate) keygen_status: OpStatus,
@@ -34,7 +35,7 @@ pub struct PqfileApp {
 
     pub(crate) decrypt_privkey: FileInput,
     pub(crate) decrypt_pqf: FileInput,
-    pub(crate) decrypt_passphrase: String,
+    pub(crate) decrypt_passphrase: Zeroizing<String>,
     pub(crate) decrypt_status: OpStatus,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) decrypt_job: Option<DecryptJobHandle>,
@@ -55,8 +56,8 @@ impl Default for PqfileApp {
             settings: Settings::default(),
             #[cfg(not(target_arch = "wasm32"))]
             keygen_dir: String::new(),
-            keygen_passphrase: String::new(),
-            keygen_passphrase_confirm: String::new(),
+            keygen_passphrase: Zeroizing::new(String::new()),
+            keygen_passphrase_confirm: Zeroizing::new(String::new()),
             keygen_use_passphrase: false,
             keygen_algorithm: KeygenAlgorithm::default(),
             keygen_status: OpStatus::None,
@@ -68,7 +69,7 @@ impl Default for PqfileApp {
             encrypt_job: None,
             decrypt_privkey: FileInput::default(),
             decrypt_pqf: FileInput::default(),
-            decrypt_passphrase: String::new(),
+            decrypt_passphrase: Zeroizing::new(String::new()),
             decrypt_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
             decrypt_job: None,

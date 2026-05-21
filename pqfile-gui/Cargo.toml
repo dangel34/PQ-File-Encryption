@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 pqfile = { workspace = true }
 eframe = { workspace = true }
 rfd = "0.17"
+zeroize = "1"
 
 [dev-dependencies]
 tempfile = { workspace = true }

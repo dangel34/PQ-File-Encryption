@@ -23,7 +23,7 @@ impl PqfileApp {
         let passphrase: Option<String> = if self.decrypt_passphrase.is_empty() {
             None
         } else {
-            Some(self.decrypt_passphrase.clone())
+            Some((*self.decrypt_passphrase).clone())
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -115,7 +115,7 @@ impl PqfileApp {
             section_label(ui, "PASSPHRASE", dark);
             card(ui, c_card(dark), c_surface1(dark), |ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.decrypt_passphrase)
+                    egui::TextEdit::singleline(&mut *self.decrypt_passphrase)
                         .hint_text("Enter passphrase for private key…")
                         .password(true)
                         .desired_width(f32::INFINITY),

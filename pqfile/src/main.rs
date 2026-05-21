@@ -418,12 +418,13 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
     let version = format::PqfHeader::read_magic_version(&mut reader)?;
 
     match version {
-        format::VERSION | format::VERSION_V3 => {
+        format::VERSION | format::VERSION_V3 | format::VERSION_V5 => {
             let header = format::PqfHeader::read_body(&mut reader, version)?;
             let nonce_hex: String = header.nonce.iter().map(|b| format!("{b:02x}")).collect();
             let variant_name = kem_variant_name(header.kem_variant);
+            let is_v5 = version == format::VERSION_V5;
             if json {
-                println!("{}", json_object(&[
+                let mut fields = vec![
                     kv_str("status", "ok"),
                     kv_str("magic", "PQFL"),
                     kv_str("version", &format!("{:#04x}", header.version)),
@@ -431,13 +432,20 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                     kv_str("kem_variant_name", variant_name),
                     kv_str("nonce", &nonce_hex),
                     kv_raw("original_size", &format!("{}", header.original_size)),
-                ]));
+                ];
+                if is_v5 {
+                    fields.push(kv_raw("chunk_size", &format!("{}", header.chunk_size)));
+                }
+                println!("{}", json_object(&fields));
             } else {
                 println!("Magic:              PQFL");
                 println!("Version:            {:#04x}", header.version);
                 println!("KEM variant:        {} ({})", header.kem_variant, variant_name);
                 println!("Nonce:              {nonce_hex}");
                 println!("Original file size: {} bytes", header.original_size);
+                if is_v5 {
+                    println!("Chunk size:         {} bytes", header.chunk_size);
+                }
             }
             Ok(())
         }

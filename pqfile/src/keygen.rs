@@ -32,6 +32,7 @@ pub const PRIV_ENC_TAG_HYBRID_768: &str = "X25519+ML-KEM-768 ENCRYPTED PRIVATE K
 /// Returns the SHA3-256 fingerprint of the public key (first 8 bytes, colon-separated hex).
 /// Errors with `OutputExists` if either key file already exists and `force` is false.
 /// If `passphrase` is `Some`, the private key is encrypted before writing.
+#[must_use = "keygen result must be used"]
 pub fn keygen(out_dir: &Path, force: bool, level: u16, passphrase: Option<&str>, hybrid: bool) -> Result<String, PqfileError> {
     if !force {
         for name in ["pubkey.pem", "privkey.pem"] {
@@ -61,6 +62,7 @@ pub fn keygen(out_dir: &Path, force: bool, level: u16, passphrase: Option<&str>,
 /// Generates a key pair and returns the PEM strings.
 /// `level` must be 512, 768, or 1024.
 /// If `passphrase` is `Some`, the private key PEM uses the encrypted tag.
+#[must_use = "keygen result must be used"]
 pub fn keygen_bytes(level: u16, passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
     match level {
         KEM_VARIANT_512 => keygen_bytes_512(passphrase),
@@ -97,6 +99,7 @@ fn keygen_bytes_1024(passphrase: Option<&str>) -> Result<(String, String), Pqfil
 /// Generates a Hybrid X25519+ML-KEM-768 key pair and returns PEM strings.
 /// Public key body: X25519 pubkey (32) || ML-KEM-768 EK (1184) = 1216 bytes.
 /// Private key body: X25519 scalar (32) || ML-KEM-768 seed (64) = 96 bytes.
+#[must_use = "keygen result must be used"]
 pub fn keygen_bytes_hybrid_768(passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
     // Generate X25519 key pair.
     let mut x25519_scalar_bytes = Zeroizing::new([0u8; 32]);
