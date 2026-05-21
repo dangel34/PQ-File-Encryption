@@ -10,7 +10,7 @@ pub use app::PqfileApp;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-pub(crate) const APP_VERSION: &str = "2.0.5";
+pub(crate) const APP_VERSION: &str = "3.0.0";
 
 // ── WASM entry ────────────────────────────────────────────────────────────
 
@@ -52,6 +52,30 @@ mod tests {
     use crate::types::{FileInput, MultiFileEntry, OpStatus, Settings, Tab};
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use eframe::egui;
+
+    fn test_ctx() -> egui::Context {
+        egui::Context::default()
+    }
+
+    /// Spin-wait until all background encrypt/decrypt jobs have completed and
+    /// their results have been drained back into app state.
+    fn flush_jobs(app: &mut PqfileApp) {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            app.poll_files();
+            let done = {
+                #[cfg(not(target_arch = "wasm32"))]
+                { app.encrypt_job.is_none() && app.decrypt_job.is_none() }
+                #[cfg(target_arch = "wasm32")]
+                { true }
+            };
+            if done { break; }
+            assert!(Instant::now() < deadline, "background job timed out in test");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     fn loaded_input(name: &str, data: Vec<u8>, path: Option<PathBuf>) -> FileInput {
         FileInput { name: name.to_owned(), data: Some(data), path, pending: Default::default() }
@@ -112,14 +136,14 @@ mod tests {
     fn encrypt_all_no_pubkey_is_noop() {
         let mut app = PqfileApp::default();
         app.encrypt_files.push(file_entry("test.txt", b"hello".to_vec(), None));
-        app.handle_encrypt_all(); // no pubkey loaded — should return early without panicking
+        app.handle_encrypt_all(&test_ctx()); // no pubkey loaded — should return early without panicking
         assert!(matches!(app.encrypt_files[0].status, OpStatus::None), "status should remain None");
     }
 
     #[test]
     fn decrypt_missing_inputs_sets_error() {
         let mut app = PqfileApp::default();
-        app.handle_decrypt();
+        app.handle_decrypt(&test_ctx());
         assert!(matches!(app.decrypt_status, OpStatus::Err(_)));
     }
 
@@ -128,7 +152,9 @@ mod tests {
         let mut app = PqfileApp::default();
         app.encrypt_pubkey = loaded_input("bad.pem", b"not a valid key".to_vec(), None);
         app.encrypt_files.push(file_entry("test.txt", b"hello".to_vec(), None));
-        app.handle_encrypt_all();
+        app.poll_files(); // promote staging slot to recipients list
+        app.handle_encrypt_all(&test_ctx());
+        flush_jobs(&mut app);
         assert!(matches!(app.encrypt_files[0].status, OpStatus::Err(_)));
     }
 
@@ -137,14 +163,15 @@ mod tests {
         let mut app = PqfileApp::default();
         app.decrypt_privkey = loaded_input("bad.pem", b"not a valid key".to_vec(), None);
         app.decrypt_pqf = loaded_input("test.pqf", b"garbage".to_vec(), None);
-        app.handle_decrypt();
+        app.handle_decrypt(&test_ctx());
+        flush_jobs(&mut app);
         assert!(matches!(app.decrypt_status, OpStatus::Err(_)));
     }
 
     #[test]
     fn encrypt_decrypt_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
-        let (pub_pem, priv_pem) = pqfile::keygen::keygen_bytes(None).unwrap();
+        let (pub_pem, priv_pem) = pqfile::keygen::keygen_bytes(768, None).unwrap();
         let plaintext = b"roundtrip test data".to_vec();
 
         // Encrypt
@@ -154,7 +181,9 @@ mod tests {
         let mut app = PqfileApp::default();
         app.encrypt_pubkey = loaded_input("pubkey.pem", pub_pem.as_bytes().to_vec(), None);
         app.encrypt_files.push(file_entry("input.txt", plaintext.clone(), Some(plain_path)));
-        app.handle_encrypt_all();
+        app.poll_files(); // promote staging slot to recipients list
+        app.handle_encrypt_all(&test_ctx());
+        flush_jobs(&mut app);
         assert!(matches!(app.encrypt_files[0].status, OpStatus::Ok(_)), "encryption failed");
 
         // Decrypt
@@ -163,7 +192,8 @@ mod tests {
 
         app.decrypt_privkey = loaded_input("privkey.pem", priv_pem.as_bytes().to_vec(), None);
         app.decrypt_pqf = loaded_input("input.txt.pqf", pqf_data, Some(pqf_path));
-        app.handle_decrypt();
+        app.handle_decrypt(&test_ctx());
+        flush_jobs(&mut app);
         assert!(matches!(app.decrypt_status, OpStatus::Ok(_)), "decryption failed");
 
         let decrypted = std::fs::read(tmp.path().join("input.txt")).unwrap();
@@ -173,7 +203,7 @@ mod tests {
     #[test]
     fn encrypt_all_multi_file_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
-        let (pub_pem, _) = pqfile::keygen::keygen_bytes(None).unwrap();
+        let (pub_pem, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
 
         let mut app = PqfileApp::default();
         app.encrypt_pubkey = loaded_input("pubkey.pem", pub_pem.as_bytes().to_vec(), None);
@@ -184,7 +214,9 @@ mod tests {
             app.encrypt_files.push(file_entry(name, name.as_bytes().to_vec(), Some(path)));
         }
 
-        app.handle_encrypt_all();
+        app.poll_files(); // promote staging slot to recipients list
+        app.handle_encrypt_all(&test_ctx());
+        flush_jobs(&mut app);
 
         for entry in &app.encrypt_files {
             assert!(

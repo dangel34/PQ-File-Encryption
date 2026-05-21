@@ -4,3 +4,4 @@ pub mod error;
 pub mod format;
 pub mod keygen;
 pub mod passphrase;
+pub mod sign;

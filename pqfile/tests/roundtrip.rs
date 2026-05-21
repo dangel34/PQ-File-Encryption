@@ -150,7 +150,7 @@ fn inspect_shows_header_fields() {
     assert!(output.status.success(), "inspect failed");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("PQFL"), "missing magic");
-    assert!(stdout.contains("0x02"), "missing version");
+    assert!(stdout.contains("0x03"), "missing version");
     assert!(stdout.contains("768"), "missing KEM variant");
     assert!(stdout.contains("Original file size"), "missing size field");
     assert!(stdout.contains("20 bytes"), "wrong original size");
@@ -332,5 +332,1023 @@ fn completions_all_shells_cover_subcommands() {
                 "shell {shell}: completion output missing subcommand '{sub}'"
             );
         }
+    }
+}
+
+// ── Streaming encryption (v3 format) ──────────────────────────────────────
+
+#[test]
+fn roundtrip_large_file_streaming() {
+    // 3 full 64 KiB chunks + a partial last chunk to exercise multi-chunk paths.
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let chunk_size: usize = 65536;
+    let payload_size = chunk_size * 3 + 1234;
+    let original: Vec<u8> = (0..=255u8).cycle().take(payload_size).collect();
+
+    let input = dir.join("large.bin");
+    fs::write(&input, &original).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    let pubkey = dir.join("pubkey.pem");
+    let pqf = dir.join("large.bin.pqf");
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", pubkey.to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt of large file failed");
+    assert!(pqf.exists(), ".pqf not created");
+
+    let privkey = dir.join("privkey.pem");
+    let recovered = dir.join("large.bin.recovered");
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k", privkey.to_str().unwrap(),
+            pqf.to_str().unwrap(),
+            "-o", recovered.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "decrypt of large file failed");
+    assert_eq!(fs::read(&recovered).unwrap(), original, "large file roundtrip mismatch");
+}
+
+#[test]
+fn inspect_large_file_shows_v3_version() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("data.bin");
+    fs::write(&input, vec![0u8; 100]).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", dir.join("pubkey.pem").to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = std::process::Command::new(bin())
+        .args(["inspect", dir.join("data.bin.pqf").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("0x03"), "expected v3 version in inspect output");
+}
+
+// ── Recursive encryption ───────────────────────────────────────────────────
+
+#[test]
+fn recursive_encrypts_all_files_in_tree() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    // Keygen.
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    // Create a small directory tree.
+    let sub = dir.join("subdir");
+    fs::create_dir(&sub).unwrap();
+    fs::write(dir.join("a.txt"), b"file a").unwrap();
+    fs::write(dir.join("b.txt"), b"file b").unwrap();
+    fs::write(sub.join("c.txt"), b"file c").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r", dir.join("pubkey.pem").to_str().unwrap(),
+            "--recursive",
+            dir.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "recursive encrypt failed");
+
+    // All three source files should have a .pqf counterpart.
+    assert!(dir.join("a.txt.pqf").exists(), "a.txt.pqf missing");
+    assert!(dir.join("b.txt.pqf").exists(), "b.txt.pqf missing");
+    assert!(sub.join("c.txt.pqf").exists(), "c.txt.pqf missing");
+
+    // Verify one of them decrypts correctly.
+    let privkey = dir.join("privkey.pem");
+    let recovered = dir.join("a.recovered");
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k", privkey.to_str().unwrap(),
+            dir.join("a.txt.pqf").to_str().unwrap(),
+            "-o", recovered.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "decrypt after recursive encrypt failed");
+    assert_eq!(fs::read(&recovered).unwrap(), b"file a");
+}
+
+#[test]
+fn recursive_skips_existing_pqf_files() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    fs::write(dir.join("data.txt"), b"payload").unwrap();
+    // Existing .pqf file should not be re-encrypted by --recursive.
+    fs::write(dir.join("already.pqf"), b"pre-existing").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r", dir.join("pubkey.pem").to_str().unwrap(),
+            "--recursive",
+            dir.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "recursive encrypt failed");
+
+    // The pre-existing .pqf was not re-encrypted (no .pqf.pqf created).
+    assert!(!dir.join("already.pqf.pqf").exists(), ".pqf files should be skipped");
+    // The regular file was encrypted.
+    assert!(dir.join("data.txt.pqf").exists(), "data.txt.pqf should exist");
+}
+
+#[test]
+fn recursive_fails_on_non_directory() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let file = dir.join("plain.txt");
+    fs::write(&file, b"not a dir").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r", dir.join("pubkey.pem").to_str().unwrap(),
+            "--recursive",
+            file.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "recursive on a file should fail");
+}
+
+// ── ML-KEM-1024 roundtrip ─────────────────────────────────────────────────
+
+#[test]
+fn roundtrip_1024() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let original = b"ML-KEM-1024 end-to-end roundtrip payload";
+    let input = dir.join("secret.txt");
+    fs::write(&input, original).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap(), "--level", "1024"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen --level 1024 failed");
+
+    let pubkey = dir.join("pubkey.pem");
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", pubkey.to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt with 1024 key failed");
+
+    let pqf = dir.join("secret.txt.pqf");
+    assert!(pqf.exists(), ".pqf output not found");
+
+    // inspect should report KEM variant 1024
+    let output = std::process::Command::new(bin())
+        .args(["inspect", pqf.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "inspect failed");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("1024"), "inspect should show KEM variant 1024");
+
+    let privkey = dir.join("privkey.pem");
+    let status = std::process::Command::new(bin())
+        .args(["decrypt", "-k", privkey.to_str().unwrap(), pqf.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "decrypt with 1024 key failed");
+
+    let got = fs::read(dir.join("secret.txt")).unwrap();
+    assert_eq!(got, original, "1024 decrypted bytes do not match original");
+}
+
+#[test]
+fn roundtrip_1024_json_inspect() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("data.txt");
+    fs::write(&input, b"1024 json inspect test").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap(), "--level", "1024"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", dir.join("pubkey.pem").to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = std::process::Command::new(bin())
+        .args(["--json", "inspect", dir.join("data.txt.pqf").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("not valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["kem_variant"], 1024);
+}
+
+#[test]
+fn decrypt_1024_key_on_768_file_fails() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("data.txt");
+    fs::write(&input, b"mismatch test").unwrap();
+
+    // Generate a 768 key pair and encrypt.
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", dir.join("pubkey.pem").to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    // Generate a 1024 private key and try to decrypt the 768-encrypted file.
+    let keys_1024 = dir.join("keys_1024");
+    fs::create_dir(&keys_1024).unwrap();
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", keys_1024.to_str().unwrap(), "--level", "1024"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k", keys_1024.join("privkey.pem").to_str().unwrap(),
+            dir.join("data.txt.pqf").to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "decrypting 768 file with 1024 key should fail");
+}
+
+// ── JSON output (--json flag) ──────────────────────────────────────────────
+
+#[test]
+fn json_keygen_output() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let output = std::process::Command::new(bin())
+        .args(["--json", "keygen", "--out", dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "keygen --json failed");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("not valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert!(v["pubkey_path"].is_string());
+    assert!(v["privkey_path"].is_string());
+    assert!(v["fingerprint"].is_string());
+}
+
+#[test]
+fn json_encrypt_output() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("secret.txt");
+    fs::write(&input, b"json test").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "--json",
+            "encrypt",
+            "-r", dir.join("pubkey.pem").to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "encrypt --json failed");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("not valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert!(v["output"].as_str().unwrap().ends_with(".pqf"));
+}
+
+#[test]
+fn json_decrypt_output() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("msg.txt");
+    fs::write(&input, b"decrypt json test").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", dir.join("pubkey.pem").to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let pqf = dir.join("msg.txt.pqf");
+    let output = std::process::Command::new(bin())
+        .args([
+            "--json",
+            "decrypt",
+            "-k", dir.join("privkey.pem").to_str().unwrap(),
+            pqf.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "decrypt --json failed");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("not valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert!(v["output"].is_string());
+}
+
+#[test]
+fn json_inspect_output() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("data.txt");
+    fs::write(&input, b"inspect json test payload").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", dir.join("pubkey.pem").to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = std::process::Command::new(bin())
+        .args(["--json", "inspect", dir.join("data.txt.pqf").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "inspect --json failed");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("not valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["magic"], "PQFL");
+    assert_eq!(v["version"], "0x03");
+    assert_eq!(v["kem_variant"], 768);
+    assert_eq!(v["original_size"], 25);
+    assert!(v["nonce"].is_string());
+}
+
+#[test]
+fn json_error_output_goes_to_stderr() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let bad_file = dir.join("nonexistent.pqf");
+    let output = std::process::Command::new(bin())
+        .args(["--json", "inspect", bad_file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "should fail on missing file");
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stderr.trim()).expect("stderr not valid JSON");
+    assert_eq!(v["status"], "error");
+    assert!(v["message"].is_string());
+}
+
+#[test]
+fn json_recursive_encrypt_output() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    // Put keys in a separate directory so they aren't collected by --recursive.
+    let keys_dir = dir.join("keys");
+    fs::create_dir(&keys_dir).unwrap();
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", keys_dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let content_dir = dir.join("content");
+    fs::create_dir(&content_dir).unwrap();
+    fs::write(content_dir.join("x.txt"), b"x").unwrap();
+    fs::write(content_dir.join("y.txt"), b"y").unwrap();
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "--json",
+            "encrypt",
+            "-r", keys_dir.join("pubkey.pem").to_str().unwrap(),
+            "--recursive",
+            content_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "json recursive encrypt failed");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let arr: serde_json::Value = serde_json::from_str(stdout.trim()).expect("not valid JSON array");
+    assert!(arr.is_array());
+    let entries = arr.as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert_eq!(entry["status"], "ok");
+        assert!(entry["output"].as_str().unwrap().ends_with(".pqf"));
+    }
+}
+
+// ── Hybrid X25519+ML-KEM-768 ──────────────────────────────────────────────
+
+#[test]
+fn roundtrip_hybrid() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let original = b"hybrid X25519+ML-KEM-768 roundtrip test";
+    let input = dir.join("secret.txt");
+    fs::write(&input, original).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap(), "--hybrid"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "hybrid keygen failed");
+
+    let pubkey = dir.join("pubkey.pem");
+    let status = std::process::Command::new(bin())
+        .args(["encrypt", "-r", pubkey.to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt with hybrid key failed");
+
+    let pqf = dir.join("secret.txt.pqf");
+    assert!(pqf.exists(), ".pqf output not found");
+
+    let privkey = dir.join("privkey.pem");
+    let status = std::process::Command::new(bin())
+        .args(["decrypt", "-k", privkey.to_str().unwrap(), pqf.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "decrypt with hybrid key failed");
+
+    let got = fs::read(dir.join("secret.txt")).unwrap();
+    assert_eq!(got, original, "decrypted bytes do not match original");
+}
+
+#[test]
+fn roundtrip_hybrid_with_passphrase() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let original = b"hybrid passphrase roundtrip";
+    let input = dir.join("data.bin");
+    fs::write(&input, original).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap(), "--hybrid"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "hybrid keygen failed");
+
+    let pubkey = dir.join("pubkey.pem");
+    let mut enc_cmd = std::process::Command::new(bin())
+        .args(["encrypt", "-r", pubkey.to_str().unwrap(), input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(enc_cmd.success(), "encrypt failed");
+
+    let pqf = dir.join("data.bin.pqf");
+    let privkey = dir.join("privkey.pem");
+
+    // Decrypt without passphrase (plain key) should succeed.
+    let status = std::process::Command::new(bin())
+        .args(["decrypt", "-k", privkey.to_str().unwrap(), pqf.to_str().unwrap(), "-o", dir.join("out.bin").to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "decrypt failed");
+    assert_eq!(fs::read(dir.join("out.bin")).unwrap(), original);
+}
+
+#[test]
+fn hybrid_inspect_shows_correct_kem_variant() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    fs::write(dir.join("plain.txt"), b"test").unwrap();
+
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap(), "--hybrid"])
+        .status().unwrap();
+
+    std::process::Command::new(bin())
+        .args(["encrypt", "-r", dir.join("pubkey.pem").to_str().unwrap(), dir.join("plain.txt").to_str().unwrap()])
+        .status().unwrap();
+
+    let output = std::process::Command::new(bin())
+        .args(["--json", "inspect", dir.join("plain.txt.pqf").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(v["kem_variant"], 0x0301);
+    assert_eq!(v["kem_variant_name"], "Hybrid X25519+ML-KEM-768");
+}
+
+#[test]
+fn hybrid_keygen_refuses_overwrite_without_force() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap(), "--hybrid"])
+        .status().unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap(), "--hybrid"])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "second hybrid keygen without --force should fail");
+}
+
+#[test]
+fn hybrid_key_cannot_decrypt_non_hybrid_file() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    // Encrypt with regular ML-KEM-768 key.
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status().unwrap();
+
+    fs::write(dir.join("plain.txt"), b"regular file").unwrap();
+    std::process::Command::new(bin())
+        .args(["encrypt", "-r", dir.join("pubkey.pem").to_str().unwrap(), dir.join("plain.txt").to_str().unwrap()])
+        .status().unwrap();
+
+    // Generate a hybrid key pair (separate dir).
+    let hybrid_dir = tmp.path().join("hybrid");
+    fs::create_dir(&hybrid_dir).unwrap();
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", hybrid_dir.to_str().unwrap(), "--hybrid"])
+        .status().unwrap();
+
+    // Try to decrypt with the hybrid private key — should fail (KEM variant mismatch).
+    let status = std::process::Command::new(bin())
+        .args(["decrypt", "-k", hybrid_dir.join("privkey.pem").to_str().unwrap(), dir.join("plain.txt.pqf").to_str().unwrap(), "-o", dir.join("out.txt").to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "hybrid key should not decrypt non-hybrid file");
+}
+
+// ── ML-DSA signing ────────────────────────────────────────────────────────
+
+#[test]
+fn sign_keygen_creates_key_files() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let status = std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "sign-keygen failed");
+    assert!(dir.join("sign_pubkey.pem").exists(), "sign_pubkey.pem not found");
+    assert!(dir.join("sign_privkey.pem").exists(), "sign_privkey.pem not found");
+}
+
+#[test]
+fn sign_and_verify_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let data_path = dir.join("doc.txt");
+    fs::write(&data_path, b"sign me").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "sign-keygen failed");
+
+    let sk_path = dir.join("sign_privkey.pem");
+    let sig_path = dir.join("doc.txt.sig");
+
+    let status = std::process::Command::new(bin())
+        .args(["sign", "-k", sk_path.to_str().unwrap(), data_path.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "sign failed");
+    assert!(sig_path.exists(), "signature file not found");
+
+    let vk_path = dir.join("sign_pubkey.pem");
+    let status = std::process::Command::new(bin())
+        .args(["verify", "-k", vk_path.to_str().unwrap(), "-s", sig_path.to_str().unwrap(), data_path.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "verify failed");
+}
+
+#[test]
+fn verify_fails_on_tampered_file() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let data_path = dir.join("doc.txt");
+    fs::write(&data_path, b"original content").unwrap();
+
+    std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status().unwrap();
+
+    let sk_path = dir.join("sign_privkey.pem");
+    std::process::Command::new(bin())
+        .args(["sign", "-k", sk_path.to_str().unwrap(), data_path.to_str().unwrap()])
+        .status().unwrap();
+
+    // Tamper with the file after signing
+    fs::write(&data_path, b"tampered content").unwrap();
+
+    let vk_path = dir.join("sign_pubkey.pem");
+    let sig_path = dir.join("doc.txt.sig");
+    let status = std::process::Command::new(bin())
+        .args(["verify", "-k", vk_path.to_str().unwrap(), "-s", sig_path.to_str().unwrap(), data_path.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "verify should fail on tampered file");
+}
+
+#[test]
+fn sign_keygen_refuses_overwrite_without_force() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status().unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "second sign-keygen without --force should fail");
+}
+
+#[test]
+fn sign_keygen_force_overwrites() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status().unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap(), "--force"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "sign-keygen --force should succeed");
+}
+
+#[test]
+fn sign_with_custom_output_path() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let data_path = dir.join("data.bin");
+    fs::write(&data_path, b"binary data").unwrap();
+
+    std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status().unwrap();
+
+    let sk_path = dir.join("sign_privkey.pem");
+    let sig_path = dir.join("custom.sig");
+
+    let status = std::process::Command::new(bin())
+        .args(["sign", "-k", sk_path.to_str().unwrap(), data_path.to_str().unwrap(), "-o", sig_path.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "sign with -o failed");
+    assert!(sig_path.exists(), "custom sig path not found");
+}
+
+#[test]
+fn sign_verify_json_output() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let data_path = dir.join("doc.txt");
+    fs::write(&data_path, b"json test").unwrap();
+
+    std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status().unwrap();
+
+    let sk_path = dir.join("sign_privkey.pem");
+    let output = std::process::Command::new(bin())
+        .args(["--json", "sign", "-k", sk_path.to_str().unwrap(), data_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "json sign failed");
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(v["status"], "ok");
+    assert!(v["signature"].as_str().unwrap().ends_with(".sig"));
+
+    let vk_path = dir.join("sign_pubkey.pem");
+    let sig_path = dir.join("doc.txt.sig");
+    let output = std::process::Command::new(bin())
+        .args(["--json", "verify", "-k", vk_path.to_str().unwrap(), "-s", sig_path.to_str().unwrap(), data_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "json verify failed");
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["result"], "valid");
+}
+
+#[test]
+fn sign_keygen_json_output() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let output = std::process::Command::new(bin())
+        .args(["--json", "sign-keygen", "--out", dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "json sign-keygen failed");
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(v["status"], "ok");
+    assert!(v["vk_path"].as_str().unwrap().ends_with("sign_pubkey.pem"));
+    assert!(v["sk_path"].as_str().unwrap().ends_with("sign_privkey.pem"));
+    assert!(!v["fingerprint"].as_str().unwrap().is_empty());
+}
+
+// ── Multiple recipients (v4 format) ──────────────────────────────────────────
+
+#[test]
+fn multi_recipient_two_keys_both_can_decrypt() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let plaintext = b"multi-recipient roundtrip";
+    let input = dir.join("secret.txt");
+    fs::write(&input, plaintext).unwrap();
+
+    // Generate two independent key pairs.
+    let dir_a = dir.join("a");
+    let dir_b = dir.join("b");
+    fs::create_dir_all(&dir_a).unwrap();
+    fs::create_dir_all(&dir_b).unwrap();
+
+    let s = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir_a.to_str().unwrap()])
+        .status().unwrap();
+    assert!(s.success(), "keygen A failed");
+
+    let s = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir_b.to_str().unwrap()])
+        .status().unwrap();
+    assert!(s.success(), "keygen B failed");
+
+    let pqf = dir.join("secret.txt.pqf");
+    let s = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r", dir_a.join("pubkey.pem").to_str().unwrap(),
+            "-r", dir_b.join("pubkey.pem").to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status().unwrap();
+    assert!(s.success(), "multi-recipient encrypt failed");
+    assert!(pqf.exists(), ".pqf not created");
+
+    // Recipient A decrypts.
+    let out_a = dir.join("dec_a.txt");
+    let s = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k", dir_a.join("privkey.pem").to_str().unwrap(),
+            pqf.to_str().unwrap(),
+            "-o", out_a.to_str().unwrap(),
+        ])
+        .status().unwrap();
+    assert!(s.success(), "decrypt by A failed");
+    assert_eq!(fs::read(&out_a).unwrap(), plaintext);
+
+    // Recipient B decrypts.
+    let out_b = dir.join("dec_b.txt");
+    let s = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k", dir_b.join("privkey.pem").to_str().unwrap(),
+            pqf.to_str().unwrap(),
+            "-o", out_b.to_str().unwrap(),
+        ])
+        .status().unwrap();
+    assert!(s.success(), "decrypt by B failed");
+    assert_eq!(fs::read(&out_b).unwrap(), plaintext);
+}
+
+#[test]
+fn multi_recipient_wrong_key_fails() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("data.txt");
+    fs::write(&input, b"secret").unwrap();
+
+    let dir_a = dir.join("a");
+    let dir_c = dir.join("c");
+    fs::create_dir_all(&dir_a).unwrap();
+    fs::create_dir_all(&dir_c).unwrap();
+
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", dir_a.to_str().unwrap()])
+        .status().unwrap();
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", dir_c.to_str().unwrap()])
+        .status().unwrap();
+
+    // Encrypt only for A.
+    let pqf = dir.join("data.txt.pqf");
+    std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r", dir_a.join("pubkey.pem").to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status().unwrap();
+
+    // C's key should fail (not a recipient).
+    let out = dir.join("out.txt");
+    let s = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k", dir_c.join("privkey.pem").to_str().unwrap(),
+            pqf.to_str().unwrap(),
+            "-o", out.to_str().unwrap(),
+        ])
+        .status().unwrap();
+    // Single-recipient files still use v3 format; wrong key returns UnsupportedKem.
+    assert!(!s.success(), "decrypt with wrong key should fail");
+}
+
+#[test]
+fn multi_recipient_three_keys_all_decrypt() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let plaintext = b"three-way multi-recipient";
+    let input = dir.join("file.txt");
+    fs::write(&input, plaintext).unwrap();
+
+    let dirs: Vec<_> = (0..3).map(|i| {
+        let d = dir.join(format!("k{i}"));
+        fs::create_dir_all(&d).unwrap();
+        std::process::Command::new(bin())
+            .args(["keygen", "--out", d.to_str().unwrap()])
+            .status().unwrap();
+        d
+    }).collect();
+
+    let pqf = dir.join("file.txt.pqf");
+    let s = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r", dirs[0].join("pubkey.pem").to_str().unwrap(),
+            "-r", dirs[1].join("pubkey.pem").to_str().unwrap(),
+            "-r", dirs[2].join("pubkey.pem").to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status().unwrap();
+    assert!(s.success(), "3-recipient encrypt failed");
+
+    for (i, d) in dirs.iter().enumerate() {
+        let out = dir.join(format!("dec{i}.txt"));
+        let s = std::process::Command::new(bin())
+            .args([
+                "decrypt",
+                "-k", d.join("privkey.pem").to_str().unwrap(),
+                pqf.to_str().unwrap(),
+                "-o", out.to_str().unwrap(),
+            ])
+            .status().unwrap();
+        assert!(s.success(), "decrypt by key {i} failed");
+        assert_eq!(fs::read(&out).unwrap(), plaintext, "mismatch for key {i}");
+    }
+}
+
+#[test]
+fn multi_recipient_mixed_variants() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let plaintext = b"mixed variant multi-recipient";
+    let input = dir.join("data.txt");
+    fs::write(&input, plaintext).unwrap();
+
+    let dir_768 = dir.join("k768");
+    let dir_1024 = dir.join("k1024");
+    fs::create_dir_all(&dir_768).unwrap();
+    fs::create_dir_all(&dir_1024).unwrap();
+
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", dir_768.to_str().unwrap()])
+        .status().unwrap();
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", dir_1024.to_str().unwrap(), "--level", "1024"])
+        .status().unwrap();
+
+    let pqf = dir.join("data.txt.pqf");
+    let s = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r", dir_768.join("pubkey.pem").to_str().unwrap(),
+            "-r", dir_1024.join("pubkey.pem").to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status().unwrap();
+    assert!(s.success(), "mixed-variant encrypt failed");
+
+    for (label, d) in [("768", &dir_768), ("1024", &dir_1024)] {
+        let out = dir.join(format!("dec_{label}.txt"));
+        let s = std::process::Command::new(bin())
+            .args([
+                "decrypt",
+                "-k", d.join("privkey.pem").to_str().unwrap(),
+                pqf.to_str().unwrap(),
+                "-o", out.to_str().unwrap(),
+            ])
+            .status().unwrap();
+        assert!(s.success(), "mixed-variant decrypt ({label}) failed");
+        assert_eq!(fs::read(&out).unwrap(), plaintext);
     }
 }

@@ -1,4 +1,6 @@
+use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::{decrypt, keygen};
 use crate::app::PqfileApp;
@@ -7,7 +9,7 @@ use crate::types::OpStatus;
 use crate::widgets::{card, file_row, save_result, section_label, show_status, tab_heading};
 
 impl PqfileApp {
-    pub(crate) fn handle_decrypt(&mut self) {
+    pub(crate) fn handle_decrypt(&mut self, ctx: &egui::Context) {
         let priv_pem = self.decrypt_privkey.as_str().map(str::to_owned);
         let pqf = self.decrypt_pqf.data.clone();
         let pqf_name = self.decrypt_pqf.name.clone();
@@ -18,31 +20,67 @@ impl PqfileApp {
             return;
         };
 
-        let passphrase = if self.decrypt_passphrase.is_empty() {
+        let passphrase: Option<String> = if self.decrypt_passphrase.is_empty() {
             None
         } else {
-            Some(self.decrypt_passphrase.as_str())
+            Some(self.decrypt_passphrase.clone())
         };
 
-        match decrypt::decrypt_bytes(&priv_pem, &pqf, passphrase) {
-            Ok(plain) => {
-                let out_name = PathBuf::from(&pqf_name)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| pqf_name.clone());
-                let out_path = pqf_path.map(|p| p.with_extension(""));
-                #[cfg(not(target_arch = "wasm32"))]
-                let confirm = self.settings.confirm_overwrite;
-                #[cfg(target_arch = "wasm32")]
-                let confirm = false;
-                self.decrypt_status = save_result(&out_name, &plain, out_path, confirm);
-                if self.settings.auto_clear && matches!(self.decrypt_status, OpStatus::Ok(_)) {
-                    self.decrypt_privkey.clear();
-                    self.decrypt_pqf.clear();
-                    self.decrypt_passphrase.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let confirm = self.settings.confirm_overwrite;
+            let job: Arc<Mutex<Option<OpStatus>>> = Arc::new(Mutex::new(None));
+            self.decrypt_job = Some(Arc::clone(&job));
+
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let pp = passphrase.as_deref();
+                let result: Result<Vec<u8>, _> = {
+                    let mut cursor = Cursor::new(&pqf);
+                    let mut out = Vec::new();
+                    decrypt::decrypt_stream(&priv_pem, &mut cursor, &mut out, pp).map(|_| out)
+                };
+                let status = match result {
+                    Ok(plain) => {
+                        let out_name = PathBuf::from(&pqf_name)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| pqf_name.clone());
+                        let out_path = pqf_path.map(|p| p.with_extension(""));
+                        save_result(&out_name, &plain, out_path, confirm)
+                    }
+                    Err(e) => OpStatus::Err(e.to_string()),
+                };
+                *job.lock().unwrap() = Some(status);
+                ctx.request_repaint();
+            });
+            return;
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            let pp = passphrase.as_deref();
+            let result: Result<Vec<u8>, _> = {
+                let mut cursor = Cursor::new(&pqf);
+                let mut out = Vec::new();
+                decrypt::decrypt_stream(&priv_pem, &mut cursor, &mut out, pp).map(|_| out)
+            };
+            match result {
+                Ok(plain) => {
+                    let out_name = PathBuf::from(&pqf_name)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| pqf_name.clone());
+                    self.decrypt_status = save_result(&out_name, &plain, None, false);
+                    if self.settings.auto_clear && matches!(self.decrypt_status, OpStatus::Ok(_)) {
+                        self.decrypt_privkey.clear();
+                        self.decrypt_pqf.clear();
+                        self.decrypt_passphrase.clear();
+                    }
                 }
+                Err(e) => self.decrypt_status = OpStatus::Err(e.to_string()),
             }
-            Err(e) => self.decrypt_status = OpStatus::Err(e.to_string()),
         }
     }
 
@@ -54,6 +92,11 @@ impl PqfileApp {
                 .color(c_subtext(dark)),
         );
         ui.add_space(14.0);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let job_running = self.decrypt_job.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let job_running = false;
 
         section_label(ui, "INPUTS", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
@@ -83,7 +126,7 @@ impl PqfileApp {
             self.decrypt_passphrase.clear();
         }
 
-        let ready = self.decrypt_privkey.loaded() && self.decrypt_pqf.loaded();
+        let ready = self.decrypt_privkey.loaded() && self.decrypt_pqf.loaded() && !job_running;
         if ui
             .add_enabled(
                 ready,
@@ -98,16 +141,30 @@ impl PqfileApp {
             )
             .clicked()
         {
-            self.handle_decrypt();
+            self.handle_decrypt(ui.ctx());
         }
 
-        if !ready {
+        if !ready && !job_running {
             ui.add_space(4.0);
             ui.label(
                 RichText::new("Load a private key and a .pqf file to continue.")
                     .size(12.0)
                     .color(c_overlay(dark)),
             );
+        }
+
+        // Spinner while decrypting in the background.
+        #[cfg(not(target_arch = "wasm32"))]
+        if job_running {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.label(
+                    RichText::new("Decrypting…")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
+                );
+            });
         }
 
         show_status(ui, &self.decrypt_status, dark);

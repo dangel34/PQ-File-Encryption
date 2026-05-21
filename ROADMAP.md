@@ -71,36 +71,36 @@ This document tracks planned improvements, new features, and security work acros
 
 ### Security
 
-- **ML-KEM-1024 support**
-  Add a `--level 1024` flag to `pqfile keygen` and `encrypt`. Store the KEM variant in the header (already present as a u16 field). The private key seed stays 64 bytes (unchanged); the encapsulation key grows from 1184 to 1568 bytes and the KEM ciphertext from 1088 to 1568 bytes. Existing v2 files remain readable.
+- **ML-KEM-1024 support** ✓ _released_
+  `pqfile keygen --level 1024` generates ML-KEM-1024 keys (EK 1568 bytes, CT 1568 bytes). The header `kem_variant` field (u16) distinguishes 768 vs 1024 files. The private key seed remains 64 bytes. Decryption auto-detects the variant from the file header; mismatched keys produce a clear error. New PEM tags: `ML-KEM-1024 PUBLIC KEY`, `ML-KEM-1024 PRIVATE KEY`, `ML-KEM-1024 ENCRYPTED PRIVATE KEY`. All existing v2/v3 768 files remain readable.
 
-- **Digital signatures with ML-DSA (NIST FIPS 204)**
-  Add optional file signing: `pqfile sign` produces a detached `.sig` file; `pqfile verify` checks it. Uses ML-DSA-65 (Dilithium level 3). This is separate from encryption; a sender can sign a file before the recipient encrypts it, proving the file was not substituted in transit.
+- **Digital signatures with ML-DSA (NIST FIPS 204)** ✓ _released_
+  `pqfile sign-keygen --out <dir>` generates an ML-DSA-65 key pair (`sign_pubkey.pem` / `sign_privkey.pem`; verifying key is 1952 bytes, signing key stored as 32-byte seed). `pqfile sign -k sign_privkey.pem <file>` produces a detached PEM `.sig` file (3309-byte signature). `pqfile verify -k sign_pubkey.pem -s <file>.sig <file>` verifies the signature. All three commands support `--json`. Signing is separate from encryption — a sender can sign a file before the recipient encrypts it, proving the file was not substituted in transit.
 
-- **Hybrid classical + post-quantum key exchange**
-  Combine X25519 with ML-KEM-768 in a hybrid KEM: the shared secret is `HKDF-SHA256(x25519_ss || mlkem_ss)`. This provides security against both classical and quantum adversaries simultaneously, following NIST guidance on hybrid schemes. Format version bump to `0x03`.
+- **Hybrid classical + post-quantum key exchange** ✓ _released_
+  `pqfile keygen --hybrid` generates an X25519+ML-KEM-768 hybrid key pair (KEM variant `0x0301`). The public key PEM contains X25519 pubkey (32 bytes) || ML-KEM-768 EK (1184 bytes). Encryption produces a fresh ephemeral X25519 key, runs DH + ML-KEM encapsulate, then derives the 32-byte session key via `HKDF-SHA256(IKM = x25519_ss || mlkem_ss, info = "pqfile-hybrid-v1")`. `pqfile inspect` shows the friendly variant name. Hybrid keys and pure ML-KEM keys cannot decrypt each other's files (KEM variant mismatch error).
 
-- **Multiple recipients**
-  Encrypt a single file to N public keys by including N KEM ciphertexts in the header. Any holder of the matching private key can decrypt. Useful for team shared files. The header becomes variable-length; a recipient count field is added.
+- **Multiple recipients** ✓ _released_
+  Encrypt a single file to N public keys (v4 format) by repeating `-r` on the CLI. A random 32-byte session key K encrypts the payload; each recipient's KEM shared secret wraps K under AES-256-GCM. Any holder of a matching private key can decrypt. Mixed variants (768/1024/hybrid) are supported in a single file. `decrypt_stream` auto-detects v4 format and tries each matching-variant recipient entry in order.
 
 ### CLI
 
-- **Streaming encryption for large files**
-  Replace the current whole-file-in-memory approach with a chunked AEAD stream (e.g. using the `aead-stream` or `age`-style chunk framing). Each 64 KB chunk gets its own nonce derived from a counter, preventing memory exhaustion on multi-gigabyte files.
+- **Streaming encryption for large files** ✓ _released_
+  Chunked AEAD stream using the STREAM construction: each 64 KiB chunk uses an independent nonce (`base_nonce[8] || counter[4]`) and AAD (`"pqfile" || counter || is_last`) that prevents truncation and reordering attacks. Peak memory is proportional to chunk size regardless of file size. Format version bumped to `0x03`. CLI produces v3 by default; `decrypt_stream` reads both v2 and v3. `encrypt_bytes` / `decrypt_bytes` retained for library consumers at v2.
 
-- **Batch / recursive directory encryption**
-  `pqfile encrypt -r pubkey.pem --recursive /path/to/dir/` encrypts every file in a directory tree, writing `.pqf` files alongside originals (or into a mirrored output tree with `--output-dir`).
+- **Batch / recursive directory encryption** ✓ _released_
+  `pqfile encrypt -r pubkey.pem --recursive /path/to/dir/` encrypts every file in a directory tree, writing `.pqf` files alongside originals. `.pqf` files are skipped automatically to prevent double-encryption.
 
-- **Structured JSON output (`--json`)**
-  Machine-readable output mode for all commands. `pqfile inspect --json` emits `{"magic":"PQFL","version":"0x02",...}`. Useful for scripting and tooling integration.
+- **Structured JSON output (`--json`)** ✓ _released_
+  Machine-readable output mode for all commands via a global `--json` flag. All commands emit `{"status":"ok",...}` on success; errors go to stderr as `{"status":"error","message":"..."}`. `pqfile inspect --json` emits magic, version, KEM variant, nonce, and original_size. Recursive encrypt emits a JSON array with per-file status entries.
 
 ### GUI
 
-- **Progress bar for large files**
-  Show a progress indicator during encrypt/decrypt operations once streaming is implemented. Run the operation on a background thread and poll via a channel.
+- **Progress bar for large files** ✓ _released_
+  Encrypt and decrypt operations run on a background thread (native). A per-file-count progress bar is shown during multi-file batch encrypt; a spinner is shown during decrypt. The UI stays responsive throughout. WASM keeps the existing synchronous path.
 
-- **Key management panel**
-  A dedicated tab to view loaded keys (label, fingerprint, creation date if embedded in a metadata field), import keys from disk, and delete keys from a remembered list.
+- **Key management panel** ✓ _released_
+  Dedicated "🗝 Keys" tab. Remembered key pairs (label, fingerprint, directory path) persist across sessions via eframe Storage. "🔒 Encrypt" / "🔓 Decrypt" buttons quick-load keys into the respective tabs. "＋ Import Key Pair…" browses for a folder containing pubkey.pem and optionally privkey.pem. Missing-file warning shown inline.
 
 ---
 
@@ -128,8 +128,8 @@ This document tracks planned improvements, new features, and security work acros
 - **Dependabot / Renovate** ✓ _released_
   `.github/dependabot.yml` enables weekly PRs for Cargo and GitHub Actions dependencies.
 
-- **Benchmark suite**
-  Add `criterion` benchmarks for encrypt and decrypt at 1 KB, 1 MB, and 100 MB (once streaming exists). Track performance regressions in CI.
+- **Benchmark suite** ✓ _released_
+  `criterion` benchmarks in `pqfile/benches/crypto.rs` cover `encrypt_bytes`, `decrypt_bytes`, `encrypt_stream`, `decrypt_stream`, and `keygen` at 1 KB, 1 MB, and 100 MB. Run with `cargo bench`. HTML reports written to `target/criterion/`.
 
 - **cargo-vet**
   Adopt `cargo vet` for third-party crate supply-chain vetting. Each dependency gets an explicit audit entry (safe-to-deploy, safe-to-run, or a trusted publisher exemption). Adds ongoing maintenance burden but is standard practice for widely-distributed security tools.

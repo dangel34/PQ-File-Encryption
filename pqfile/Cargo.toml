@@ -1,6 +1,6 @@
 [package]
 name = "pqfile"
-version = "2.0.5"
+version = "3.0.0"
 edition = "2021"
 description = "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
 license = "MIT"
@@ -23,9 +23,19 @@ sha3 = "0.12"
 argon2 = { version = "0.5", features = ["zeroize"] }
 aes-gcm = "0.10"
 rpassword = "7"
+ml-dsa = { version = "0.1.0", features = ["getrandom", "zeroize"] }
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+hkdf = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
+serde_json = "1"
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "crypto"
+harness = false
 
 [package.metadata.deb]
 maintainer = "Derek <cheery.09.purine@icloud.com>"

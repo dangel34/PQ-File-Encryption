@@ -45,25 +45,72 @@ impl PqfileApp {
             .clicked()
         {
             if let Some(data) = &self.inspect_pqf.data {
-                match format::PqfHeader::read(&mut Cursor::new(data.as_slice())) {
-                    Ok(h) => {
-                        let nonce: String =
-                            h.nonce.iter().map(|b| format!("{b:02x}")).collect();
-                        let ct_fp = keygen::fingerprint(&h.kem_ciphertext);
-                        self.inspect_result = format!(
-                            "Magic            PQFL\n\
-                             Version          {:#04x}\n\
-                             KEM variant      ML-KEM-{}\n\
-                             Nonce            {}\n\
-                             Ciphertext FP    {}\n\
-                             Original size    {} bytes",
-                            format::VERSION,
-                            format::KEM_VARIANT,
-                            nonce,
-                            ct_fp,
-                            h.original_size,
-                        );
-                        self.inspect_status = OpStatus::None;
+                let mut cursor = Cursor::new(data.as_slice());
+                match format::PqfHeader::read_magic_version(&mut cursor) {
+                    Ok(version) if version == format::VERSION || version == format::VERSION_V3 => {
+                        match format::PqfHeader::read_body(&mut cursor, version) {
+                            Ok(h) => {
+                                let nonce: String =
+                                    h.nonce.iter().map(|b| format!("{b:02x}")).collect();
+                                let ct_fp = keygen::fingerprint(&h.kem_ciphertext);
+                                let variant_name = variant_display(h.kem_variant);
+                                self.inspect_result = format!(
+                                    "Magic            PQFL\n\
+                                     Version          {:#04x}\n\
+                                     KEM variant      {}\n\
+                                     Nonce            {}\n\
+                                     Ciphertext FP    {}\n\
+                                     Original size    {} bytes",
+                                    h.version,
+                                    variant_name,
+                                    nonce,
+                                    ct_fp,
+                                    h.original_size,
+                                );
+                                self.inspect_status = OpStatus::None;
+                            }
+                            Err(e) => {
+                                self.inspect_result.clear();
+                                self.inspect_status = OpStatus::Err(e.to_string());
+                            }
+                        }
+                    }
+                    Ok(version) if version == format::VERSION_V4 => {
+                        match format::PqfHeaderV4::read_body(&mut cursor) {
+                            Ok(h) => {
+                                let nonce: String =
+                                    h.nonce.iter().map(|b| format!("{b:02x}")).collect();
+                                let n = h.recipients.len();
+                                let mut lines = format!(
+                                    "Magic            PQFL\n\
+                                     Version          0x04  (multi-recipient)\n\
+                                     Recipients       {n}\n"
+                                );
+                                for (i, r) in h.recipients.iter().enumerate() {
+                                    let vname = variant_display(r.kem_variant);
+                                    let ct_fp = keygen::fingerprint(&r.kem_ciphertext);
+                                    lines.push_str(&format!(
+                                        "  [{i}] variant      {vname}\n\
+                                         \x20    CT FP        {ct_fp}\n"
+                                    ));
+                                }
+                                lines.push_str(&format!(
+                                    "Nonce            {}\n\
+                                     Original size    {} bytes",
+                                    nonce, h.original_size,
+                                ));
+                                self.inspect_result = lines;
+                                self.inspect_status = OpStatus::None;
+                            }
+                            Err(e) => {
+                                self.inspect_result.clear();
+                                self.inspect_status = OpStatus::Err(e.to_string());
+                            }
+                        }
+                    }
+                    Ok(v) => {
+                        self.inspect_result.clear();
+                        self.inspect_status = OpStatus::Err(format!("Unsupported version: {v:#04x}"));
                     }
                     Err(e) => {
                         self.inspect_result.clear();
@@ -89,5 +136,14 @@ impl PqfileApp {
         }
 
         show_status(ui, &self.inspect_status, dark);
+    }
+}
+
+fn variant_display(kem_variant: u16) -> String {
+    match kem_variant {
+        768 => "ML-KEM-768".to_owned(),
+        1024 => "ML-KEM-1024".to_owned(),
+        0x0301 => "Hybrid X25519+ML-KEM-768".to_owned(),
+        v => format!("unknown ({v:#06x})"),
     }
 }

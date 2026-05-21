@@ -37,4 +37,13 @@ pub enum PqfileError {
 
     #[error("passphrases do not match")]
     PassphraseMismatch,
+
+    #[error("invalid signature: malformed bytes")]
+    InvalidSignature,
+
+    #[error("signature verification failed")]
+    SignatureVerificationFailed,
+
+    #[error("no matching recipient found in this file for the given private key")]
+    NoMatchingRecipient,
 }
