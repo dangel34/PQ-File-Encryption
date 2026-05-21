@@ -1,15 +1,19 @@
 use std::fs;
 use std::path::Path;
 
-use ml_kem::{Kem, KeyExport, MlKem768, MlKem1024};
+use ml_kem::{Kem, KeyExport, MlKem512, MlKem768, MlKem1024};
 use pem::Pem;
 use sha3::{Digest, Sha3_256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
-use crate::format::{HYBRID_EK_LEN_768, HYBRID_SEED_LEN_768, KEM_VARIANT, KEM_VARIANT_1024};
+use crate::format::{HYBRID_EK_LEN_768, HYBRID_SEED_LEN_768, KEM_VARIANT_512, KEM_VARIANT, KEM_VARIANT_1024};
 use crate::passphrase;
+
+pub const PUB_TAG_512: &str = "ML-KEM-512 PUBLIC KEY";
+pub const PRIV_TAG_512: &str = "ML-KEM-512 PRIVATE KEY";
+pub const PRIV_ENC_TAG_512: &str = "ML-KEM-512 ENCRYPTED PRIVATE KEY";
 
 pub const PUB_TAG: &str = "ML-KEM-768 PUBLIC KEY";
 pub const PRIV_TAG: &str = "ML-KEM-768 PRIVATE KEY";
@@ -55,14 +59,23 @@ pub fn keygen(out_dir: &Path, force: bool, level: u16, passphrase: Option<&str>,
 }
 
 /// Generates a key pair and returns the PEM strings.
-/// `level` must be 768 or 1024.
+/// `level` must be 512, 768, or 1024.
 /// If `passphrase` is `Some`, the private key PEM uses the encrypted tag.
 pub fn keygen_bytes(level: u16, passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
     match level {
+        KEM_VARIANT_512 => keygen_bytes_512(passphrase),
         KEM_VARIANT => keygen_bytes_768(passphrase),
         KEM_VARIANT_1024 => keygen_bytes_1024(passphrase),
         _ => Err(PqfileError::UnsupportedKem(level)),
     }
+}
+
+fn keygen_bytes_512(passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
+    let (dk, ek) = MlKem512::generate_keypair();
+    let pub_pem = pem::encode(&Pem::new(PUB_TAG_512, ek.to_bytes().as_slice().to_vec()));
+    let seed_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
+    let priv_pem = encode_private_key(&seed_bytes, passphrase, PRIV_TAG_512, PRIV_ENC_TAG_512)?;
+    Ok((pub_pem, priv_pem))
 }
 
 fn keygen_bytes_768(passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
@@ -143,11 +156,12 @@ pub fn fingerprint(raw_bytes: &[u8]) -> String {
         .join(":")
 }
 
-/// Returns true if `pem_str` uses an encrypted private key tag (768, 1024, or hybrid).
+/// Returns true if `pem_str` uses an encrypted private key tag (512, 768, 1024, or hybrid).
 pub fn is_encrypted_key(pem_str: &str) -> bool {
     pem::parse(pem_str)
         .map(|p| {
-            p.tag() == PRIV_ENC_TAG
+            p.tag() == PRIV_ENC_TAG_512
+                || p.tag() == PRIV_ENC_TAG
                 || p.tag() == PRIV_ENC_TAG_1024
                 || p.tag() == PRIV_ENC_TAG_HYBRID_768
         })
@@ -293,13 +307,60 @@ mod tests {
 
     #[test]
     fn keygen_unsupported_level_returns_error() {
-        let err = keygen_bytes(512, None).unwrap_err();
-        assert!(matches!(err, PqfileError::UnsupportedKem(512)));
+        let err = keygen_bytes(256, None).unwrap_err();
+        assert!(matches!(err, PqfileError::UnsupportedKem(256)));
     }
 
     #[test]
     fn is_encrypted_key_detects_1024_encrypted_tag() {
         let (_, priv_pem) = keygen_bytes(1024, Some("pass")).unwrap();
         assert!(is_encrypted_key(&priv_pem));
+    }
+
+    // ── ML-KEM-512 ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn keygen_512_uses_correct_tags() {
+        let (pub_pem, priv_pem) = keygen_bytes(512, None).unwrap();
+        assert_eq!(pem::parse(&pub_pem).unwrap().tag(), PUB_TAG_512);
+        assert_eq!(pem::parse(&priv_pem).unwrap().tag(), PRIV_TAG_512);
+    }
+
+    #[test]
+    fn keygen_512_pubkey_is_800_bytes() {
+        let (pub_pem, _) = keygen_bytes(512, None).unwrap();
+        let parsed = pem::parse(&pub_pem).unwrap();
+        assert_eq!(parsed.contents().len(), 800);
+    }
+
+    #[test]
+    fn keygen_512_privkey_seed_is_64_bytes() {
+        let (_, priv_pem) = keygen_bytes(512, None).unwrap();
+        let parsed = pem::parse(&priv_pem).unwrap();
+        assert_eq!(parsed.contents().len(), 64);
+    }
+
+    #[test]
+    fn keygen_512_with_passphrase_uses_encrypted_tag() {
+        let (_, priv_pem) = keygen_bytes(512, Some("secure")).unwrap();
+        assert_eq!(pem::parse(&priv_pem).unwrap().tag(), PRIV_ENC_TAG_512);
+    }
+
+    #[test]
+    fn is_encrypted_key_detects_512_encrypted_tag() {
+        let (_, priv_pem) = keygen_bytes(512, Some("pass")).unwrap();
+        assert!(is_encrypted_key(&priv_pem));
+    }
+
+    #[test]
+    fn keygen_512_fingerprint_has_correct_format() {
+        let (pub_pem, _) = keygen_bytes(512, None).unwrap();
+        let fp = fingerprint_pem(&pub_pem);
+        let parts: Vec<&str> = fp.split(':').collect();
+        assert_eq!(parts.len(), 8);
+        for part in parts {
+            assert_eq!(part.len(), 2);
+            assert!(part.chars().all(|c| c.is_ascii_hexdigit()));
+        }
     }
 }

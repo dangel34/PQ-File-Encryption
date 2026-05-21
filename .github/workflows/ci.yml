@@ -46,6 +46,35 @@ jobs:
       - name: Run cargo vet
         run: cargo vet --locked
 
+  # ── Benchmark regression detection ────────────────────────────────────────
+  bench:
+    name: bench
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed for benchmark-action to write to gh-pages
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+
+      - name: Run benchmarks
+        run: cargo bench -p pqfile -- --output-format bencher --measurement-time 10 --warm-up-time 3 | tee bench_output.txt
+
+      - name: Store / compare benchmark results
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+        with:
+          tool: cargo
+          output-file-path: bench_output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Only push the new baseline when landing on main
+          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          alert-threshold: '110%'
+          comment-on-alert: true
+          fail-on-alert: true
+          alert-comment-cc-users: '@dangel34'
+
   # ── Secret scanning ────────────────────────────────────────────────────────
   gitleaks:
     name: gitleaks

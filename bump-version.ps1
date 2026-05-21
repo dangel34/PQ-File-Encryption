@@ -51,6 +51,9 @@ Replace-InFile "$root\pqfile-desktop\Cargo.toml" $cargoPattern $cargoReplacement
 
 # Inter-crate dependency version constraints — keep them in sync with the package version
 # e.g. pqfile = { path = "../pqfile", version = "2.0.3" }
+Replace-InFile "$root\Cargo.toml" `
+    '((?:pqfile|pqfile-gui)\s*=\s*\{[^}]*version\s*=\s*)"[\d.]+"' `
+    ('${1}"' + $Version + '"')
 Replace-InFile "$root\pqfile-gui\Cargo.toml" `
     '(pqfile\s*=\s*\{[^}]*version\s*=\s*)"[\d.]+"' `
     ('${1}"' + $Version + '"')

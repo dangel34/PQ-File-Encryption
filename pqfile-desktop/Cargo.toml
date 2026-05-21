@@ -9,5 +9,5 @@ name = "pqfile-desktop"
 path = "src/main.rs"
 
 [dependencies]
-pqfile-gui = { path = "../pqfile-gui", version = "3.0.1" }
-eframe = "0.34"
+pqfile-gui = { workspace = true }
+eframe = { workspace = true }
