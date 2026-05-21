@@ -2,14 +2,14 @@ use eframe::egui::{self, RichText, Vec2};
 use pqfile::keygen;
 use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface0, c_surface1, c_text};
-use crate::types::OpStatus;
+use crate::types::{KeygenAlgorithm, OpStatus};
 use crate::widgets::{card, section_label, show_status, tab_heading};
 
 impl PqfileApp {
     pub(crate) fn show_keygen(&mut self, ui: &mut egui::Ui, dark: bool) {
         tab_heading(ui, "Generate Key Pair", dark);
         ui.label(
-            RichText::new("Creates a new ML-KEM-768 public/private key pair.")
+            RichText::new("Creates a new post-quantum key pair for encryption.")
                 .size(13.0)
                 .color(c_subtext(dark)),
         );
@@ -54,6 +54,37 @@ impl PqfileApp {
             });
             ui.add_space(14.0);
         }
+
+        section_label(ui, "ALGORITHM", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            ui.horizontal(|ui| {
+                ui.radio_value(
+                    &mut self.keygen_algorithm,
+                    KeygenAlgorithm::MlKem768,
+                    RichText::new("ML-KEM-768").size(13.0).color(c_subtext(dark)),
+                );
+                ui.add_space(8.0);
+                ui.radio_value(
+                    &mut self.keygen_algorithm,
+                    KeygenAlgorithm::MlKem1024,
+                    RichText::new("ML-KEM-1024").size(13.0).color(c_subtext(dark)),
+                );
+                ui.add_space(8.0);
+                ui.radio_value(
+                    &mut self.keygen_algorithm,
+                    KeygenAlgorithm::HybridX25519MlKem768,
+                    RichText::new("Hybrid X25519+ML-KEM-768").size(13.0).color(c_subtext(dark)),
+                );
+            });
+            let desc = match self.keygen_algorithm {
+                KeygenAlgorithm::MlKem768 => "Post-quantum only. 1184-byte public key, 64-byte seed. NIST FIPS 203.",
+                KeygenAlgorithm::MlKem1024 => "Post-quantum only, higher security level. 1568-byte public key. NIST FIPS 203.",
+                KeygenAlgorithm::HybridX25519MlKem768 => "Classical + post-quantum. X25519 shared secret combined with ML-KEM-768 via HKDF-SHA256.",
+            };
+            ui.add_space(4.0);
+            ui.label(RichText::new(desc).size(12.0).color(c_subtext(dark)));
+        });
+        ui.add_space(14.0);
 
         section_label(ui, "PASSPHRASE (OPTIONAL)", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
@@ -118,6 +149,9 @@ impl PqfileApp {
             None
         };
 
+        let level = self.keygen_algorithm.level();
+        let hybrid = self.keygen_algorithm.hybrid();
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.keygen_dir.trim().is_empty() {
@@ -128,7 +162,7 @@ impl PqfileApp {
             // force=true when confirm_overwrite is off (the default): overwrite freely.
             // force=false when confirm_overwrite is on: refuse if either key file exists.
             let force = !self.settings.confirm_overwrite;
-            self.keygen_status = match keygen::keygen(dir, force, passphrase) {
+            self.keygen_status = match keygen::keygen(dir, force, level, passphrase, hybrid) {
                 Ok(fp) => OpStatus::Ok(format!(
                     "Keys saved to {}\nFingerprint: {fp}",
                     dir.display()
@@ -138,16 +172,23 @@ impl PqfileApp {
         }
 
         #[cfg(target_arch = "wasm32")]
-        match keygen::keygen_bytes(passphrase) {
-            Ok((pub_pem, priv_pem)) => {
-                let fp = keygen::fingerprint_pem(&pub_pem);
-                crate::widgets::download_bytes("pubkey.pem", pub_pem.as_bytes());
-                crate::widgets::download_bytes("privkey.pem", priv_pem.as_bytes());
-                self.keygen_status = OpStatus::Ok(format!(
-                    "pubkey.pem and privkey.pem downloaded.\nFingerprint: {fp}"
-                ));
+        {
+            let result = if hybrid {
+                keygen::keygen_bytes_hybrid_768(passphrase)
+            } else {
+                keygen::keygen_bytes(level, passphrase)
+            };
+            match result {
+                Ok((pub_pem, priv_pem)) => {
+                    let fp = keygen::fingerprint_pem(&pub_pem);
+                    crate::widgets::download_bytes("pubkey.pem", pub_pem.as_bytes());
+                    crate::widgets::download_bytes("privkey.pem", priv_pem.as_bytes());
+                    self.keygen_status = OpStatus::Ok(format!(
+                        "pubkey.pem and privkey.pem downloaded.\nFingerprint: {fp}"
+                    ));
+                }
+                Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),
             }
-            Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),
         }
     }
 }

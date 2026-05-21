@@ -17,12 +17,19 @@ const ARGON2_P_COST: u32 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const SEED_LEN: usize = 64;
+const HYBRID_SEED_LEN: usize = 96;
 
 // Layout of the encrypted private key PEM body (108 bytes total):
 //   0..16   salt
 //   16..28  AES-GCM nonce
 //   28..108 AES-256-GCM ciphertext (64-byte seed + 16-byte tag)
 pub const ENCRYPTED_BODY_LEN: usize = SALT_LEN + NONCE_LEN + SEED_LEN + 16;
+
+// Layout of the encrypted hybrid private key PEM body (140 bytes total):
+//   0..16   salt
+//   16..28  AES-GCM nonce
+//   28..140 AES-256-GCM ciphertext (96-byte hybrid seed + 16-byte tag)
+pub const ENCRYPTED_HYBRID_BODY_LEN: usize = SALT_LEN + NONCE_LEN + HYBRID_SEED_LEN + 16;
 
 /// Encrypts a 64-byte ML-KEM seed under `passphrase`. Returns the 108-byte
 /// payload that is stored as the PEM body of an encrypted private key.
@@ -77,6 +84,61 @@ pub fn decrypt_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; SEED
     }
 
     let mut seed = Zeroizing::new([0u8; SEED_LEN]);
+    seed.copy_from_slice(&plaintext);
+    Ok(seed)
+}
+
+/// Encrypts a 96-byte hybrid seed (X25519 scalar || ML-KEM seed) under `passphrase`.
+pub fn encrypt_hybrid_seed(seed: &[u8; HYBRID_SEED_LEN], passphrase: &str) -> Result<Vec<u8>, PqfileError> {
+    let mut salt = [0u8; SALT_LEN];
+    getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let key = derive_key(passphrase, &salt)?;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, seed.as_slice())
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let mut out = Vec::with_capacity(ENCRYPTED_HYBRID_BODY_LEN);
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Decrypts the 140-byte payload from an encrypted hybrid private key PEM body.
+pub fn decrypt_hybrid_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
+    if body.len() != ENCRYPTED_HYBRID_BODY_LEN {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: ENCRYPTED_HYBRID_BODY_LEN,
+            got: body.len(),
+        });
+    }
+
+    let salt = &body[..SALT_LEN];
+    let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
+    let ciphertext = &body[SALT_LEN + NONCE_LEN..];
+
+    let key = derive_key(passphrase, salt)?;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_| PqfileError::WrongPassphrase)?
+    );
+
+    if plaintext.len() != HYBRID_SEED_LEN {
+        return Err(PqfileError::WrongPassphrase);
+    }
+
+    let mut seed = Zeroizing::new([0u8; HYBRID_SEED_LEN]);
     seed.copy_from_slice(&plaintext);
     Ok(seed)
 }

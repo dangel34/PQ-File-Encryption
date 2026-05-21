@@ -8,6 +8,7 @@ pub(crate) enum Tab {
     Encrypt,
     Decrypt,
     Inspect,
+    Keys,
     Settings,
 }
 
@@ -28,11 +29,78 @@ pub(crate) struct PickedFile {
 pub(crate) type Pending = Arc<Mutex<Option<PickedFile>>>;
 pub(crate) type BatchPending = Arc<Mutex<Option<Vec<PickedFile>>>>;
 
+/// A remembered key pair in the key management panel (native-only).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct KeyEntry {
+    pub(crate) label: String,
+    pub(crate) pubkey_path: PathBuf,
+    pub(crate) privkey_path: Option<PathBuf>,
+    pub(crate) fingerprint: String,
+}
+
+/// Shared state for a running batch-encrypt job. Polled from the UI thread each frame.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct EncryptJob {
+    pub(crate) done: usize,
+    pub(crate) total: usize,
+    /// Completed file results: (original index in encrypt_files, status).
+    pub(crate) results: Vec<(usize, OpStatus)>,
+    pub(crate) finished: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type EncryptJobHandle = Arc<Mutex<EncryptJob>>;
+
+/// Shared state for a running decrypt job. `None` = still running; `Some` = finished.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DecryptJobHandle = Arc<Mutex<Option<OpStatus>>>;
+
 pub(crate) struct MultiFileEntry {
     pub(crate) name: String,
     pub(crate) data: Vec<u8>,
     pub(crate) path: Option<PathBuf>,
     pub(crate) status: OpStatus,
+}
+
+/// Which KEM algorithm to use when generating a key pair.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub(crate) enum KeygenAlgorithm {
+    #[default]
+    MlKem768,
+    MlKem1024,
+    HybridX25519MlKem768,
+}
+
+impl KeygenAlgorithm {
+    pub(crate) fn level(self) -> u16 {
+        match self {
+            Self::MlKem768 | Self::HybridX25519MlKem768 => 768,
+            Self::MlKem1024 => 1024,
+        }
+    }
+    pub(crate) fn hybrid(self) -> bool {
+        self == Self::HybridX25519MlKem768
+    }
+}
+
+/// A single encryption recipient (holds the loaded public key PEM).
+pub(crate) struct RecipientEntry {
+    pub(crate) name: String,
+    pub(crate) pem: String,
+    pub(crate) variant_name: String,
+}
+
+/// Detect the KEM variant display name from a public key PEM string.
+pub(crate) fn pem_variant_name(pem_str: &str) -> String {
+    if pem_str.contains("ML-KEM-1024") {
+        "ML-KEM-1024".to_owned()
+    } else if pem_str.contains("X25519+ML-KEM-768") {
+        "Hybrid X25519+ML-KEM-768".to_owned()
+    } else if pem_str.contains("ML-KEM-768") {
+        "ML-KEM-768".to_owned()
+    } else {
+        "Unknown".to_owned()
+    }
 }
 
 pub(crate) struct FileInput {

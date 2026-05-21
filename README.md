@@ -3,38 +3,40 @@
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=dangel34_PQ-File-Encryption&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
 [![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=dangel34_PQ-File-Encryption&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
 
-A quantum-resistant file encryption tool with a command-line interface and a cross-platform GUI. It uses hybrid encryption combining ML-KEM-768 key encapsulation (NIST FIPS 203) with ChaCha20-Poly1305 authenticated symmetric encryption.
+A quantum-resistant file encryption tool with a CLI and a cross-platform GUI. It combines post-quantum key encapsulation (ML-KEM, NIST FIPS 203) with ChaCha20-Poly1305 authenticated encryption. Three key types are supported — ML-KEM-768, ML-KEM-1024, and a hybrid X25519+ML-KEM-768 mode — and a file can be encrypted to multiple recipients in a single pass.
 
-Encrypted files can only be decrypted by the holder of the private decapsulation key, and any tampering with an encrypted file is detected before decryption produces output.
+Digital signatures use ML-DSA-65 (NIST FIPS 204).
 
-**[QUICKSTART.md](QUICKSTART.md)** - build, install, common CLI commands, GUI overview, deploying.
+**[QUICKSTART.md](QUICKSTART.md)** — build, install, common CLI commands, GUI overview, deploying.
 
 ---
 
 ## Background
 
-Classical public-key algorithms such as RSA and ECDH are vulnerable to attacks from sufficiently large quantum computers. ML-KEM (Module-Lattice-based Key Encapsulation Mechanism), standardized by NIST as FIPS 203, is a post-quantum algorithm believed to be secure against both classical and quantum adversaries.
+Classical public-key algorithms such as RSA and ECDH are vulnerable to attacks from sufficiently large quantum computers. ML-KEM (Module-Lattice Key Encapsulation Mechanism), standardized by NIST as FIPS 203, is believed to be secure against both classical and quantum adversaries.
 
 pqfile uses a hybrid approach:
 
-1. **ML-KEM-768** encapsulates a fresh 32-byte shared secret. The encapsulation produces a ciphertext that only the private key holder can unwrap, replacing the role that RSA or ECDH would normally play.
+1. **ML-KEM** encapsulates a fresh random session key. Only the holder of the matching private decapsulation key can recover it.
+2. **ChaCha20-Poly1305** encrypts the file contents under that session key using the STREAM construction (64 KiB chunks). Each chunk is independently authenticated and position-bound so truncation and reordering attacks are detected.
 
-2. **ChaCha20-Poly1305** uses that shared secret as a symmetric key to encrypt the actual file contents. Together they provide authenticated encryption: decryption fails with an explicit error if the ciphertext has been modified.
-
-Because the symmetric key is freshly generated for each file and encapsulated with ML-KEM, no classical asymmetric operation ever touches the file contents directly.
+The optional **hybrid mode** (`--hybrid`) adds X25519 Diffie-Hellman to the key exchange so the encryption is secure under either classical _or_ quantum assumptions — whichever holds in the future.
 
 ---
 
 ## Cryptographic standards
 
-| Component           | Standard / Specification     |
-|---------------------|------------------------------|
-| Key encapsulation   | ML-KEM-768, NIST FIPS 203    |
-| Symmetric cipher    | ChaCha20-Poly1305, RFC 8439  |
-| Randomness          | OS CSPRNG via OsRng          |
-| Key derivation      | Argon2id (passphrase-protected keys) |
-| Key wrapping        | AES-256-GCM (passphrase-protected keys) |
-| Key serialization   | Custom PEM labels            |
+| Component                        | Standard / Specification                                |
+|----------------------------------|---------------------------------------------------------|
+| Key encapsulation (standard)     | ML-KEM-768 or ML-KEM-1024, NIST FIPS 203               |
+| Key encapsulation (hybrid)       | X25519 + ML-KEM-768, key combined via HKDF-SHA256       |
+| Symmetric cipher                 | ChaCha20-Poly1305, RFC 8439                             |
+| Session key wrapping (v4)        | AES-256-GCM                                             |
+| Randomness                       | OS CSPRNG via `getrandom`                               |
+| Key derivation (passphrase)      | Argon2id (m=64 MiB, t=3, p=1)                          |
+| Key wrapping (passphrase)        | AES-256-GCM                                             |
+| Digital signatures               | ML-DSA-65, NIST FIPS 204                                |
+| Key fingerprints                 | SHA3-256 (first 8 bytes, colon-separated hex)           |
 
 ---
 
@@ -53,16 +55,16 @@ PQ-File-Encryption/
 │   │   ├── main.rs         CLI entry point (clap subcommands, stdin/stdout support)
 │   │   ├── lib.rs          Public library re-exports
 │   │   ├── keygen.rs       Key pair generation and PEM serialization
-│   │   ├── encrypt.rs      Hybrid encryption pipeline
-│   │   ├── decrypt.rs      Hybrid decryption pipeline
-│   │   ├── format.rs       .pqf binary file format
+│   │   ├── encrypt.rs      Hybrid encryption pipeline (v2/v3/v4 formats)
+│   │   ├── decrypt.rs      Hybrid decryption pipeline (v2/v3/v4 auto-detect)
+│   │   ├── format.rs       .pqf binary file format definitions
 │   │   ├── passphrase.rs   Argon2id wrapping for passphrase-protected keys
+│   │   ├── sign.rs         ML-DSA-65 signing and verification
 │   │   └── error.rs        PqfileError enum
-│   ├── tests/
-│   │   └── roundtrip.rs    End-to-end CLI integration tests (12 tests)
-│   └── packaging/
-│       ├── Cargo.deb.toml  Debian package metadata
-│       └── pqfile.spec     RPM spec for Fedora/RHEL
+│   ├── benches/
+│   │   └── crypto.rs       Criterion benchmarks (encrypt/decrypt at 1 KB/1 MB/100 MB)
+│   └── tests/
+│       └── roundtrip.rs    End-to-end CLI integration tests (45 tests)
 ├── pqfile-gui/             Shared GUI logic + WASM web app
 │   ├── index.html          Canvas page for trunk/WASM builds
 │   └── src/
@@ -73,93 +75,277 @@ PQ-File-Encryption/
 │       ├── types.rs        Shared types (Tab, FileInput, Settings…)
 │       ├── widgets.rs      UI helper functions
 │       └── tabs/
-│           ├── keygen.rs, encrypt.rs, decrypt.rs, inspect.rs, settings.rs
+│           ├── keygen.rs, encrypt.rs, decrypt.rs, inspect.rs, settings.rs, keys.rs
 └── pqfile-desktop/         Native desktop binary
     └── src/
         └── main.rs         Native entry point (~18 lines)
 ```
 
-The `pqfile` crate is both a library (exposing `encrypt_bytes`, `decrypt_bytes`, `keygen_bytes`) and a CLI binary. The `pqfile-gui` crate is a lib-only crate: it compiles to a `cdylib` for WASM deployment and an `rlib` for the native binary. The `pqfile-desktop` crate contains only the entry point and links against `pqfile-gui`. This follows the official eframe template pattern and avoids build artifact conflicts between lib and binary targets.
+The `pqfile` crate is both a library and a CLI binary. The `pqfile-gui` crate compiles to a `cdylib` for WASM and an `rlib` for the native binary. `pqfile-desktop` is the thin native entry point. This follows the official eframe template pattern.
+
+---
+
+## CLI usage
+
+### Key generation
+
+```bash
+# ML-KEM-768 (default, 128-bit post-quantum security)
+pqfile keygen --out ./keys
+
+# ML-KEM-1024 (192-bit post-quantum security)
+pqfile keygen --out ./keys --level 1024
+
+# Hybrid X25519 + ML-KEM-768 (secure under classical OR quantum assumptions)
+pqfile keygen --out ./keys --hybrid
+
+# Any of the above with a passphrase-protected private key
+pqfile keygen --out ./keys --passphrase
+```
+
+Key files written: `pubkey.pem` (share freely) and `privkey.pem` (keep secret). The fingerprint (SHA3-256, first 8 bytes) is printed at generation time.
+
+### Encryption
+
+```bash
+# Single recipient
+pqfile encrypt -r pubkey.pem secret.txt
+# Output: secret.txt.pqf
+
+# Custom output path
+pqfile encrypt -r pubkey.pem secret.txt -o encrypted.pqf
+
+# Multiple recipients — any one of them can decrypt
+pqfile encrypt -r alice/pubkey.pem -r bob/pubkey.pem secret.txt
+
+# Recursive directory encryption
+pqfile encrypt -r pubkey.pem --recursive /path/to/dir/
+# Each file → <file>.pqf alongside the original; existing .pqf files are skipped
+
+# Read from stdin, write to stdout
+cat secret.txt | pqfile encrypt -r pubkey.pem - > secret.txt.pqf
+```
+
+Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--recursive` requires exactly one recipient.
+
+### Decryption
+
+```bash
+# Decrypt to default path (strips .pqf extension)
+pqfile decrypt -k privkey.pem secret.txt.pqf
+
+# Custom output path
+pqfile decrypt -k privkey.pem secret.txt.pqf -o recovered.txt
+
+# Stdin/stdout pipeline
+cat secret.txt.pqf | pqfile decrypt -k privkey.pem - -o -
+```
+
+If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2, v3 (streamed), and v4 (multi-recipient) files.
+
+### Inspect
+
+```bash
+pqfile inspect secret.txt.pqf
+```
+
+For a single-recipient file (v2/v3):
+```
+Magic:              PQFL
+Version:            0x03
+KEM variant:        768 (ML-KEM-768)
+Nonce:              3a7b...
+Original file size: 2048 bytes
+```
+
+For a multi-recipient file (v4):
+```
+Magic:              PQFL
+Version:            0x04 (multi-recipient)
+Recipients:         2
+  Recipient 0:      768 (ML-KEM-768)
+  Recipient 1:      1024 (ML-KEM-1024)
+Nonce:              8c2f...
+Original file size: 2048 bytes
+```
+
+### Digital signatures
+
+```bash
+# Generate a signing key pair (separate from encryption keys)
+pqfile sign-keygen --out ./keys
+# Writes: sign_pubkey.pem (1952 bytes), sign_privkey.pem (32-byte seed)
+
+# Sign a file (produces a detached .sig file)
+pqfile sign -k sign_privkey.pem document.pdf
+# Output: document.pdf.sig
+
+# Custom signature output path
+pqfile sign -k sign_privkey.pem document.pdf -o document.sig
+
+# Verify a signature
+pqfile verify -k sign_pubkey.pem -s document.pdf.sig document.pdf
+```
+
+Signatures are ML-DSA-65 (NIST FIPS 204), 3309 bytes, stored in PEM format. The verifying key (1952 bytes) can be distributed alongside the signed content.
+
+### Shell completions
+
+```bash
+pqfile completions bash   >> ~/.bash_completion
+pqfile completions zsh    > ~/.zfunc/_pqfile
+pqfile completions fish   > ~/.config/fish/completions/pqfile.fish
+pqfile completions powershell >> $PROFILE
+```
+
+### JSON output
+
+Every command accepts a global `--json` flag for machine-readable output:
+
+```bash
+pqfile --json keygen --out ./keys
+# {"status":"ok","pubkey_path":"./keys/pubkey.pem","privkey_path":"./keys/privkey.pem","fingerprint":"21:f3:b4:..."}
+
+pqfile --json inspect file.pqf
+pqfile --json encrypt -r pubkey.pem file.txt
+pqfile --json decrypt -k privkey.pem file.txt.pqf
+pqfile --json sign -k sign_privkey.pem file.txt
+pqfile --json verify -k sign_pubkey.pem -s file.txt.sig file.txt
+```
+
+Errors go to stderr as `{"status":"error","message":"..."}`. Exit code is always 1 on error.
+
+---
+
+## GUI
+
+The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egui code and support:
+
+- **Keygen tab** — generates ML-KEM-768 key pairs, with optional passphrase protection
+- **Encrypt tab** — single public key, multi-file batch encrypt with per-file status and progress bar
+- **Decrypt tab** — loads any v2/v3/v4 `.pqf` file; shows passphrase field only when needed
+- **Inspect tab** — displays header metadata for v2/v3 `.pqf` files without decrypting
+- **Keys tab** — persistent key-pair registry with fingerprints and quick-load buttons
+- **Settings tab** — theme, auto-clear, confirm-overwrite preferences
+
+> The GUI keygen always produces ML-KEM-768 keys. Use the CLI for `--level 1024`, `--hybrid`, or multi-recipient encryption.
 
 ---
 
 ## The .pqf file format
 
-Every encrypted file begins with a fixed-length header followed by the encrypted payload.
+There are four format versions. The version byte at offset 4 selects the layout.
+
+### v2 — single-recipient, whole-file AEAD
 
 ```
 Offset   Length    Field
 ------   ------    -----
-0        4         Magic bytes: ASCII "PQFL"
+0        4         Magic: "PQFL"
 4        1         Version: 0x02
-5        2         KEM variant: 768 as little-endian u16
-7        1088      ML-KEM-768 KEM ciphertext (encapsulated shared secret)
-1095     12        ChaCha20-Poly1305 nonce
-1107     8         Original plaintext size as little-endian u64
-1115     N+16      Encrypted payload (N bytes ciphertext + 16-byte Poly1305 tag)
+5        2         KEM variant (u16 little-endian): 768, 1024, or 0x0301 (hybrid)
+7        CT_LEN    KEM ciphertext (encapsulated session key)
+7+CT     12        ChaCha20-Poly1305 nonce
+7+CT+12  8         Original plaintext size (u64 little-endian)
+────     N+16      Encrypted payload; header used as AEAD additional data
 ```
 
-The KEM ciphertext field is 1088 bytes, the exact ciphertext size specified by FIPS 203 for ML-KEM-768 (k=3, du=10, dv=4).
+### v3 — single-recipient, chunked STREAM
 
-The entire 1115-byte header (bytes 0-1114) is passed as AEAD additional data (AAD) during encryption. The Poly1305 tag therefore covers both the ciphertext payload and the header, so any modification to any header field is detected and causes decryption to fail. The original file size field is informational; it is displayed by `pqfile inspect` but not used for truncation.
+Same header as v2 with `version = 0x03`. The payload is split into 64 KiB chunks. Each chunk's nonce is `base_nonce[8] || counter[4]` and its AAD is `"pqfile" || counter[4] || is_last[1]`. The last-chunk flag prevents truncation; the counter prevents reordering.
+
+### v4 — multi-recipient, chunked STREAM
+
+```
+Offset   Length    Field
+------   ------    -----
+0        4         Magic: "PQFL"
+4        1         Version: 0x04
+5        2         Recipient count N (u16 little-endian)
+─── Per recipient (repeated N times) ───────────────────────────────
+         2         KEM variant (u16 little-endian)
+         CT_LEN    KEM ciphertext for this recipient
+         48        AES-256-GCM wrapped session key (32-byte key + 16-byte tag)
+─── Shared tail ────────────────────────────────────────────────────
+         12        Base nonce (8 random bytes || 4 zero bytes)
+         8         Original plaintext size (u64 little-endian)
+─── Payload ────────────────────────────────────────────────────────
+         …         Chunked STREAM identical to v3, keyed by the session key
+```
+
+A random 32-byte session key K encrypts the payload. Each recipient's `ss` (from their KEM encapsulation) wraps K under `AES-256-GCM(key=ss, nonce=zero)`. The zero nonce is safe because each `ss` is unique per encapsulation. Mixed KEM variants within one file are supported.
+
+### KEM variant field
+
+| Value    | Algorithm               | CT bytes | EK bytes |
+|----------|-------------------------|----------|----------|
+| `768`    | ML-KEM-768              | 1088     | 1184     |
+| `1024`   | ML-KEM-1024             | 1568     | 1568     |
+| `0x0301` | Hybrid X25519+ML-KEM-768| 1120     | 1216     |
 
 ---
 
-## PEM key format
+## PEM key formats
 
-Keys are stored in standard PEM framing with custom type labels:
-
-```
------BEGIN ML-KEM-768 PUBLIC KEY-----
-<base64-encoded encapsulation key, 1184 bytes raw>
------END ML-KEM-768 PUBLIC KEY-----
-```
+### ML-KEM-768
 
 ```
------BEGIN ML-KEM-768 PRIVATE KEY-----
-<base64-encoded decapsulation key seed, 64 bytes raw>
------END ML-KEM-768 PRIVATE KEY-----
+-----BEGIN ML-KEM-768 PUBLIC KEY-----          (1184 bytes raw)
+-----BEGIN ML-KEM-768 PRIVATE KEY-----         (64-byte seed)
+-----BEGIN ML-KEM-768 ENCRYPTED PRIVATE KEY--- (16-byte salt || 12-byte nonce || 80-byte AES ciphertext)
 ```
 
-When generated with `--passphrase`, the private key uses an encrypted body:
+### ML-KEM-1024
 
 ```
------BEGIN ML-KEM-768 ENCRYPTED PRIVATE KEY-----
-<base64-encoded: 16-byte Argon2id salt || 12-byte AES-GCM nonce || 80-byte AES-256-GCM ciphertext>
------END ML-KEM-768 ENCRYPTED PRIVATE KEY-----
+-----BEGIN ML-KEM-1024 PUBLIC KEY-----         (1568 bytes raw)
+-----BEGIN ML-KEM-1024 PRIVATE KEY-----        (64-byte seed)
+-----BEGIN ML-KEM-1024 ENCRYPTED PRIVATE KEY-- (same layout as above)
 ```
 
-The 80-byte ciphertext is the 64-byte seed encrypted under a 256-bit key derived from the passphrase via Argon2id (m=64 MiB, t=3, p=1), plus the 16-byte AES-GCM authentication tag.
+### Hybrid X25519+ML-KEM-768
 
-The private key stores the 64-byte seed (§3.3 of FIPS 203) rather than the 2400-byte expanded form. The decapsulation key is re-derived on load, which keeps key files small and avoids storing redundant data.
+```
+-----BEGIN X25519+ML-KEM-768 PUBLIC KEY-----         (X25519 pubkey 32 || ML-KEM EK 1184 = 1216 bytes)
+-----BEGIN X25519+ML-KEM-768 PRIVATE KEY-----        (X25519 scalar 32 || ML-KEM seed 64 = 96 bytes)
+-----BEGIN X25519+ML-KEM-768 ENCRYPTED PRIVATE KEY-- (16-byte salt || 12-byte nonce || 112-byte AES ciphertext)
+```
 
-| Key type               | Raw size (bytes) |
-|------------------------|-----------------|
-| Encapsulation key      | 1184            |
-| Decapsulation key seed | 64              |
-| KEM ciphertext         | 1088            |
-| Shared secret          | 32              |
+### ML-DSA-65 (signing only)
+
+```
+-----BEGIN ML-DSA-65 VERIFYING KEY-----  (1952 bytes raw)
+-----BEGIN ML-DSA-65 SIGNING KEY-----    (32-byte seed)
+-----BEGIN ML-DSA-65 SIGNATURE-----      (3309 bytes raw)
+```
+
+Signing keys are not passphrase-protected. Protect `sign_privkey.pem` with filesystem permissions or store it on encrypted storage.
+
+Passphrase-protected private keys derive their AES-256-GCM wrapping key via Argon2id (m=64 MiB, t=3, p=1, 16-byte random salt). The private key stores only the seed (64 bytes for ML-KEM, 96 bytes for hybrid); the full decapsulation key is re-derived on load.
 
 ---
 
 ## Error handling
 
-All errors are reported to stderr with a descriptive message. The process exits with code 1 on any error. The GUI displays errors in red text inline.
+All errors are reported to stderr with a descriptive message; exit code is 1. The GUI shows errors inline in red.
 
-| Error variant       | Meaning                                                              |
-|---------------------|----------------------------------------------------------------------|
-| `Io`                | Any file system or I/O failure                                       |
-| `InvalidMagic`      | File does not start with the bytes "PQFL"                            |
-| `UnsupportedVersion`| Version byte is not 0x02                                            |
-| `UnsupportedKem`    | KEM variant field is not 768                                         |
-| `EncryptionFailure` | ChaCha20-Poly1305 encryption failed (e.g. nonce generation error)    |
-| `DecryptionFailure` | ChaCha20-Poly1305 authentication tag mismatch                        |
-| `InvalidPem`        | PEM file could not be parsed                                         |
-| `InvalidKeyLength`  | Decoded key bytes are the wrong length                               |
-| `OutputExists`      | Key file already exists and `--force` was not passed                 |
-| `WrongPassphrase`      | Passphrase decryption of private key seed failed                  |
-| `PassphraseRequired`   | Encrypted private key loaded but no passphrase supplied           |
-| `PassphraseMismatch`   | New passphrase and confirmation do not match (keygen `--passphrase`) |
+| Error variant          | Meaning                                                                   |
+|------------------------|---------------------------------------------------------------------------|
+| `Io`                   | File system or I/O failure                                                |
+| `InvalidMagic`         | File does not start with "PQFL"                                           |
+| `UnsupportedVersion`   | Version byte is not 0x02, 0x03, or 0x04                                   |
+| `UnsupportedKem`       | KEM variant field is not a recognised value                               |
+| `EncryptionFailure`    | AEAD encryption or nonce generation failed                                |
+| `DecryptionFailure`    | Authentication tag mismatch (file tampered or wrong key)                  |
+| `InvalidPem`           | PEM file could not be parsed or has an unrecognised tag                   |
+| `InvalidKeyLength`     | Decoded key bytes are the wrong length                                    |
+| `OutputExists`         | Key file already exists and `--force` was not passed                      |
+| `WrongPassphrase`      | Passphrase decryption of private key seed failed                          |
+| `PassphraseRequired`   | Encrypted private key loaded but no passphrase supplied                   |
+| `PassphraseMismatch`   | New passphrase and confirmation do not match                              |
+| `InvalidSignature`     | Signature bytes are malformed                                             |
+| `SignatureVerificationFailed` | ML-DSA-65 signature does not match the file                        |
+| `NoMatchingRecipient`  | v4 file: no recipient entry matched the provided private key              |
 
 ---
 
@@ -169,19 +355,27 @@ All errors are reported to stderr with a descriptive message. The process exits 
 cargo test --workspace
 ```
 
-88 tests across all crates. The integration tests in `pqfile/tests/roundtrip.rs` cover the CLI binary end-to-end:
+171 tests across all crates (63 unit + 63 unit-in-main + 45 integration). Run benchmarks with:
 
-| Test | What it verifies |
-|------|-----------------|
-| `roundtrip` | keygen → encrypt → decrypt → byte-for-byte match |
-| `roundtrip_custom_output_paths` | `-o` flag on both encrypt and decrypt |
-| `roundtrip_stdin_stdout` | encrypt reads from stdin with `-`, decrypt writes to stdout with `-o -` |
-| `roundtrip_stdin_to_stdout` | full stdin → encrypt → stdout → stdin → decrypt → stdout pipeline |
-| `keygen_refuses_overwrite_without_force` | second keygen exits non-zero without `--force` |
-| `keygen_force_overwrites_existing_keys` | `--force` succeeds on second keygen |
-| `inspect_shows_header_fields` | `pqfile inspect` prints correct magic, version, KEM variant, size |
-| `inspect_fails_on_invalid_file` | inspect exits non-zero on a file with invalid magic bytes |
-| `completions_*` (6 tests) | shell completion scripts generate without error for all supported shells |
+```
+cargo bench -p pqfile
+```
+
+Key integration tests in `pqfile/tests/roundtrip.rs`:
+
+| Test group | What it covers |
+|------------|----------------|
+| Basic roundtrip | keygen → encrypt → decrypt → byte-for-byte match |
+| Custom paths | `-o` flag on encrypt and decrypt |
+| Stdin/stdout | full pipe with `-` |
+| Force overwrite | `--force` behaviour |
+| Inspect | header fields displayed correctly, v3 version byte, invalid file |
+| JSON output | all commands emit valid JSON; errors go to stderr |
+| Recursive | directory encryption, skip `.pqf`, non-directory error |
+| 1024-bit | ML-KEM-1024 encrypt/decrypt roundtrip and inspect |
+| ML-DSA | sign-keygen, sign, verify, tamper detection, JSON output |
+| Hybrid | X25519+ML-KEM-768 roundtrip, passphrase, inspect, mismatch error |
+| Multi-recipient | 2-key v4 roundtrip, 3-key v4, mixed variants, wrong key rejected |
 
 ---
 
@@ -189,39 +383,37 @@ cargo test --workspace
 
 ### pqfile (CLI and library)
 
-| Crate            | Version | Purpose                                          |
-|------------------|---------|--------------------------------------------------|
-| ml-kem           | 0.3     | ML-KEM-768 key encapsulation (FIPS 203)          |
-| chacha20poly1305 | 0.10    | ChaCha20-Poly1305 authenticated encryption       |
-| getrandom        | 0.4     | OS CSPRNG for nonce generation                   |
-| zeroize          | 1       | Overwrite secret bytes in memory on drop         |
-| pem              | 3       | PEM encoding and decoding for key files          |
-| clap             | 4       | Command-line argument parsing with derive macros |
-| thiserror        | 2       | Ergonomic custom error type derivation           |
-| sha3             | 0.12    | SHA3-256 (FIPS 202) for public key fingerprints  |
-| argon2           | 0.5     | Argon2id KDF for passphrase-protected keys       |
-| aes-gcm          | 0.10    | AES-256-GCM wrapping of the private key seed     |
-| rpassword        | 7       | Secure passphrase prompting in the CLI           |
+| Crate            | Version | Purpose                                                       |
+|------------------|---------|---------------------------------------------------------------|
+| ml-kem           | 0.3     | ML-KEM-768/1024 key encapsulation (FIPS 203)                  |
+| ml-dsa           | 0.1     | ML-DSA-65 digital signatures (FIPS 204)                       |
+| chacha20poly1305 | 0.10    | ChaCha20-Poly1305 authenticated encryption                    |
+| aes-gcm          | 0.10    | AES-256-GCM (passphrase key wrapping, v4 session key wrapping)|
+| x25519-dalek     | 2       | X25519 Diffie-Hellman (hybrid mode)                           |
+| hkdf             | 0.12    | HKDF-SHA256 key derivation (hybrid mode)                      |
+| sha2             | 0.10    | SHA-256 (HKDF input)                                          |
+| getrandom        | 0.4     | OS CSPRNG for nonces and key generation                       |
+| zeroize          | 1       | Overwrite secret bytes on drop                                |
+| argon2           | 0.5     | Argon2id KDF for passphrase-protected keys                    |
+| pem              | 3       | PEM encoding/decoding for key files                           |
+| sha3             | 0.12    | SHA3-256 (FIPS 202) for key fingerprints                      |
+| clap             | 4       | CLI argument parsing                                          |
+| clap_complete    | 4       | Shell completion script generation                            |
+| thiserror        | 2       | Custom error type derivation                                  |
+| rpassword        | 7       | Secure passphrase prompting                                   |
 
 ### pqfile-gui (shared GUI logic and WASM lib)
 
-| Crate                    | Version | Purpose                                        |
-|--------------------------|---------|------------------------------------------------|
-| eframe                   | 0.34    | egui app framework (native via rlib, WASM via cdylib) |
-| rfd                      | 0.17    | Native sync and WASM async file dialogs        |
-| wasm-bindgen             | 0.2     | Rust/WASM bindings (WASM only)                 |
-| wasm-bindgen-futures     | 0.4     | Async bridge for WASM (WASM only)              |
-| web-sys                  | 0.3     | Browser DOM APIs for file download (WASM only) |
-| js-sys                   | 0.3     | JavaScript types for WASM (WASM only)          |
-| getrandom                | 0.4     | JS entropy source for WASM crypto (WASM only)  |
-| console_error_panic_hook | 0.1     | Routes Rust panics to the browser console (WASM only) |
-
-### pqfile-desktop (native binary)
-
-| Crate      | Version | Purpose                               |
-|------------|---------|---------------------------------------|
-| pqfile-gui | local   | Shared GUI app logic (linked as rlib) |
-| eframe     | 0.34    | Native window creation and event loop |
+| Crate                    | Version | Purpose                                              |
+|--------------------------|---------|------------------------------------------------------|
+| eframe                   | 0.34    | egui app framework (native rlib + WASM cdylib)       |
+| rfd                      | 0.17    | Native sync and WASM async file dialogs              |
+| wasm-bindgen             | 0.2     | Rust/WASM bindings (WASM only)                       |
+| wasm-bindgen-futures     | 0.4     | Async bridge for WASM (WASM only)                    |
+| web-sys                  | 0.3     | Browser DOM APIs for file download (WASM only)       |
+| js-sys                   | 0.3     | JavaScript types for WASM (WASM only)                |
+| getrandom                | 0.4     | JS entropy source for WASM crypto (WASM only)        |
+| console_error_panic_hook | 0.1     | Routes Rust panics to the browser console (WASM only)|
 
 ---
 
@@ -248,9 +440,13 @@ rpmbuild -bb pqfile/packaging/pqfile.spec
 
 ## Security considerations
 
-- The private key (`privkey.pem`) must be kept confidential. Anyone who obtains it can decrypt any file encrypted to the corresponding public key.
-- The public key (`pubkey.pem`) can be shared freely.
-- Each encryption operation generates a fresh KEM ciphertext and a fresh random nonce. Reuse of a nonce under the same key would break ChaCha20-Poly1305 confidentiality, but this cannot happen here because the symmetric key itself is freshly derived per file.
-- The entire `.pqf` file is authenticated. The 1115-byte header is passed as AEAD additional data (AAD), so the Poly1305 tag covers both the header and the ciphertext. Any modification to any byte (header or payload) is detected before decryption produces output.
-- Secret material (the decapsulation key bytes and the shared secret) is overwritten with zeros when the relevant variables go out of scope, using the `zeroize` crate.
-- The web GUI performs all cryptographic operations in WebAssembly inside the browser. No file data or key material is transmitted over the network.
+- **Private keys must be kept confidential.** Anyone with `privkey.pem` can decrypt any file encrypted to the corresponding public key.
+- **Public keys can be shared freely.**
+- **Each encryption is independent.** A fresh KEM ciphertext, fresh ephemeral X25519 scalar (hybrid mode), and fresh nonce are generated per file. Nonce reuse under the same symmetric key is structurally impossible.
+- **The entire file is authenticated.** For v2, the 1115-byte header is AEAD additional data so any header or payload modification fails decryption. For v3/v4, each 64 KiB chunk carries its own AEAD tag plus a position-binding counter so truncation, reordering, and payload swapping are all detected.
+- **Secret material is zeroized on drop.** The decapsulation key seed, shared secrets, session keys, and passphrase-derived keys are wrapped in `Zeroizing<T>` from the `zeroize` crate. `x25519-dalek` and `ml-kem` are compiled with their `zeroize` features enabled.
+- **Multi-recipient security.** In v4 format, the file payload is encrypted with a single random 32-byte session key. Each recipient's copy of that key is wrapped under their KEM shared secret using AES-256-GCM (zero nonce; safe because the KEM shared secret is fresh and unique per encapsulation). A recipient with a non-matching key cannot distinguish a file addressed to them from one addressed to others.
+- **Hybrid mode security.** The combined session key is `HKDF-SHA256(X25519_ss || ML-KEM_ss, info="pqfile-hybrid-v1")`. Security holds if either X25519 or ML-KEM is unbroken — not both.
+- **Signing keys are not passphrase-protected.** Protect `sign_privkey.pem` with filesystem permissions or disk encryption. Compromise of the signing key allows forged signatures but does not affect encryption key confidentiality.
+- **The web GUI operates entirely in WebAssembly inside the browser.** No file data or key material is transmitted over the network.
+- **Fingerprints are informational.** SHA3-256(pubkey)[0:8] gives 64 bits. Suitable for display and manual comparison — not a cryptographic commitment. Always verify keys through a trusted channel.

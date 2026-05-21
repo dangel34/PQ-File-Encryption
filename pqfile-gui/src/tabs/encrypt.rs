@@ -1,62 +1,214 @@
+use std::io::Cursor;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::encrypt;
 use crate::app::PqfileApp;
-use crate::colors::{c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
+use crate::colors::{c_accent, c_card, c_chrome, c_overlay, c_red, c_green, c_subtext, c_surface0, c_surface1, c_text};
 use crate::types::OpStatus;
-use crate::widgets::{card, file_row, pick_files, save_result, section_label, show_status, tab_heading};
+use crate::widgets::{card, pick_file, pick_files, save_result, section_label, show_status, tab_heading};
 
 impl PqfileApp {
-    pub(crate) fn handle_encrypt_all(&mut self) {
-        let Some(pub_pem) = self.encrypt_pubkey.as_str().map(str::to_owned) else {
+    pub(crate) fn handle_encrypt_all(&mut self, ctx: &egui::Context) {
+        if self.encrypt_recipients.is_empty() {
             return;
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        let confirm = self.settings.confirm_overwrite;
-        #[cfg(target_arch = "wasm32")]
-        let confirm = false;
+        }
+        let pub_pems: Vec<String> = self.encrypt_recipients.iter().map(|r| r.pem.clone()).collect();
 
-        for entry in &mut self.encrypt_files {
-            let out_name = format!("{}.pqf", entry.name);
-            let out_path = entry.path.as_ref().map(|p| {
-                let mut s = p.as_os_str().to_owned();
-                s.push(".pqf");
-                PathBuf::from(s)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use crate::types::EncryptJob;
+
+            let confirm = self.settings.confirm_overwrite;
+            let files: Vec<(usize, String, Vec<u8>, Option<PathBuf>)> = self
+                .encrypt_files
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (i, e.name.clone(), e.data.clone(), e.path.clone()))
+                .collect();
+            let total = files.len();
+
+            let job = Arc::new(Mutex::new(EncryptJob {
+                done: 0,
+                total,
+                results: Vec::new(),
+                finished: false,
+            }));
+            self.encrypt_job = Some(Arc::clone(&job));
+
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                for (i, name, data, path) in files {
+                    let out_name = format!("{name}.pqf");
+                    let out_path = path.map(|p| {
+                        let mut s = p.as_os_str().to_owned();
+                        s.push(".pqf");
+                        PathBuf::from(s)
+                    });
+                    let original_size = data.len() as u64;
+                    let status = if pub_pems.len() == 1 {
+                        let mut reader = Cursor::new(&data);
+                        let mut out = Vec::new();
+                        match encrypt::encrypt_stream(&pub_pems[0], original_size, &mut reader, &mut out) {
+                            Ok(()) => save_result(&out_name, &out, out_path, confirm),
+                            Err(e) => OpStatus::Err(e.to_string()),
+                        }
+                    } else {
+                        let pem_refs: Vec<&str> = pub_pems.iter().map(|s| s.as_str()).collect();
+                        let mut reader = Cursor::new(&data);
+                        let mut out = Vec::new();
+                        match encrypt::encrypt_stream_multi(&pem_refs, original_size, &mut reader, &mut out) {
+                            Ok(()) => save_result(&out_name, &out, out_path, confirm),
+                            Err(e) => OpStatus::Err(e.to_string()),
+                        }
+                    };
+                    {
+                        let mut g = job.lock().unwrap();
+                        g.done += 1;
+                        g.results.push((i, status));
+                    }
+                    ctx.request_repaint();
+                }
+                job.lock().unwrap().finished = true;
+                ctx.request_repaint();
             });
-            entry.status = match encrypt::encrypt_bytes(&pub_pem, &entry.data) {
-                Ok(pqf) => save_result(&out_name, &pqf, out_path, confirm),
-                Err(e)  => OpStatus::Err(e.to_string()),
-            };
+            return;
         }
 
-        let all_ok = self.settings.auto_clear
-            && self.encrypt_files.iter().all(|e| matches!(e.status, OpStatus::Ok(_)));
-        if all_ok {
-            self.encrypt_pubkey.clear();
-            self.encrypt_files.clear();
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            for entry in &mut self.encrypt_files {
+                let original_size = entry.data.len() as u64;
+                let out_name = format!("{}.pqf", entry.name);
+                entry.status = if pub_pems.len() == 1 {
+                    let mut reader = Cursor::new(&entry.data);
+                    let mut out = Vec::new();
+                    match encrypt::encrypt_stream(&pub_pems[0], original_size, &mut reader, &mut out) {
+                        Ok(()) => save_result(&out_name, &out, None, false),
+                        Err(e) => OpStatus::Err(e.to_string()),
+                    }
+                } else {
+                    let pem_refs: Vec<&str> = pub_pems.iter().map(|s| s.as_str()).collect();
+                    let mut reader = Cursor::new(&entry.data);
+                    let mut out = Vec::new();
+                    match encrypt::encrypt_stream_multi(&pem_refs, original_size, &mut reader, &mut out) {
+                        Ok(()) => save_result(&out_name, &out, None, false),
+                        Err(e) => OpStatus::Err(e.to_string()),
+                    }
+                };
+            }
+            let all_ok = self.settings.auto_clear
+                && self.encrypt_files.iter().all(|e| matches!(e.status, OpStatus::Ok(_)));
+            if all_ok {
+                self.encrypt_recipients.clear();
+                self.encrypt_files.clear();
+            }
         }
     }
 
     pub(crate) fn show_encrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
         tab_heading(ui, "Encrypt File", dark);
         ui.label(
-            RichText::new("Encrypt one or more files using a recipient's public key.")
+            RichText::new("Encrypt one or more files to one or more recipients.")
                 .size(13.0)
                 .color(c_subtext(dark)),
         );
         ui.add_space(14.0);
 
-        section_label(ui, "INPUTS", dark);
+        #[cfg(not(target_arch = "wasm32"))]
+        let job_running = self.encrypt_job.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let job_running = false;
+
+        // ── Recipients ───────────────────────────────────────────────────────
+        section_label(ui, "RECIPIENTS", dark);
+        let mut to_remove_recipient: Option<usize> = None;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
-            file_row(ui, "Public key (.pem)", &mut self.encrypt_pubkey, "PEM", &["pem"], dark);
+            ui.horizontal(|ui| {
+                let n = self.encrypt_recipients.len();
+                if n == 0 {
+                    ui.label(
+                        RichText::new("No recipients — browse or drag & drop a public key")
+                            .size(13.0)
+                            .color(c_overlay(dark)),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(format!("{n} recipient{}", if n == 1 { "" } else { "s" }))
+                            .size(13.0)
+                            .color(c_subtext(dark)),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !job_running
+                        && ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("+ Add Recipient…").size(13.0).color(c_text(dark)),
+                                )
+                                .fill(c_surface0(dark)),
+                            )
+                            .clicked()
+                    {
+                        pick_file(Arc::clone(&self.encrypt_pubkey.pending), "PEM", &["pem"]);
+                    }
+                });
+            });
+
+            if !self.encrypt_recipients.is_empty() {
+                ui.add_space(6.0);
+                for (i, r) in self.encrypt_recipients.iter().enumerate() {
+                    let mut remove = false;
+                    let w = ui.available_width();
+                    ui.allocate_ui(egui::vec2(w, 22.0), |ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            // Variant badge
+                            let badge_color = variant_badge_color(&r.variant_name, dark);
+                            ui.label(
+                                RichText::new(&r.variant_name)
+                                    .size(11.0)
+                                    .color(badge_color)
+                                    .monospace(),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(&r.name).size(13.0).color(c_text(dark)));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if !job_running {
+                                        remove = ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new("✕")
+                                                        .size(11.0)
+                                                        .color(c_overlay(dark)),
+                                                )
+                                                .fill(Color32::TRANSPARENT)
+                                                .stroke(Stroke::NONE),
+                                            )
+                                            .clicked();
+                                    }
+                                },
+                            );
+                        });
+                    });
+                    if remove && to_remove_recipient.is_none() {
+                        to_remove_recipient = Some(i);
+                    }
+                }
+            }
         });
+
+        if let Some(i) = to_remove_recipient {
+            self.encrypt_recipients.remove(i);
+        }
         ui.add_space(14.0);
 
+        // ── Files to encrypt ─────────────────────────────────────────────────
         section_label(ui, "FILES TO ENCRYPT", dark);
         let mut to_remove: Option<usize> = None;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
-            // Header row: file count + Add Files button
             ui.horizontal(|ui| {
                 if self.encrypt_files.is_empty() {
                     ui.label(
@@ -73,21 +225,21 @@ impl PqfileApp {
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("+ Add Files…").size(13.0).color(c_text(dark)),
+                    if !job_running
+                        && ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("+ Add Files…").size(13.0).color(c_text(dark)),
+                                )
+                                .fill(c_surface0(dark)),
                             )
-                            .fill(c_surface0(dark)),
-                        )
-                        .clicked()
+                            .clicked()
                     {
                         pick_files(Arc::clone(&self.encrypt_batch_pending));
                     }
                 });
             });
 
-            // Per-file rows
             if !self.encrypt_files.is_empty() {
                 ui.add_space(6.0);
                 for (i, entry) in self.encrypt_files.iter().enumerate() {
@@ -99,17 +251,19 @@ impl PqfileApp {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    rc = ui
-                                        .add(
-                                            egui::Button::new(
-                                                RichText::new("✕")
-                                                    .size(11.0)
-                                                    .color(c_overlay(dark)),
+                                    if !job_running {
+                                        rc = ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new("✕")
+                                                        .size(11.0)
+                                                        .color(c_overlay(dark)),
+                                                )
+                                                .fill(Color32::TRANSPARENT)
+                                                .stroke(Stroke::NONE),
                                             )
-                                            .fill(Color32::TRANSPARENT)
-                                            .stroke(Stroke::NONE),
-                                        )
-                                        .clicked();
+                                            .clicked();
+                                    }
                                     match &entry.status {
                                         OpStatus::None => {}
                                         OpStatus::Ok(_) => {
@@ -145,7 +299,7 @@ impl PqfileApp {
         ui.add_space(14.0);
 
         let n = self.encrypt_files.len();
-        let ready = self.encrypt_pubkey.loaded() && n > 0;
+        let ready = !self.encrypt_recipients.is_empty() && n > 0 && !job_running;
         let btn_label = if n == 0 {
             "🔒  Encrypt All".to_owned()
         } else {
@@ -162,24 +316,58 @@ impl PqfileApp {
             )
             .clicked()
         {
-            self.handle_encrypt_all();
+            self.handle_encrypt_all(ui.ctx());
         }
 
-        if !ready {
+        if !ready && !job_running {
             ui.add_space(4.0);
             ui.label(
-                RichText::new("Load a public key and add files to continue.")
+                RichText::new("Add at least one recipient key and one file to continue.")
                     .size(12.0)
                     .color(c_overlay(dark)),
             );
         }
 
-        // Show any per-file errors in aggregate via show_status for the overall run
+        // Progress bar while a job is running.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(job) = &self.encrypt_job {
+            if let Ok(g) = job.try_lock() {
+                let fraction = if g.total > 0 {
+                    g.done as f32 / g.total as f32
+                } else {
+                    0.0
+                };
+                ui.add_space(10.0);
+                ui.add(
+                    egui::ProgressBar::new(fraction)
+                        .desired_width(f32::INFINITY)
+                        .animate(true),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!("Encrypting… {}/{}", g.done, g.total))
+                        .size(12.0)
+                        .color(c_subtext(dark)),
+                );
+            }
+        }
+
         let first_err = self.encrypt_files.iter().find_map(|e| {
             if let OpStatus::Err(m) = &e.status { Some(m.as_str()) } else { None }
         });
         if let Some(msg) = first_err {
             show_status(ui, &OpStatus::Err(msg.to_owned()), dark);
         }
+    }
+}
+
+fn variant_badge_color(variant_name: &str, dark: bool) -> eframe::egui::Color32 {
+    use crate::colors::c_accent;
+    if variant_name.starts_with("Hybrid") {
+        if dark { eframe::egui::Color32::from_rgb(180, 120, 220) } else { eframe::egui::Color32::from_rgb(100, 40, 160) }
+    } else if variant_name.contains("1024") {
+        if dark { eframe::egui::Color32::from_rgb(100, 200, 240) } else { eframe::egui::Color32::from_rgb(0, 100, 160) }
+    } else {
+        c_accent(dark)
     }
 }
