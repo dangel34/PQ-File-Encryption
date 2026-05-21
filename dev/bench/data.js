@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779376063337,
+  "lastUpdate": 1779376782962,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -305,6 +305,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 52330,
             "range": "± 265",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "f2027bc723bed980ad5655ff9cdf2d1b098d7c6b",
+          "message": "feat: enhance encryption and decryption functions with must-use annotations\n\n- Added #[must_use] annotations to encryption and decryption functions to ensure results are utilized, preventing potential misuse.\n- Updated fuzz testing to generate keys with a specified length for improved consistency.\n- Introduced the zeroize crate for secure handling of sensitive data in the GUI, enhancing passphrase management.",
+          "timestamp": "2026-05-21T11:13:38-04:00",
+          "tree_id": "e6c1f754818391e93a11b0647460965ce8d8038c",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/f2027bc723bed980ad5655ff9cdf2d1b098d7c6b"
+        },
+        "date": 1779376782015,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 61800,
+            "range": "± 5353",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1012554,
+            "range": "± 9880",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 113132084,
+            "range": "± 570817",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 102087,
+            "range": "± 1092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1018626,
+            "range": "± 11543",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 99283963,
+            "range": "± 1533643",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 63349,
+            "range": "± 1207",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 972329,
+            "range": "± 12796",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 102074463,
+            "range": "± 2587785",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 106302,
+            "range": "± 2672",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1016749,
+            "range": "± 6929",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 101478254,
+            "range": "± 2115634",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 52412,
+            "range": "± 247",
             "unit": "ns/iter"
           }
         ]
