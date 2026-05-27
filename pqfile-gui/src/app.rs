@@ -8,7 +8,7 @@ use crate::types::{
     KeygenAlgorithm, RecipientEntry, pem_variant_name,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::types::{EncryptJobHandle, DecryptJobHandle, KeyEntry};
+use crate::types::{EncryptJobHandle, DecryptBatchJobHandle, KeyEntry};
 use crate::widgets::{bullet, card, kv_row, section_label, tab_btn};
 use crate::APP_VERSION;
 
@@ -16,9 +16,8 @@ pub struct PqfileApp {
     pub(crate) tab: Tab,
     pub(crate) show_about: bool,
     pub(crate) settings: Settings,
+    pub(crate) app_icon: Option<egui::TextureHandle>,
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) keygen_dir: String,
     pub(crate) keygen_passphrase: Zeroizing<String>,
     pub(crate) keygen_passphrase_confirm: Zeroizing<String>,
     pub(crate) keygen_use_passphrase: bool,
@@ -38,11 +37,12 @@ pub struct PqfileApp {
     pub(crate) encrypt_job: Option<EncryptJobHandle>,
 
     pub(crate) decrypt_privkey: FileInput,
-    pub(crate) decrypt_pqf: FileInput,
+    pub(crate) decrypt_files: Vec<MultiFileEntry>,
+    pub(crate) decrypt_batch_pending: BatchPending,
     pub(crate) decrypt_passphrase: Zeroizing<String>,
     pub(crate) decrypt_status: OpStatus,
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) decrypt_job: Option<DecryptJobHandle>,
+    pub(crate) decrypt_batch_job: Option<DecryptBatchJobHandle>,
 
     pub(crate) inspect_pqf: FileInput,
     pub(crate) inspect_result: String,
@@ -58,8 +58,7 @@ impl Default for PqfileApp {
             tab: Tab::Keygen,
             show_about: false,
             settings: Settings::default(),
-            #[cfg(not(target_arch = "wasm32"))]
-            keygen_dir: String::new(),
+            app_icon: None,
             keygen_passphrase: Zeroizing::new(String::new()),
             keygen_passphrase_confirm: Zeroizing::new(String::new()),
             keygen_use_passphrase: false,
@@ -76,11 +75,12 @@ impl Default for PqfileApp {
             #[cfg(not(target_arch = "wasm32"))]
             encrypt_job: None,
             decrypt_privkey: FileInput::default(),
-            decrypt_pqf: FileInput::default(),
+            decrypt_files: Vec::new(),
+            decrypt_batch_pending: Arc::new(Mutex::new(None)),
             decrypt_passphrase: Zeroizing::new(String::new()),
             decrypt_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
-            decrypt_job: None,
+            decrypt_batch_job: None,
             inspect_pqf: FileInput::default(),
             inspect_result: String::new(),
             inspect_status: OpStatus::None,
@@ -98,8 +98,23 @@ impl PqfileApp {
         apply_theme(&cc.egui_ctx, settings.dark_mode);
         #[cfg(not(target_arch = "wasm32"))]
         let keys = cc.storage.map(load_keys).unwrap_or_default();
+        let app_icon = image::load_from_memory(include_bytes!("../icon.png"))
+            .ok()
+            .map(|img| {
+                let img = img.into_rgba8();
+                let (w, h) = img.dimensions();
+                cc.egui_ctx.load_texture(
+                    "app-icon",
+                    egui::ColorImage::from_rgba_unmultiplied(
+                        [w as usize, h as usize],
+                        img.as_raw(),
+                    ),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
         Self {
             settings,
+            app_icon,
             #[cfg(not(target_arch = "wasm32"))]
             keys,
             ..Default::default()
@@ -159,9 +174,20 @@ impl eframe::App for PqfileApp {
             .frame(egui::Frame::NONE.fill(chrome).inner_margin(Margin::symmetric(14, 0)))
             .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if let Some(ref tex) = self.app_icon {
+                        let pad = 4.0_f32;
+                        let img_sz = 22.0_f32;
+                        let side = img_sz + pad * 2.0;
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, egui::CornerRadius::same(6), c_accent(dark));
+                        egui::Image::new(tex)
+                            .fit_to_exact_size(egui::vec2(img_sz, img_sz))
+                            .paint_at(ui, rect.shrink(pad));
+                        ui.add_space(6.0);
+                    }
                     ui.label(
-                        RichText::new("🔐  pqfile")
-                            .size(16.0)
+                        RichText::new("pqfile - Post-Quantum File Encryption")
+                            .size(15.0)
                             .color(c_accent(dark))
                             .strong(),
                     );
@@ -274,7 +300,7 @@ impl PqfileApp {
     /// the file's extension. Pure logic with no egui dependency — testable directly.
     pub(crate) fn route_drop(&mut self, name: String, data: Vec<u8>, path: Option<std::path::PathBuf>) {
         let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        let picked = PickedFile { name, data, path };
+        let picked = PickedFile { name, data, path, error: None };
         match self.tab {
             Tab::Encrypt => {
                 if ext == "pem" {
@@ -292,7 +318,12 @@ impl PqfileApp {
                 if ext == "pem" {
                     *self.decrypt_privkey.pending.lock().unwrap() = Some(picked);
                 } else {
-                    *self.decrypt_pqf.pending.lock().unwrap() = Some(picked);
+                    self.decrypt_files.push(MultiFileEntry {
+                        name: picked.name,
+                        data: picked.data,
+                        path: picked.path,
+                        status: OpStatus::None,
+                    });
                 }
             }
             Tab::Inspect => {
@@ -303,110 +334,133 @@ impl PqfileApp {
     }
 }
 
+// ── Polling helpers ────────────────────────────────────────────────────────
+
+fn drain_batch_pending(pending: &BatchPending, files: &mut Vec<MultiFileEntry>) -> bool {
+    if let Ok(mut g) = pending.try_lock() {
+        if let Some(batch) = g.take() {
+            files.extend(batch.into_iter().map(|p| MultiFileEntry {
+                name: p.name,
+                data: p.data,
+                path: p.path,
+                status: p.error.map(OpStatus::Err).unwrap_or(OpStatus::None),
+            }));
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_job_results(results: Vec<(usize, OpStatus)>, files: &mut Vec<MultiFileEntry>) {
+    for (i, status) in results {
+        if let Some(e) = files.get_mut(i) {
+            e.status = status;
+        }
+    }
+}
+
+impl PqfileApp {
+    fn promote_staged_pubkey(&mut self) {
+        if !self.encrypt_pubkey.loaded() {
+            return;
+        }
+        if let Some(pem) = self.encrypt_pubkey.as_str().map(str::to_owned) {
+            if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
+                let name = std::mem::take(&mut self.encrypt_pubkey.name);
+                let variant_name = pem_variant_name(&pem);
+                self.encrypt_recipients.push(RecipientEntry { name, pem, variant_name });
+            }
+        }
+        self.encrypt_pubkey.clear();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn drain_encrypt_job_results(&mut self) -> bool {
+        let (results, finished) = if let Some(job) = self.encrypt_job.as_ref() {
+            if let Ok(mut g) = job.try_lock() {
+                (std::mem::take(&mut g.results), g.finished)
+            } else {
+                (Vec::new(), false)
+            }
+        } else {
+            (Vec::new(), false)
+        };
+        apply_job_results(results, &mut self.encrypt_files);
+        if finished {
+            let all_ok = self.settings.auto_clear
+                && self.encrypt_files.iter().all(|e| matches!(e.status, OpStatus::Ok(_)));
+            if all_ok {
+                self.encrypt_recipients.clear();
+                self.encrypt_files.clear();
+            }
+            self.encrypt_job = None;
+        }
+        finished
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn drain_decrypt_job_results(&mut self) -> bool {
+        let (results, finished) = if let Some(job) = self.decrypt_batch_job.as_ref() {
+            if let Ok(mut g) = job.try_lock() {
+                (std::mem::take(&mut g.results), g.finished)
+            } else {
+                (Vec::new(), false)
+            }
+        } else {
+            (Vec::new(), false)
+        };
+        apply_job_results(results, &mut self.decrypt_files);
+        if finished {
+            let all_ok = self.settings.auto_clear
+                && self.decrypt_files.iter().all(|e| matches!(e.status, OpStatus::Ok(_)));
+            if all_ok {
+                self.decrypt_privkey.clear();
+                self.decrypt_files.clear();
+                self.decrypt_passphrase.clear();
+            }
+            self.decrypt_batch_job = None;
+        }
+        finished
+    }
+}
+
 // ── Polling ────────────────────────────────────────────────────────────────
 
 impl PqfileApp {
     pub(crate) fn poll_files(&mut self) -> bool {
         self.encrypt_pubkey.poll();
-        // Auto-promote a staged public key into the recipients list.
-        if self.encrypt_pubkey.loaded() {
-            if let Some(pem) = self.encrypt_pubkey.as_str().map(str::to_owned) {
-                if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
-                    let name = std::mem::take(&mut self.encrypt_pubkey.name);
-                    let variant_name = pem_variant_name(&pem);
-                    self.encrypt_recipients.push(RecipientEntry { name, pem, variant_name });
-                }
-            }
-            self.encrypt_pubkey.clear();
-        }
+        self.promote_staged_pubkey();
         self.decrypt_privkey.poll();
-        self.decrypt_pqf.poll();
         self.inspect_pqf.poll();
 
-        // Drain any batch of files delivered by the async file picker.
-        let batch_arrived = if let Ok(mut g) = self.encrypt_batch_pending.try_lock() {
-            if let Some(batch) = g.take() {
-                for picked in batch {
-                    self.encrypt_files.push(MultiFileEntry {
-                        name: picked.name,
-                        data: picked.data,
-                        path: picked.path,
-                        status: OpStatus::None,
-                    });
-                }
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let enc_batch = drain_batch_pending(&self.encrypt_batch_pending, &mut self.encrypt_files);
+        let dec_batch = drain_batch_pending(&self.decrypt_batch_pending, &mut self.decrypt_files);
+        let batch_arrived = enc_batch || dec_batch;
 
-        // ── Drain background job results ──────────────────────────────────
         #[cfg(not(target_arch = "wasm32"))]
-        let enc_update = {
-            let (results, finished) = if let Some(job) = self.encrypt_job.as_ref() {
-                if let Ok(mut g) = job.try_lock() {
-                    (std::mem::take(&mut g.results), g.finished)
-                } else {
-                    (Vec::new(), false)
-                }
-            } else {
-                (Vec::new(), false)
-            };
-            for (i, status) in results {
-                if let Some(e) = self.encrypt_files.get_mut(i) {
-                    e.status = status;
-                }
-            }
-            if finished {
-                let all_ok = self.settings.auto_clear
-                    && self.encrypt_files.iter().all(|e| matches!(e.status, OpStatus::Ok(_)));
-                if all_ok {
-                    self.encrypt_recipients.clear();
-                    self.encrypt_files.clear();
-                }
-                self.encrypt_job = None;
-            }
-            finished
-        };
+        let enc_update = self.drain_encrypt_job_results();
         #[cfg(target_arch = "wasm32")]
         let enc_update = false;
 
         #[cfg(not(target_arch = "wasm32"))]
-        let dec_update = {
-            let outcome = if let Some(job) = self.decrypt_job.as_ref() {
-                if let Ok(mut g) = job.try_lock() { g.take() } else { None }
-            } else {
-                None
-            };
-            if let Some(status) = outcome {
-                let auto_clear = self.settings.auto_clear && matches!(status, OpStatus::Ok(_));
-                self.decrypt_status = status;
-                if auto_clear {
-                    self.decrypt_privkey.clear();
-                    self.decrypt_pqf.clear();
-                    self.decrypt_passphrase.clear();
-                }
-                self.decrypt_job = None;
-                true
-            } else {
-                false
-            }
-        };
+        let dec_update = self.drain_decrypt_job_results();
         #[cfg(target_arch = "wasm32")]
         let dec_update = false;
 
         let singles_pending = [
             &self.encrypt_pubkey,
             &self.decrypt_privkey,
-            &self.decrypt_pqf,
             &self.inspect_pqf,
         ]
         .iter()
         .any(|f| f.pending.try_lock().map(|g| g.is_some()).unwrap_or(false));
 
         let batch_pending = self.encrypt_batch_pending
+            .try_lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
+            || self.decrypt_batch_pending
             .try_lock()
             .map(|g| g.is_some())
             .unwrap_or(false);
@@ -425,23 +479,35 @@ impl PqfileApp {
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .default_width(380.0)
-            .max_height(440.0)
+            .fixed_size([430.0, 490.0])
             .frame(
                 egui::Frame::window(&ctx.global_style())
                     .fill(c_bg(dark))
-                    .stroke(Stroke::new(1.0, c_surface1(dark)))
+                    .stroke(Stroke::new(2.0, c_subtext(dark)))
                     .corner_radius(CornerRadius::same(10)),
             )
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
-                    .auto_shrink([false, true])
+                    .max_height(440.0)
+                    .auto_shrink([true, true])
                     .show(ui, |ui| {
                         ui.vertical_centered(|ui| {
                             ui.add_space(6.0);
-                            ui.label(RichText::new("🔐").size(40.0));
-                            ui.add_space(4.0);
-                            ui.label(RichText::new("pqfile").size(24.0).strong().color(c_accent(dark)));
+                            if let Some(ref tex) = self.app_icon {
+                                let pad = 6.0_f32;
+                                let img_sz = 32.0_f32;
+                                let total = egui::vec2(img_sz + pad * 2.0, img_sz + pad * 2.0);
+                                let (rect, _) = ui.allocate_exact_size(total, egui::Sense::hover());
+                                ui.painter().rect_filled(rect, egui::CornerRadius::same(10), c_accent(dark));
+                                egui::Image::new(tex)
+                                    .fit_to_exact_size(egui::vec2(img_sz, img_sz))
+                                    .paint_at(ui, rect.shrink(pad));
+                            } else {
+                                ui.label(RichText::new("🔐").size(40.0));
+                            }
+                            ui.add_space(6.0);
+                            ui.label(RichText::new("pqfile").size(20.0).strong().color(c_accent(dark)));
+                            ui.label(RichText::new("Post-Quantum File Encryption").size(13.0).color(c_subtext(dark)));
                             ui.label(
                                 RichText::new(format!("Version {APP_VERSION}"))
                                     .size(12.0)
@@ -456,8 +522,8 @@ impl PqfileApp {
                         ui.label(
                             RichText::new(
                                 "Quantum-resistant file encryption for the post-quantum era. \
-                                 Encrypt any file with a public key — only the matching \
-                                 private key can decrypt it.",
+                                 Encrypt any file with a public key. \
+                                 Only the matching private key can decrypt it.",
                             )
                             .size(13.0)
                             .color(c_subtext(dark)),
@@ -466,21 +532,33 @@ impl PqfileApp {
                         ui.add_space(14.0);
                         section_label(ui, "CRYPTOGRAPHIC ALGORITHMS", dark);
                         card(ui, c_card(dark), c_surface1(dark), |ui| {
-                            kv_row(ui, "Key encapsulation", "ML-KEM-768 / ML-KEM-1024 / Hybrid X25519+ML-KEM-768  (NIST FIPS 203)", dark);
+                            kv_row(ui, "Key encapsulation", "ML-KEM-512/768/1024, X25519 Hybrid (FIPS 203)", dark);
                             kv_row(ui, "Digital signatures", "ML-DSA-65  (NIST FIPS 204)", dark);
                             kv_row(ui, "Symmetric cipher",  "ChaCha20-Poly1305  (RFC 8439)", dark);
                             kv_row(ui, "Passphrase KDF",    "Argon2id  (m=64 MiB, t=3, p=1)", dark);
                             kv_row(ui, "Randomness",        "OS CSPRNG  (OsRng)", dark);
-                            kv_row(ui, "File format",       ".pqf  v3 streaming / v4 multi-recipient", dark);
+                            kv_row(ui, "File format",       ".pqf  v3-v6 / multi-recipient v4", dark);
                         });
 
                         ui.add_space(10.0);
                         section_label(ui, "SECURITY PROPERTIES", dark);
                         card(ui, c_card(dark), c_surface1(dark), |ui| {
-                            bullet(ui, "All operations run locally — no data is uploaded", dark);
+                            bullet(ui, "All operations run locally. No data is uploaded", dark);
                             bullet(ui, "Keys and shared secrets zeroized after use", dark);
                             bullet(ui, "AEAD authentication prevents silent corruption", dark);
                             bullet(ui, "Fresh nonce and KEM encapsulation per file", dark);
+                        });
+
+                        ui.add_space(10.0);
+                        section_label(ui, "AUTHOR", dark);
+                        card(ui, c_card(dark), c_surface1(dark), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Created by").size(12.5).color(c_subtext(dark)));
+                                ui.hyperlink_to(
+                                    RichText::new("dangel34").size(12.5).color(c_accent(dark)),
+                                    "https://github.com/dangel34",
+                                );
+                            });
                         });
 
                         ui.add_space(14.0);

@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{Cursor, Read, Write};
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 use chacha20poly1305::{
@@ -19,7 +20,8 @@ use crate::format::{
     BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD, HYBRID_CT_LEN_768, HYBRID_SEED_LEN_768,
     KEM_CT_LEN, KEM_CT_LEN_512, KEM_CT_LEN_1024,
     KEM_VARIANT, KEM_VARIANT_512, KEM_VARIANT_1024, KEM_VARIANT_HYBRID_768, NONCE_LEN,
-    VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6, PqfHeader, PqfHeaderV4, WRAPPED_KEY_LEN,
+    VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7,
+    PqfHeader, PqfHeaderV4, PqfHeaderV7, WRAPPED_KEY_LEN,
     chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf,
 };
 use crate::keygen::{
@@ -131,6 +133,10 @@ pub fn decrypt_stream(
             let header = PqfHeaderV4::read_body(reader)?;
             decrypt_v4(&dk, header, reader, writer)
         }
+        VERSION_V7 => {
+            let header = PqfHeaderV7::read_body(reader)?;
+            decrypt_v7(&dk, header, reader, writer)
+        }
         VERSION_V6 => {
             let header = PqfHeader::read_body(reader, VERSION_V6)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
@@ -146,6 +152,32 @@ pub fn decrypt_stream(
 fn decrypt_v4(
     dk: &DkVariant,
     header: PqfHeaderV4,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let dk_variant = dk.kem_variant();
+    let mut session_key: Option<Zeroizing<[u8; 32]>> = None;
+
+    for entry in &header.recipients {
+        if entry.kem_variant != dk_variant {
+            continue;
+        }
+        let ss = decapsulate_shared_secret(dk, &entry.kem_ciphertext)?;
+        if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
+            session_key = Some(k);
+            break;
+        }
+    }
+
+    let session_key = session_key.ok_or(PqfileError::NoMatchingRecipient)?;
+    let key = Key::from_slice(session_key.as_ref());
+    let cipher = ChaCha20Poly1305::new(key);
+    decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
+}
+
+fn decrypt_v7(
+    dk: &DkVariant,
+    header: PqfHeaderV7,
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
@@ -273,6 +305,23 @@ pub(crate) fn decapsulate_stream_init(
             let key = Key::from_slice(session_key.as_ref());
             let cipher = ChaCha20Poly1305::new(key);
             Ok((VERSION_V4, dk_variant, header.original_size, CHUNK_SIZE, cipher, header.nonce, None))
+        }
+        VERSION_V7 => {
+            let header = PqfHeaderV7::read_body(reader)?;
+            let dk_variant = dk.kem_variant();
+            let mut session_key: Option<Zeroizing<[u8; 32]>> = None;
+            for entry in &header.recipients {
+                if entry.kem_variant != dk_variant { continue; }
+                let ss = decapsulate_shared_secret(&dk, &entry.kem_ciphertext)?;
+                if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
+                    session_key = Some(k);
+                    break;
+                }
+            }
+            let session_key = session_key.ok_or(PqfileError::NoMatchingRecipient)?;
+            let key = Key::from_slice(session_key.as_ref());
+            let cipher = ChaCha20Poly1305::new(key);
+            Ok((VERSION_V7, dk_variant, header.original_size, CHUNK_SIZE, cipher, header.nonce, None))
         }
         VERSION_V6 => Err(PqfileError::CompressionNotSupported),
         v => Err(PqfileError::UnsupportedVersion(v)),
@@ -489,6 +538,121 @@ fn decapsulate_shared_secret(
             hybrid_hkdf(x25519_ss.as_bytes(), ml_ss.as_slice())
         }
     }
+}
+
+/// Parallel version of [`decrypt_stream`] for v3/v5 (chunked) files.
+///
+/// Non-parallel formats (v2, v4, v6) are forwarded to [`decrypt_stream`]
+/// transparently. `batch_size` controls how many chunks are decrypted
+/// concurrently per rayon batch.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_parallel(
+    privkey_pem: &str,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    passphrase: Option<&str>,
+    batch_size: usize,
+) -> Result<(), PqfileError> {
+    if batch_size <= 1 {
+        return decrypt_stream(privkey_pem, reader, writer, passphrase);
+    }
+
+    // Peek at the 5-byte preamble (MAGIC + VERSION) to decide the code path.
+    let mut preamble = [0u8; 5];
+    reader.read_exact(&mut preamble).map_err(PqfileError::Io)?;
+    if &preamble[..4] != crate::format::MAGIC.as_ref() {
+        return Err(PqfileError::InvalidMagic);
+    }
+    let version = preamble[4];
+
+    if version != VERSION_V3 && version != VERSION_V5 {
+        // Stitch the consumed bytes back and delegate to single-threaded path.
+        let prefix = Cursor::new(preamble.to_vec());
+        let mut chained = prefix.chain(&mut *reader);
+        return decrypt_stream(privkey_pem, &mut chained, writer, passphrase);
+    }
+
+    // v3 / v5: parallel chunk decryption
+    let dk = derive_dk(privkey_pem, passphrase)?;
+    let header = PqfHeader::read_body(reader, version)?;
+    check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
+    let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
+    let key_bytes: [u8; 32] = *ss_bytes;
+    let chunk_size = header.chunk_size as usize;
+    let max_chunk = chunk_size + 16;
+    let base_nonce: [u8; BASE_NONCE_LEN] = header.nonce[..BASE_NONCE_LEN].try_into().unwrap();
+
+    let mut first = vec![0u8; max_chunk];
+    let first_len = fill_chunk(reader, &mut first)?;
+    if first_len == 0 {
+        return Err(PqfileError::DecryptionFailure);
+    }
+
+    let mut carry: Option<(Vec<u8>, usize)> = Some((first, first_len));
+    let mut counter: u32 = 0;
+
+    loop {
+        let mut batch: Vec<(Vec<u8>, usize)> = Vec::with_capacity(batch_size);
+        if let Some(c) = carry.take() {
+            batch.push(c);
+        }
+        while batch.len() < batch_size {
+            let mut buf = vec![0u8; max_chunk];
+            let n = fill_chunk(reader, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            batch.push((buf, n));
+        }
+        if batch.is_empty() {
+            break;
+        }
+
+        let mut peek = vec![0u8; max_chunk];
+        let peek_len = fill_chunk(reader, &mut peek)?;
+        let batch_is_final = peek_len == 0;
+        if !batch_is_final {
+            carry = Some((peek, peek_len));
+        }
+
+        let batch_len = batch.len();
+        let batch_start = counter;
+
+        let results: Vec<Result<Vec<u8>, PqfileError>> = batch
+            .into_par_iter()
+            .enumerate()
+            .map(|(i, (mut ct_buf, ct_len))| {
+                let c = batch_start
+                    .checked_add(i as u32)
+                    .ok_or(PqfileError::DecryptionFailure)?;
+                let is_last = batch_is_final && i == batch_len - 1;
+                let cn = chunk_nonce(&base_nonce, c);
+                let aad = chunk_aad(c, is_last);
+                if ct_len < 16 {
+                    return Err(PqfileError::DecryptionFailure);
+                }
+                let pt_len = ct_len - 16;
+                let tag = Tag::<ChaCha20Poly1305>::clone_from_slice(&ct_buf[pt_len..ct_len]);
+                let cipher = ChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+                cipher
+                    .decrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut ct_buf[..pt_len], &tag)
+                    .map_err(|_| PqfileError::DecryptionFailure)?;
+                Ok(ct_buf[..pt_len].to_vec())
+            })
+            .collect();
+
+        for r in results {
+            writer.write_all(&r?)?;
+        }
+
+        counter = batch_start
+            .checked_add(batch_len as u32)
+            .ok_or(PqfileError::DecryptionFailure)?;
+        if batch_is_final {
+            break;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -737,10 +901,10 @@ mod tests {
     fn decrypt_stream_rejects_unknown_version() {
         let (_, priv_pem) = keygen_bytes(768, None).unwrap();
         let mut fake: Vec<u8> = b"PQFL".to_vec();
-        fake.push(0x07);
+        fake.push(0xFF);
         let mut out = Vec::new();
         let result = decrypt_stream(&priv_pem, &mut fake.as_slice(), &mut out, None);
-        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x07))));
+        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0xFF))));
     }
 
     // ── ML-KEM-512 roundtrips ─────────────────────────────────────────────
@@ -897,5 +1061,43 @@ mod tests {
         let mut dec_out = Vec::new();
         let result = decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None);
         assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
+    }
+
+    // ── Parallel decryption ───────────────────────────────────────────────────
+
+    #[test]
+    fn parallel_decrypt_roundtrip_small() {
+        use crate::encrypt::encrypt_stream_parallel;
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext = b"parallel decrypt small";
+        let mut ct = Vec::new();
+        encrypt_stream_parallel(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 4, &mut plaintext.as_slice(), &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream_parallel(&priv_pem, &mut ct.as_slice(), &mut out, None, 4).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn parallel_decrypt_roundtrip_multi_batch() {
+        use crate::encrypt::encrypt_stream_parallel;
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 12 + 3).collect();
+        let mut ct = Vec::new();
+        encrypt_stream_parallel(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 4, &mut plaintext.as_slice(), &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream_parallel(&priv_pem, &mut ct.as_slice(), &mut out, None, 4).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn parallel_decrypt_falls_back_for_non_v3_v5() {
+        // Encrypt with standard (v3) then parallel-decrypt should still work.
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext = b"fallback test";
+        let mut ct = Vec::new();
+        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream_parallel(&priv_pem, &mut ct.as_slice(), &mut out, None, 4).unwrap();
+        assert_eq!(out, plaintext);
     }
 }

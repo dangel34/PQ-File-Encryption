@@ -11,6 +11,7 @@ use crate::error::PqfileError;
 use crate::format::{BASE_NONCE_LEN, chunk_aad, chunk_nonce, fill_chunk};
 
 /// Metadata read from the `.pqf` header.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PqfInfo {
     pub version: u8,
@@ -42,6 +43,7 @@ enum ReaderState<R: Read> {
 
 /// Streaming decryptor wrapping any `R: Read`.
 pub struct PqfReader<R: Read> {
+    #[allow(dead_code)]
     info: PqfInfo,
     state: ReaderState<R>,
 }
@@ -91,6 +93,7 @@ impl<R: Read> PqfReader<R> {
     }
 
     /// Returns the header metadata for this file.
+    #[allow(dead_code)]
     pub fn info(&self) -> &PqfInfo {
         &self.info
     }

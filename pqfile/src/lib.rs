@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod decrypt;
 pub mod encrypt;
 pub mod error;
@@ -7,4 +8,6 @@ pub mod passphrase;
 pub mod reader;
 pub mod rekey;
 pub mod revoke;
+pub mod shamir;
 pub mod sign;
+pub mod signcrypt;

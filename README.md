@@ -28,7 +28,7 @@ The optional **hybrid mode** (`--hybrid`) adds X25519 Diffie-Hellman to the key 
 
 | Component                        | Standard / Specification                                |
 |----------------------------------|---------------------------------------------------------|
-| Key encapsulation (standard)     | ML-KEM-768 or ML-KEM-1024, NIST FIPS 203               |
+| Key encapsulation (standard)     | ML-KEM-512, ML-KEM-768, or ML-KEM-1024, NIST FIPS 203  |
 | Key encapsulation (hybrid)       | X25519 + ML-KEM-768, key combined via HKDF-SHA256       |
 | Symmetric cipher                 | ChaCha20-Poly1305, RFC 8439                             |
 | Session key wrapping (v4)        | AES-256-GCM                                             |
@@ -93,6 +93,9 @@ The `pqfile` crate is both a library and a CLI binary. The `pqfile-gui` crate co
 # ML-KEM-768 (default, 128-bit post-quantum security)
 pqfile keygen --out ./keys
 
+# ML-KEM-512 (category 1, smaller keys and ciphertexts)
+pqfile keygen --out ./keys --level 512
+
 # ML-KEM-1024 (192-bit post-quantum security)
 pqfile keygen --out ./keys --level 1024
 
@@ -115,18 +118,21 @@ pqfile encrypt -r pubkey.pem secret.txt
 # Custom output path
 pqfile encrypt -r pubkey.pem secret.txt -o encrypted.pqf
 
-# Multiple recipients - any one of them can decrypt
+# Multiple recipients (any one can decrypt)
 pqfile encrypt -r alice/pubkey.pem -r bob/pubkey.pem secret.txt
 
 # Recursive directory encryption
 pqfile encrypt -r pubkey.pem --recursive /path/to/dir/
-# Each file → <file>.pqf alongside the original; existing .pqf files are skipped
+# Each file produces <file>.pqf alongside the original; existing .pqf files are skipped
+
+# Compress before encrypting (single recipient only, not available on WASM)
+pqfile encrypt -r pubkey.pem --compress --compress-level 3 secret.txt
 
 # Read from stdin, write to stdout
 cat secret.txt | pqfile encrypt -r pubkey.pem - > secret.txt.pqf
 ```
 
-Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--recursive` requires exactly one recipient.
+Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3.
 
 ### Decryption
 
@@ -141,7 +147,26 @@ pqfile decrypt -k privkey.pem secret.txt.pqf -o recovered.txt
 cat secret.txt.pqf | pqfile decrypt -k privkey.pem - -o -
 ```
 
-If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2, v3 (streamed), and v4 (multi-recipient) files.
+If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v6 files (all single-recipient variants) and v4 (multi-recipient).
+
+### Rekey
+
+```bash
+# Re-wrap the session key under a new recipient key without decrypting the payload
+pqfile rekey -k old_privkey.pem -r new_pubkey.pem -o new.pqf old.pqf
+```
+
+Decapsulates the session key with the old private key, re-encapsulates it under the new public key, and rewrites only the header. Payload bytes are not decrypted. Useful for key rotation.
+
+### Revoke
+
+```bash
+# Create a revocation sidecar for a public key
+pqfile revoke --key pubkey.pem --reason "Key compromised"
+# Output: pubkey.pem.revoked
+
+# pqfile encrypt will refuse to use a key that has a .revoked sidecar
+```
 
 ### Inspect
 
@@ -228,7 +253,7 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 - **Keys tab**: persistent key-pair registry with fingerprints and quick-load buttons
 - **Settings tab**: theme, auto-clear, confirm-overwrite preferences
 
-> The GUI keygen always produces ML-KEM-768 keys. Use the CLI for `--level 1024`, `--hybrid`, or multi-recipient encryption.
+> The GUI keygen supports ML-KEM-512, ML-KEM-768, ML-KEM-1024, and Hybrid. Use the CLI for multi-recipient encryption.
 
 ---
 
@@ -275,10 +300,42 @@ Offset   Length    Field
 
 A random 32-byte session key K encrypts the payload. Each recipient's `ss` (from their KEM encapsulation) wraps K under `AES-256-GCM(key=ss, nonce=zero)`. The zero nonce is safe because each `ss` is unique per encapsulation. Mixed KEM variants within one file are supported.
 
+### v5: single-recipient, configurable chunk size
+
+Same header as v3 with `version = 0x05`, extended by four bytes immediately after the original-size field:
+
+```
+Offset   Length    Field
+------   ------    -----
+0        4         Magic: "PQFL"
+4        1         Version: 0x05
+5        2         KEM variant (u16 little-endian)
+7        CT_LEN    KEM ciphertext
+7+CT     12        ChaCha20-Poly1305 nonce
+7+CT+12  8         Original plaintext size (u64 little-endian)
+7+CT+20  4         Chunk size (u32 little-endian, 1-268435456 bytes)
+```
+
+Produced when `--chunk-size` is passed to override the default 64 KiB. The chunk size is stored in the header so the decryptor reads it automatically without any extra flag.
+
+### v6: single-recipient, compress-then-encrypt
+
+Same header as v5 with `version = 0x06`, extended by one byte after the chunk-size field:
+
+```
+Offset   Length    Field
+------   ------    -----
+0        ...       Same as v5 through chunk size
+7+CT+24  1         Compression algorithm (0x00 = none, 0x01 = zstd)
+```
+
+Produced when `--compress` is passed. The plaintext is compressed with zstd before encryption. Decompression is automatic on decrypt after AEAD verification. Only supported with a single recipient.
+
 ### KEM variant field
 
 | Value    | Algorithm               | CT bytes | EK bytes |
 |----------|-------------------------|----------|----------|
+| `512`    | ML-KEM-512              | 768      | 800      |
 | `768`    | ML-KEM-768              | 1088     | 1184     |
 | `1024`   | ML-KEM-1024             | 1568     | 1568     |
 | `0x0301` | Hybrid X25519+ML-KEM-768| 1120     | 1216     |
@@ -286,6 +343,14 @@ A random 32-byte session key K encrypts the payload. Each recipient's `ss` (from
 ---
 
 ## PEM key formats
+
+### ML-KEM-512
+
+```
+-----BEGIN ML-KEM-512 PUBLIC KEY-----          (800 bytes raw)
+-----BEGIN ML-KEM-512 PRIVATE KEY-----         (64-byte seed)
+-----BEGIN ML-KEM-512 ENCRYPTED PRIVATE KEY--- (16-byte salt || 12-byte nonce || 80-byte AES ciphertext)
+```
 
 ### ML-KEM-768
 
@@ -333,7 +398,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 |------------------------|---------------------------------------------------------------------------|
 | `Io`                   | File system or I/O failure                                                |
 | `InvalidMagic`         | File does not start with "PQFL"                                           |
-| `UnsupportedVersion`   | Version byte is not 0x02, 0x03, or 0x04                                   |
+| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x06)                         |
 | `UnsupportedKem`       | KEM variant field is not a recognised value                               |
 | `EncryptionFailure`    | AEAD encryption or nonce generation failed                                |
 | `DecryptionFailure`    | Authentication tag mismatch (file tampered or wrong key)                  |
@@ -355,7 +420,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 cargo test --workspace
 ```
 
-142 tests across all crates (75 unit + 45 integration + 22 GUI). Run benchmarks with:
+295 tests across all crates (228 unit + 45 integration + 22 GUI). Run benchmarks with:
 
 ```
 cargo bench -p pqfile

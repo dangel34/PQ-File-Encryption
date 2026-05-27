@@ -52,4 +52,7 @@ pub enum PqfileError {
 
     #[error("compressed .pqf files (v6) are not supported in this build")]
     CompressionNotSupported,
+
+    #[error("key share reconstruction failed: fingerprint mismatch, ensure you have the correct shares for this key")]
+    ShareVerificationFailed,
 }

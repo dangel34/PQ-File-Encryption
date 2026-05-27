@@ -1,0 +1,28 @@
+name: Deploy nginx config
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'nginx/**'
+      - '.github/workflows/deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-nginx
+  cancel-in-progress: false
+
+jobs:
+  deploy-nginx:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Deploy nginx config
+        run: |
+          sudo cp nginx/security-headers-pqfile.conf /etc/nginx/snippets/security-headers-pqfile.conf
+          sudo cp nginx/wasm-headers.conf /etc/nginx/snippets/wasm-headers.conf
+          sudo cp nginx/pqfile.conf /etc/nginx/sites-enabled/pqfile
+          sudo nginx -t && sudo systemctl reload nginx
