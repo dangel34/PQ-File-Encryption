@@ -15,6 +15,14 @@ pub const VERSION_V4: u8 = 0x04;
 pub const VERSION_V5: u8 = 0x05;
 /// Compress-then-encrypt: same as v5 layout but appends COMPRESSION_ALGO(1) after CHUNK_SIZE.
 pub const VERSION_V6: u8 = 0x06;
+/// Anonymous multi-recipient: like v4 but all KEM ciphertexts are padded to the maximum
+/// variant size (1568 bytes) and recipient entries are written in shuffled order.
+/// Format: MAGIC | 0x07 | COUNT(2) | [VARIANT(2) | PADDED_CT(1568) | WRAPPED_KEY(48)]... | NONCE(12) | ORIGINAL_SIZE(8)
+pub const VERSION_V7: u8 = 0x07;
+
+/// Maximum KEM ciphertext length across all supported variants (ML-KEM-1024).
+/// All v7 recipient entries use this fixed CT slot size.
+pub const PADDED_CT_LEN: usize = KEM_CT_LEN_1024;
 
 pub const KEM_VARIANT_512: u16 = 512;
 pub const KEM_VARIANT: u16 = 768;
@@ -228,6 +236,73 @@ impl PqfHeaderV4 {
 
         let (nonce, original_size) = read_nonce_and_size(r)?;
         Ok(PqfHeaderV4 { recipients, nonce, original_size })
+    }
+}
+
+// ── Anonymous multi-recipient header (v7) ────────────────────────────────
+
+/// One recipient entry in a v7 header. The KEM ciphertext is zero-padded to PADDED_CT_LEN.
+pub struct RecipientEntryV7 {
+    pub kem_variant: u16,
+    /// Actual KEM ciphertext (only the first `ct_len_for_variant(kem_variant)` bytes are real).
+    pub kem_ciphertext: Vec<u8>,
+    /// AES-256-GCM encrypted session key.
+    pub wrapped_key: [u8; WRAPPED_KEY_LEN],
+}
+
+pub struct PqfHeaderV7 {
+    pub recipients: Vec<RecipientEntryV7>,
+    pub nonce: [u8; NONCE_LEN],
+    pub original_size: u64,
+}
+
+impl PqfHeaderV7 {
+    pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
+        w.write_all(MAGIC)?;
+        w.write_all(&[VERSION_V7])?;
+        w.write_all(&(self.recipients.len() as u16).to_le_bytes())?;
+        let pad = [0u8; PADDED_CT_LEN];
+        for r in &self.recipients {
+            w.write_all(&r.kem_variant.to_le_bytes())?;
+            w.write_all(&r.kem_ciphertext)?;
+            // Zero-pad up to PADDED_CT_LEN
+            let written = r.kem_ciphertext.len();
+            if written < PADDED_CT_LEN {
+                w.write_all(&pad[..PADDED_CT_LEN - written])?;
+            }
+            w.write_all(&r.wrapped_key)?;
+        }
+        w.write_all(&self.nonce)?;
+        w.write_all(&self.original_size.to_le_bytes())?;
+        Ok(())
+    }
+
+    /// Reads the v7 header body (everything after MAGIC + VERSION byte).
+    pub fn read_body<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
+        let mut count_bytes = [0u8; 2];
+        r.read_exact(&mut count_bytes)?;
+        let count = u16::from_le_bytes(count_bytes) as usize;
+
+        let mut recipients = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut variant_bytes = [0u8; 2];
+            r.read_exact(&mut variant_bytes)?;
+            let kem_variant = u16::from_le_bytes(variant_bytes);
+
+            // Always read the full PADDED_CT_LEN slot; real CT is first ct_len bytes.
+            let mut padded = vec![0u8; PADDED_CT_LEN];
+            r.read_exact(&mut padded)?;
+            let ct_len = ct_len_for_variant(kem_variant)?;
+            padded.truncate(ct_len);
+
+            let mut wrapped_key = [0u8; WRAPPED_KEY_LEN];
+            r.read_exact(&mut wrapped_key)?;
+
+            recipients.push(RecipientEntryV7 { kem_variant, kem_ciphertext: padded, wrapped_key });
+        }
+
+        let (nonce, original_size) = read_nonce_and_size(r)?;
+        Ok(PqfHeaderV7 { recipients, nonce, original_size })
     }
 }
 

@@ -13,6 +13,7 @@ pqfile = { workspace = true }
 eframe = { workspace = true }
 rfd = "0.17"
 zeroize = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

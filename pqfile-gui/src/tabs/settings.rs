@@ -1,6 +1,6 @@
 use eframe::egui::{self, RichText, Stroke};
 use crate::app::PqfileApp;
-use crate::colors::{c_card, c_red, c_subtext, c_surface0, c_surface1, c_text};
+use crate::colors::{c_card, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
 use crate::theme::apply_theme;
 use crate::types::OpStatus;
 use crate::widgets::{card, section_label, setting_toggle, tab_heading};
@@ -15,7 +15,17 @@ impl PqfileApp {
         );
         ui.add_space(14.0);
 
-        // Appearance
+        self.show_appearance_section(ui, ctx, dark);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.show_output_dir_section(ui, dark);
+
+        self.show_behavior_section(ui, dark);
+        self.show_security_section(ui, dark);
+        self.show_danger_zone_section(ui, dark);
+    }
+
+    fn show_appearance_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, dark: bool) {
         section_label(ui, "APPEARANCE", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             let prev = self.settings.dark_mode;
@@ -43,10 +53,59 @@ impl PqfileApp {
                 apply_theme(ctx, self.settings.dark_mode);
             }
         });
-
         ui.add_space(10.0);
+    }
 
-        // Behavior
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_output_dir_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        section_label(ui, "DEFAULT OUTPUT DIRECTORY", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            ui.label(
+                RichText::new(
+                    "Where encrypted, decrypted, and generated key files are saved. \
+                     Leave blank to save next to the source file."
+                )
+                .size(12.0)
+                .color(c_subtext(dark)),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.output_dir)
+                        .hint_text("Same folder as source file (default)")
+                        .desired_width(ui.available_width() - 80.0),
+                );
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("Browse…").size(13.0).color(c_text(dark)))
+                            .fill(c_surface0(dark)),
+                    )
+                    .clicked()
+                {
+                    if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                        self.settings.output_dir = p.to_string_lossy().into_owned();
+                    }
+                }
+            });
+            if !self.settings.output_dir.is_empty() {
+                ui.add_space(4.0);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Clear").size(12.0).color(c_overlay(dark)),
+                        )
+                        .fill(c_surface0(dark)),
+                    )
+                    .clicked()
+                {
+                    self.settings.output_dir.clear();
+                }
+            }
+        });
+        ui.add_space(10.0);
+    }
+
+    fn show_behavior_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "BEHAVIOR", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             setting_toggle(
@@ -68,10 +127,10 @@ impl PqfileApp {
                 );
             }
         });
-
         ui.add_space(10.0);
+    }
 
-        // Security note
+    fn show_security_section(&self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "SECURITY", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             ui.label(
@@ -84,10 +143,10 @@ impl PqfileApp {
                 .color(c_subtext(dark)),
             );
         });
-
         ui.add_space(10.0);
+    }
 
-        // Danger zone
+    fn show_danger_zone_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "DANGER ZONE", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             ui.label(
@@ -106,17 +165,23 @@ impl PqfileApp {
                 )
                 .clicked()
             {
-                self.encrypt_pubkey.clear();
-                self.encrypt_files.clear();
-                if let Ok(mut g) = self.encrypt_batch_pending.try_lock() { g.take(); }
-                self.decrypt_privkey.clear();
-                self.decrypt_pqf.clear();
-                self.decrypt_status = OpStatus::None;
-                self.inspect_pqf.clear();
-                self.inspect_result.clear();
-                self.inspect_status = OpStatus::None;
-                self.keygen_status = OpStatus::None;
+                self.clear_all_inputs();
             }
         });
+    }
+
+    fn clear_all_inputs(&mut self) {
+        self.encrypt_pubkey.clear();
+        self.encrypt_recipients.clear();
+        self.encrypt_files.clear();
+        if let Ok(mut g) = self.encrypt_batch_pending.try_lock() { g.take(); }
+        self.decrypt_privkey.clear();
+        self.decrypt_files.clear();
+        if let Ok(mut g) = self.decrypt_batch_pending.try_lock() { g.take(); }
+        self.decrypt_status = OpStatus::None;
+        self.inspect_pqf.clear();
+        self.inspect_result.clear();
+        self.inspect_status = OpStatus::None;
+        self.keygen_status = OpStatus::None;
     }
 }

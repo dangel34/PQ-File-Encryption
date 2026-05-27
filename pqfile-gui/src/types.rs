@@ -24,6 +24,7 @@ pub(crate) struct PickedFile {
     pub(crate) name: String,
     pub(crate) data: Vec<u8>,
     pub(crate) path: Option<PathBuf>,
+    pub(crate) error: Option<String>,
 }
 
 pub(crate) type Pending = Arc<Mutex<Option<PickedFile>>>;
@@ -51,9 +52,18 @@ pub(crate) struct EncryptJob {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type EncryptJobHandle = Arc<Mutex<EncryptJob>>;
 
-/// Shared state for a running decrypt job. `None` = still running; `Some` = finished.
+/// Shared state for a running batch-decrypt job.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) type DecryptJobHandle = Arc<Mutex<Option<OpStatus>>>;
+pub(crate) struct DecryptBatchJob {
+    pub(crate) done: usize,
+    pub(crate) total: usize,
+    /// Completed file results: (original index in decrypt_files, status).
+    pub(crate) results: Vec<(usize, OpStatus)>,
+    pub(crate) finished: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DecryptBatchJobHandle = Arc<Mutex<DecryptBatchJob>>;
 
 pub(crate) struct MultiFileEntry {
     pub(crate) name: String,
@@ -150,6 +160,10 @@ pub(crate) struct Settings {
     pub(crate) auto_clear: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) confirm_overwrite: bool,
+    /// Default output directory for keygen, encrypt, and decrypt (native only).
+    /// Empty string means "same folder as the source file / chosen at keygen time".
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) output_dir: String,
 }
 
 impl Default for Settings {
@@ -159,6 +173,8 @@ impl Default for Settings {
             auto_clear: false,
             #[cfg(not(target_arch = "wasm32"))]
             confirm_overwrite: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            output_dir: String::new(),
         }
     }
 }
@@ -175,11 +191,15 @@ impl Settings {
         let confirm_overwrite = storage.get_string("confirm_overwrite")
             .and_then(|s| s.parse().ok())
             .unwrap_or(false);
+        #[cfg(not(target_arch = "wasm32"))]
+        let output_dir = storage.get_string("output_dir").unwrap_or_default();
         Self {
             dark_mode,
             auto_clear,
             #[cfg(not(target_arch = "wasm32"))]
             confirm_overwrite,
+            #[cfg(not(target_arch = "wasm32"))]
+            output_dir,
         }
     }
 
@@ -188,5 +208,7 @@ impl Settings {
         storage.set_string("auto_clear", self.auto_clear.to_string());
         #[cfg(not(target_arch = "wasm32"))]
         storage.set_string("confirm_overwrite", self.confirm_overwrite.to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        storage.set_string("output_dir", self.output_dir.clone());
     }
 }

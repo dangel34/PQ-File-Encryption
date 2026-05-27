@@ -111,13 +111,10 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
 }
 
 pub(crate) fn kv_row(ui: &mut egui::Ui, key: &str, value: &str, dark: bool) {
-    let w = ui.available_width();
-    ui.allocate_ui(egui::vec2(w, 20.0), |ui| {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(RichText::new(key).size(12.5).color(c_subtext(dark)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(value).size(12.5).color(c_text(dark)).monospace());
-            });
+    ui.columns(2, |cols| {
+        cols[0].label(RichText::new(key).size(12.5).color(c_subtext(dark)));
+        cols[1].with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            ui.add(egui::Label::new(RichText::new(value).size(12.5).color(c_text(dark))).wrap());
         });
     });
 }
@@ -175,7 +172,7 @@ pub(crate) fn pick_file(pending: Pending, filter_name: &'static str, filter_exts
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                *pending.lock().unwrap() = Some(PickedFile { name, data, path: Some(path) });
+                *pending.lock().unwrap() = Some(PickedFile { name, data, path: Some(path), error: None });
             }
         }
     });
@@ -189,25 +186,29 @@ pub(crate) fn pick_file(pending: Pending, filter_name: &'static str, filter_exts
         if let Some(file) = d.pick_file().await {
             let name = file.file_name();
             let data = file.read().await;
-            *pending.lock().unwrap() = Some(PickedFile { name, data, path: None });
+            *pending.lock().unwrap() = Some(PickedFile { name, data, path: None, error: None });
         }
     });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_paths_into_batch(paths: Vec<std::path::PathBuf>) -> Vec<PickedFile> {
+    paths.into_iter().map(|path| {
+        let name = path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match std::fs::read(&path) {
+            Ok(data) => PickedFile { name, data, path: Some(path), error: None },
+            Err(e) => PickedFile { name, data: Vec::new(), path: Some(path), error: Some(e.to_string()) },
+        }
+    }).collect()
 }
 
 pub(crate) fn pick_files(pending: BatchPending) {
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
         if let Some(paths) = rfd::FileDialog::new().pick_files() {
-            let mut batch: Vec<PickedFile> = Vec::new();
-            for path in paths {
-                if let Ok(data) = std::fs::read(&path) {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    batch.push(PickedFile { name, data, path: Some(path) });
-                }
-            }
+            let batch = read_paths_into_batch(paths);
             if !batch.is_empty() {
                 *pending.lock().unwrap() = Some(batch);
             }
@@ -221,13 +222,143 @@ pub(crate) fn pick_files(pending: BatchPending) {
             for file in files {
                 let name = file.file_name();
                 let data = file.read().await;
-                batch.push(PickedFile { name, data, path: None });
+                batch.push(PickedFile { name, data, path: None, error: None });
             }
             if !batch.is_empty() {
                 *pending.lock().unwrap() = Some(batch);
             }
         }
     });
+}
+
+/// Opens a multi-file picker filtered to `.pqf` files.
+pub(crate) fn pick_pqf_files(pending: BatchPending) {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(move || {
+        if let Some(paths) = rfd::FileDialog::new()
+            .add_filter("PQF encrypted files", &["pqf"])
+            .pick_files()
+        {
+            let batch = read_paths_into_batch(paths);
+            if !batch.is_empty() {
+                *pending.lock().unwrap() = Some(batch);
+            }
+        }
+    });
+
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Some(files) = rfd::AsyncFileDialog::new()
+            .add_filter("PQF encrypted files", &["pqf"])
+            .pick_files()
+            .await
+        {
+            let mut batch: Vec<PickedFile> = Vec::new();
+            for file in files {
+                let name = file.file_name();
+                let data = file.read().await;
+                batch.push(PickedFile { name, data, path: None, error: None });
+            }
+            if !batch.is_empty() {
+                *pending.lock().unwrap() = Some(batch);
+            }
+        }
+    });
+}
+
+/// Opens a folder picker and recursively collects every `.pqf` file inside it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn pick_folder_pqf(pending: BatchPending) {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(move || {
+        if let Some(root) = rfd::FileDialog::new()
+            .set_title("Select folder to decrypt")
+            .pick_folder()
+        {
+            let mut batch: Vec<PickedFile> = Vec::new();
+            walk_dir_pqf(&root, &root, &mut batch);
+            if !batch.is_empty() {
+                *pending.lock().unwrap() = Some(batch);
+            }
+        }
+    });
+
+    #[cfg(target_arch = "wasm32")]
+    let _ = pending;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn walk_dir_pqf(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<PickedFile>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_dir_pqf(root, &path, out);
+        } else if path.extension().map(|e| e.eq_ignore_ascii_case("pqf")).unwrap_or(false) {
+            if let Ok(data) = std::fs::read(&path) {
+                let name = path
+                    .strip_prefix(root)
+                    .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| {
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    });
+                out.push(PickedFile { name, data, path: Some(path), error: None });
+            }
+        }
+    }
+}
+
+/// Opens a folder picker and recursively collects every file inside it.
+/// Each file's `name` is its path relative to the chosen folder (e.g. `subdir/photo.jpg`),
+/// so the folder hierarchy is preserved when writing output files.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn pick_folder_files(pending: BatchPending) {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(move || {
+        if let Some(root) = rfd::FileDialog::new()
+            .set_title("Select folder to encrypt")
+            .pick_folder()
+        {
+            let mut batch: Vec<PickedFile> = Vec::new();
+            walk_dir_recursive(&root, &root, &mut batch);
+            if !batch.is_empty() {
+                *pending.lock().unwrap() = Some(batch);
+            }
+        }
+    });
+
+    #[cfg(target_arch = "wasm32")]
+    let _ = pending; // folder picking not available in browsers
+}
+
+/// Recursively walks `dir`, collecting all files relative to `root`.
+#[cfg(not(target_arch = "wasm32"))]
+fn walk_dir_recursive(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<PickedFile>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_dir_recursive(root, &path, out);
+        } else if let Ok(data) = std::fs::read(&path) {
+            // Use the relative path as the display name so `subdir/file.txt` is
+            // distinguishable from a top-level `file.txt`.
+            let name = path
+                .strip_prefix(root)
+                .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| {
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                });
+            out.push(PickedFile { name, data, path: Some(path), error: None });
+        }
+    }
 }
 
 pub(crate) fn save_result(
@@ -241,9 +372,18 @@ pub(crate) fn save_result(
         let path = native_path.unwrap_or_else(|| std::path::PathBuf::from(filename));
         if confirm_overwrite && path.exists() {
             return OpStatus::Err(format!(
-                "Output already exists: {}  — disable overwrite protection in Settings.",
+                "Output already exists: {}. Disable overwrite protection in Settings.",
                 path.display()
             ));
+        }
+        // Ensure the parent directory exists (needed when encrypting a folder
+        // with subdirectories and an output_dir is set).
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return OpStatus::Err(format!("Could not create output directory: {e}"));
+                }
+            }
         }
         match std::fs::write(&path, data) {
             Ok(()) => OpStatus::Ok(format!("Saved →  {}", path.display())),

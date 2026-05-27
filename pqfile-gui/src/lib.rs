@@ -67,7 +67,7 @@ mod tests {
             app.poll_files();
             let done = {
                 #[cfg(not(target_arch = "wasm32"))]
-                { app.encrypt_job.is_none() && app.decrypt_job.is_none() }
+                { app.encrypt_job.is_none() && app.decrypt_batch_job.is_none() }
                 #[cfg(target_arch = "wasm32")]
                 { true }
             };
@@ -98,7 +98,7 @@ mod tests {
     fn keygen_valid_dir_saves_keys() {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = PqfileApp::default();
-        app.keygen_dir = tmp.path().to_string_lossy().into_owned();
+        app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
         app.handle_keygen();
         assert!(matches!(app.keygen_status, OpStatus::Ok(_)));
         assert!(tmp.path().join("pubkey.pem").exists());
@@ -110,7 +110,7 @@ mod tests {
     fn keygen_confirm_overwrite_blocks_existing_keys() {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = PqfileApp::default();
-        app.keygen_dir = tmp.path().to_string_lossy().into_owned();
+        app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
         app.handle_keygen();
         assert!(matches!(app.keygen_status, OpStatus::Ok(_)), "first keygen should succeed");
 
@@ -124,7 +124,7 @@ mod tests {
     fn keygen_without_confirm_overwrite_replaces_existing_keys() {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = PqfileApp::default();
-        app.keygen_dir = tmp.path().to_string_lossy().into_owned();
+        app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
         app.handle_keygen();
         assert!(matches!(app.keygen_status, OpStatus::Ok(_)), "first keygen should succeed");
 
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn decrypt_missing_inputs_sets_error() {
         let mut app = PqfileApp::default();
-        app.handle_decrypt(&test_ctx());
+        app.handle_decrypt_batch(&test_ctx());
         assert!(matches!(app.decrypt_status, OpStatus::Err(_)));
     }
 
@@ -162,10 +162,10 @@ mod tests {
     fn decrypt_bad_key_sets_error() {
         let mut app = PqfileApp::default();
         app.decrypt_privkey = loaded_input("bad.pem", b"not a valid key".to_vec(), None);
-        app.decrypt_pqf = loaded_input("test.pqf", b"garbage".to_vec(), None);
-        app.handle_decrypt(&test_ctx());
+        app.decrypt_files.push(file_entry("test.pqf", b"garbage".to_vec(), None));
+        app.handle_decrypt_batch(&test_ctx());
         flush_jobs(&mut app);
-        assert!(matches!(app.decrypt_status, OpStatus::Err(_)));
+        assert!(matches!(app.decrypt_files[0].status, OpStatus::Err(_)));
     }
 
     #[test]
@@ -191,10 +191,10 @@ mod tests {
         let pqf_data = std::fs::read(&pqf_path).unwrap();
 
         app.decrypt_privkey = loaded_input("privkey.pem", priv_pem.as_bytes().to_vec(), None);
-        app.decrypt_pqf = loaded_input("input.txt.pqf", pqf_data, Some(pqf_path));
-        app.handle_decrypt(&test_ctx());
+        app.decrypt_files.push(file_entry("input.txt.pqf", pqf_data, Some(pqf_path)));
+        app.handle_decrypt_batch(&test_ctx());
         flush_jobs(&mut app);
-        assert!(matches!(app.decrypt_status, OpStatus::Ok(_)), "decryption failed");
+        assert!(matches!(app.decrypt_files[0].status, OpStatus::Ok(_)), "decryption failed");
 
         let decrypted = std::fs::read(tmp.path().join("input.txt")).unwrap();
         assert_eq!(decrypted, plaintext);
@@ -286,6 +286,8 @@ mod tests {
             auto_clear: true,
             #[cfg(not(target_arch = "wasm32"))]
             confirm_overwrite: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            output_dir: "/tmp/test_out".to_owned(),
         };
         original.save(&mut storage);
         let loaded = Settings::load(&storage);
@@ -293,6 +295,8 @@ mod tests {
         assert_eq!(loaded.auto_clear, original.auto_clear);
         #[cfg(not(target_arch = "wasm32"))]
         assert_eq!(loaded.confirm_overwrite, original.confirm_overwrite);
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(loaded.output_dir, original.output_dir);
     }
 
     // ── Drag-and-drop routing ──────────────────────────────────────────────
@@ -333,16 +337,16 @@ mod tests {
         app.route_drop("privkey.pem".to_owned(), b"key-data".to_vec(), None);
         app.decrypt_privkey.poll();
         assert!(app.decrypt_privkey.loaded(), "pem should land in privkey slot");
-        assert!(!app.decrypt_pqf.loaded(), "pqf slot should be empty");
+        assert!(app.decrypt_files.is_empty(), "file list should be empty");
     }
 
     #[test]
-    fn drop_decrypt_tab_pqf_goes_to_pqf_slot() {
+    fn drop_decrypt_tab_pqf_goes_to_file_list() {
         let mut app = PqfileApp::default();
         app.tab = Tab::Decrypt;
         app.route_drop("secret.txt.pqf".to_owned(), b"ciphertext".to_vec(), None);
-        app.decrypt_pqf.poll();
-        assert!(app.decrypt_pqf.loaded(), "pqf should land in pqf slot");
+        assert_eq!(app.decrypt_files.len(), 1, "pqf should land in file list");
+        assert_eq!(app.decrypt_files[0].name, "secret.txt.pqf");
         assert!(!app.decrypt_privkey.loaded(), "privkey slot should be empty");
     }
 
@@ -361,12 +365,11 @@ mod tests {
         app.route_drop("key.pem".to_owned(), b"data".to_vec(), None);
         app.encrypt_pubkey.poll();
         app.decrypt_privkey.poll();
-        app.decrypt_pqf.poll();
         app.inspect_pqf.poll();
         assert!(!app.encrypt_pubkey.loaded());
-        assert!(app.encrypt_files.is_empty(), "file list should be empty");
+        assert!(app.encrypt_files.is_empty(), "encrypt file list should be empty");
         assert!(!app.decrypt_privkey.loaded());
-        assert!(!app.decrypt_pqf.loaded());
+        assert!(app.decrypt_files.is_empty(), "decrypt file list should be empty");
         assert!(!app.inspect_pqf.loaded());
     }
 

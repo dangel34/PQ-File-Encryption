@@ -11,6 +11,13 @@ use crate::widgets::{card, tab_heading};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::section_label;
 
+#[cfg(not(target_arch = "wasm32"))]
+enum KeyAction {
+    Remove(usize),
+    LoadPub(usize),
+    LoadPriv(usize),
+}
+
 impl PqfileApp {
     pub(crate) fn show_keys(&mut self, ui: &mut egui::Ui, dark: bool) {
         tab_heading(ui, "Key Management", dark);
@@ -46,103 +53,22 @@ impl PqfileApp {
 
         section_label(ui, "KEY PAIRS", dark);
 
-        let mut to_remove: Option<usize> = None;
-        let mut load_pub: Option<usize> = None;
-        let mut load_priv: Option<usize> = None;
+        let mut action: Option<KeyAction> = None;
 
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             if self.keys.is_empty() {
                 ui.label(
-                    RichText::new("No keys remembered yet — import a key pair to get started.")
+                    RichText::new("No keys remembered yet. Import a key pair to get started.")
                         .size(13.0)
                         .color(c_overlay(dark)),
                 );
             } else {
                 for (i, entry) in self.keys.iter().enumerate() {
-                    let pub_exists = entry.pubkey_path.exists();
-                    let priv_exists = entry.privkey_path.as_ref().map(|p| p.exists()).unwrap_or(false);
-
                     ui.add_space(if i == 0 { 0.0 } else { 10.0 });
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new(&entry.label)
-                                    .size(13.0)
-                                    .color(c_text(dark))
-                                    .strong(),
-                            );
-                            ui.label(
-                                RichText::new(&entry.fingerprint)
-                                    .size(12.0)
-                                    .monospace()
-                                    .color(c_subtext(dark)),
-                            );
-                            let path_str = entry.pubkey_path
-                                .parent()
-                                .map(|p| p.to_string_lossy().into_owned())
-                                .unwrap_or_default();
-                            if !pub_exists {
-                                ui.label(
-                                    RichText::new("⚠ pubkey.pem not found")
-                                        .size(11.0)
-                                        .color(c_red(dark)),
-                                );
-                            } else {
-                                ui.label(
-                                    RichText::new(&path_str).size(11.0).color(c_overlay(dark)),
-                                );
-                            }
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // Remove button
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new("✕").size(11.0).color(c_overlay(dark)),
-                                    )
-                                    .fill(Color32::TRANSPARENT)
-                                    .stroke(Stroke::NONE),
-                                )
-                                .on_hover_text("Remove from list")
-                                .clicked()
-                                && to_remove.is_none()
-                            {
-                                to_remove = Some(i);
-                            }
-                            ui.add_space(4.0);
-                            // Decrypt button
-                            if ui
-                                .add_enabled(
-                                    priv_exists,
-                                    egui::Button::new(
-                                        RichText::new("🔓 Decrypt").size(12.0).color(c_text(dark)),
-                                    )
-                                    .fill(c_surface0(dark))
-                                    .min_size(Vec2::new(80.0, 24.0)),
-                                )
-                                .on_hover_text("Load private key into Decrypt tab")
-                                .clicked()
-                            {
-                                load_priv = Some(i);
-                            }
-                            ui.add_space(4.0);
-                            // Encrypt button
-                            if ui
-                                .add_enabled(
-                                    pub_exists,
-                                    egui::Button::new(
-                                        RichText::new("🔒 Encrypt").size(12.0).color(c_text(dark)),
-                                    )
-                                    .fill(c_surface0(dark))
-                                    .min_size(Vec2::new(80.0, 24.0)),
-                                )
-                                .on_hover_text("Load public key into Encrypt tab")
-                                .clicked()
-                            {
-                                load_pub = Some(i);
-                            }
-                        });
-                    });
+                    let row_action = key_entry_row(ui, i, entry, dark);
+                    if action.is_none() {
+                        action = row_action;
+                    }
                     if i + 1 < self.keys.len() {
                         ui.add_space(6.0);
                         ui.separator();
@@ -151,55 +77,16 @@ impl PqfileApp {
             }
         });
 
-        // Process deferred actions after the card borrow is released.
-        if let Some(i) = to_remove {
-            self.keys.remove(i);
-        }
-        if let Some(i) = load_pub {
-            let path = self.keys[i].pubkey_path.clone();
-            if let Ok(data) = std::fs::read(&path) {
-                if let Ok(pem_str) = String::from_utf8(data) {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "pubkey.pem".to_owned());
-                    if !self.encrypt_recipients.iter().any(|r| r.pem == pem_str) {
-                        let variant_name = pem_variant_name(&pem_str);
-                        self.encrypt_recipients.push(RecipientEntry { name, pem: pem_str, variant_name });
-                    }
-                    self.tab = Tab::Encrypt;
-                }
-            }
-        }
-        if let Some(i) = load_priv {
-            if let Some(path) = self.keys[i].privkey_path.clone() {
-                if let Ok(data) = std::fs::read(&path) {
-                    self.decrypt_privkey.name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "privkey.pem".to_owned());
-                    self.decrypt_privkey.data = Some(data);
-                    self.decrypt_privkey.path = Some(path);
-                    self.tab = Tab::Decrypt;
-                }
-            }
+        match action {
+            Some(KeyAction::Remove(i)) => { self.keys.remove(i); }
+            Some(KeyAction::LoadPub(i)) => self.apply_load_pub(i),
+            Some(KeyAction::LoadPriv(i)) => self.apply_load_priv(i),
+            None => {}
         }
 
         ui.add_space(14.0);
 
-        if ui
-            .add(
-                egui::Button::new(
-                    RichText::new("+ Import Key Pair…")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(160.0, 32.0)),
-            )
-            .clicked()
-        {
+        if ui.add(egui::Button::new(RichText::new("+ Import Key Pair…").size(14.0).color(c_chrome(dark)).strong()).fill(c_accent(dark)).min_size(Vec2::new(160.0, 32.0))).clicked() {
             if let Some(dir) = rfd::FileDialog::new()
                 .set_title("Select the folder containing pubkey.pem")
                 .pick_folder()
@@ -210,28 +97,76 @@ impl PqfileApp {
                         let fp = keygen::fingerprint_pem(&pub_pem);
                         let priv_path = dir.join("privkey.pem");
                         let privkey_path = if priv_path.exists() { Some(priv_path) } else { None };
-                        let label = dir
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Keys".to_owned());
-                        let duplicate = self.keys.iter().any(|k| k.pubkey_path == pub_path);
-                        if !duplicate {
-                            self.keys.push(KeyEntry {
-                                label,
-                                pubkey_path: pub_path,
-                                privkey_path,
-                                fingerprint: fp,
-                            });
+                        let label = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Keys".to_owned());
+                        if !self.keys.iter().any(|k| k.pubkey_path == pub_path) {
+                            self.keys.push(KeyEntry { label, pubkey_path: pub_path, privkey_path, fingerprint: fp });
                         }
                     }
                 }
             }
         }
         ui.add_space(4.0);
-        ui.label(
-            RichText::new("Select the folder that contains pubkey.pem (and optionally privkey.pem).")
-                .size(12.0)
-                .color(c_overlay(dark)),
-        );
+        ui.label(RichText::new("Select the folder that contains pubkey.pem (and optionally privkey.pem).").size(12.0).color(c_overlay(dark)));
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_load_pub(&mut self, i: usize) {
+        let path = self.keys[i].pubkey_path.clone();
+        if let Ok(data) = std::fs::read(&path) {
+            if let Ok(pem_str) = String::from_utf8(data) {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "pubkey.pem".to_owned());
+                if !self.encrypt_recipients.iter().any(|r| r.pem == pem_str) {
+                    let variant_name = pem_variant_name(&pem_str);
+                    self.encrypt_recipients.push(RecipientEntry { name, pem: pem_str, variant_name });
+                }
+                self.tab = Tab::Encrypt;
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_load_priv(&mut self, i: usize) {
+        if let Some(path) = self.keys[i].privkey_path.clone() {
+            if let Ok(data) = std::fs::read(&path) {
+                self.decrypt_privkey.name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "privkey.pem".to_owned());
+                self.decrypt_privkey.data = Some(data);
+                self.decrypt_privkey.path = Some(path);
+                self.tab = Tab::Decrypt;
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn key_entry_row(ui: &mut egui::Ui, i: usize, entry: &crate::types::KeyEntry, dark: bool) -> Option<KeyAction> {
+    let pub_exists = entry.pubkey_path.exists();
+    let priv_exists = entry.privkey_path.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let mut action: Option<KeyAction> = None;
+
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(RichText::new(&entry.label).size(13.0).color(c_text(dark)).strong());
+            ui.label(RichText::new(&entry.fingerprint).size(12.0).monospace().color(c_subtext(dark)));
+            if !pub_exists {
+                ui.label(RichText::new("⚠ pubkey.pem not found").size(11.0).color(c_red(dark)));
+            } else {
+                let path_str = entry.pubkey_path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+                ui.label(RichText::new(&path_str).size(11.0).color(c_overlay(dark)));
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(egui::Button::new(RichText::new("x").size(11.0).color(c_overlay(dark))).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).on_hover_text("Remove from list").clicked() {
+                action = Some(KeyAction::Remove(i));
+            }
+            ui.add_space(4.0);
+            if ui.add_enabled(priv_exists, egui::Button::new(RichText::new("🔓 Decrypt").size(12.0).color(c_text(dark))).fill(c_surface0(dark)).min_size(Vec2::new(80.0, 24.0))).on_hover_text("Load private key into Decrypt tab").clicked() {
+                action = Some(KeyAction::LoadPriv(i));
+            }
+            ui.add_space(4.0);
+            if ui.add_enabled(pub_exists, egui::Button::new(RichText::new("🔒 Encrypt").size(12.0).color(c_text(dark))).fill(c_surface0(dark)).min_size(Vec2::new(80.0, 24.0))).on_hover_text("Load public key into Encrypt tab").clicked() {
+                action = Some(KeyAction::LoadPub(i));
+            }
+        });
+    });
+    action
 }

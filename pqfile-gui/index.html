@@ -5,17 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Post-quantum file encryption using ML-KEM-768 + ChaCha20-Poly1305. All encryption runs in your browser — no files are uploaded." />
   <meta name="theme-color" content="#1a1a2e" />
-  <title>pqfile — Quantum-Resistant File Encryption</title>
+  <title>pqfile - Post-Quantum File Encryption</title>
+  <link data-trunk rel="copy-file" href="icon.png" />
   <script>
     (function() {
-      var c = document.createElement('canvas');
-      c.width = 32; c.height = 32;
-      var x = c.getContext('2d');
-      x.font = '26px serif';
-      x.fillText('🔐', 2, 26);
-      var l = document.createElement('link');
-      l.rel = 'icon'; l.href = c.toDataURL();
-      document.head.appendChild(l);
+      var img = new Image();
+      img.onload = function() {
+        var c = document.createElement('canvas');
+        c.width = 32; c.height = 32;
+        var x = c.getContext('2d');
+        x.fillStyle = '#89b4fa';
+        x.beginPath();
+        x.roundRect(0, 0, 32, 32, 6);
+        x.fill();
+        x.drawImage(img, 2, 2, 28, 28);
+        var l = document.createElement('link');
+        l.rel = 'icon'; l.href = c.toDataURL();
+        document.head.appendChild(l);
+      };
+      img.src = 'icon.png';
     })();
   </script>
   <style>

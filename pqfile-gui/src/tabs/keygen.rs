@@ -3,7 +3,7 @@ use pqfile::keygen;
 use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 #[cfg(not(target_arch = "wasm32"))]
-use crate::colors::{c_surface0, c_text};
+use crate::colors::{c_overlay, c_text};
 use crate::types::{KeygenAlgorithm, OpStatus};
 use crate::widgets::{card, section_label, show_status, tab_heading};
 
@@ -19,26 +19,22 @@ impl PqfileApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let dir_display = if self.settings.output_dir.is_empty() {
+                "Not set (configure in Settings)".to_owned()
+            } else {
+                self.settings.output_dir.clone()
+            };
             section_label(ui, "OUTPUT DIRECTORY", dark);
             card(ui, c_card(dark), c_surface1(dark), |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.keygen_dir)
-                            .hint_text("Choose a folder…")
-                            .desired_width(ui.available_width() - 76.0),
-                    );
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new("Browse…").color(c_text(dark)))
-                                .fill(c_surface0(dark)),
-                        )
-                        .clicked()
-                    {
-                        if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                            self.keygen_dir = p.to_string_lossy().into_owned();
-                        }
-                    }
-                });
+                ui.label(RichText::new(dir_display).size(13.0).color(
+                    if self.settings.output_dir.is_empty() { c_overlay(dark) } else { c_text(dark) },
+                ));
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Change in Settings > Default Output Directory.")
+                        .size(11.5)
+                        .color(c_overlay(dark)),
+                );
             });
             ui.add_space(14.0);
         }
@@ -163,11 +159,13 @@ impl PqfileApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.keygen_dir.trim().is_empty() {
-                self.keygen_status = OpStatus::Err("Choose an output directory first.".to_owned());
+            if self.settings.output_dir.trim().is_empty() {
+                self.keygen_status = OpStatus::Err(
+                    "Set a default output directory in Settings first.".to_owned()
+                );
                 return;
             }
-            let dir = std::path::Path::new(&self.keygen_dir);
+            let dir = std::path::Path::new(&self.settings.output_dir);
             // force=true when confirm_overwrite is off (the default): overwrite freely.
             // force=false when confirm_overwrite is on: refuse if either key file exists.
             let force = !self.settings.confirm_overwrite;

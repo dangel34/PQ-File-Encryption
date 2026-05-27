@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{Read, Write};
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 use chacha20poly1305::{
@@ -21,7 +22,7 @@ use crate::format::{
     BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD, EK_LEN, EK_LEN_512, EK_LEN_1024,
     HEADER_LEN, HYBRID_CT_LEN_768, HYBRID_EK_LEN_768, KEM_VARIANT, KEM_VARIANT_512, KEM_VARIANT_1024,
     KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V3, VERSION_V5, VERSION_V6,
-    PqfHeader, PqfHeaderV4, RecipientEntryV4, WRAPPED_KEY_LEN,
+    PqfHeader, PqfHeaderV4, PqfHeaderV7, RecipientEntryV4, RecipientEntryV7, WRAPPED_KEY_LEN,
     chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf,
 };
 use crate::keygen::{PUB_TAG, PUB_TAG_512, PUB_TAG_1024, PUB_TAG_HYBRID_768};
@@ -316,6 +317,79 @@ pub fn encrypt_stream_multi(
     Ok(())
 }
 
+/// Encrypts a stream to multiple recipients in anonymous (v7) format.
+///
+/// Identical to [`encrypt_stream_multi`] except that all KEM ciphertexts are zero-padded
+/// to the maximum variant size and recipient entries are written in a randomly shuffled
+/// order, preventing an observer from correlating entry position with a specific recipient.
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_multi_anon(
+    pubkey_pems: &[&str],
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let mut session_key = Zeroizing::new([0u8; 32]);
+    getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let mut recipients: Vec<RecipientEntryV7> = Vec::with_capacity(pubkey_pems.len());
+    for pubkey_pem in pubkey_pems {
+        let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
+        let (kem_ct, ss) = encapsulate(ek)?;
+        let wrapped_key = wrap_session_key(&session_key, &ss)?;
+        recipients.push(RecipientEntryV7 { kem_variant, kem_ciphertext: kem_ct, wrapped_key });
+    }
+
+    // Fisher-Yates shuffle using getrandom for randomness.
+    for i in (1..recipients.len()).rev() {
+        let mut r = [0u8; 4];
+        getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
+        let j = (u32::from_le_bytes(r) as usize) % (i + 1);
+        recipients.swap(i, j);
+    }
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let header = PqfHeaderV7 { recipients, nonce: nonce_bytes, original_size };
+    header.write(writer)?;
+
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
+    let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
+    let cipher = ChaCha20Poly1305::new(key);
+
+    let mut current = vec![0u8; CHUNK_SIZE];
+    let mut current_len = fill_chunk(reader, &mut current)?;
+    let mut next = vec![0u8; CHUNK_SIZE];
+    let mut counter: u32 = 0;
+
+    loop {
+        let next_len = fill_chunk(reader, &mut next)?;
+        let is_last = next_len == 0;
+
+        let cn = chunk_nonce(base_nonce, counter);
+        let aad = chunk_aad(counter, is_last);
+        let tag = cipher
+            .encrypt_in_place_detached(
+                chacha20poly1305::Nonce::from_slice(&cn),
+                &aad,
+                &mut current[..current_len],
+            )
+            .map_err(|_| PqfileError::EncryptionFailure)?;
+        writer.write_all(&current[..current_len])?;
+        writer.write_all(tag.as_ref())?;
+
+        if is_last { break; }
+        counter = counter.checked_add(1).ok_or(PqfileError::EncryptionFailure)?;
+        std::mem::swap(&mut current, &mut next);
+        current_len = next_len;
+    }
+
+    Ok(())
+}
+
 /// Encapsulates `session_key` under `pubkey_pem` for use during rekey.
 ///
 /// Returns `(kem_ciphertext, kem_variant, wrapped_session_key)`.
@@ -421,6 +495,134 @@ pub(crate) fn wrap_session_key(session_key: &[u8; 32], ss: &[u8; 32]) -> Result<
     let mut out = [0u8; WRAPPED_KEY_LEN];
     out.copy_from_slice(&ct);
     Ok(out)
+}
+
+/// Parallel version of [`encrypt_stream`] that processes chunks concurrently using rayon.
+///
+/// `batch_size` chunks are read, encrypted in parallel, then written in order.
+/// The output format and ciphertext are identical to `encrypt_stream` (same nonce
+/// derivation, same AAD) — parallel vs. serial encryption is transparent to the
+/// decryptor.
+///
+/// Falls back to [`encrypt_stream`] for `batch_size` == 1.
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_parallel(
+    pubkey_pem: &str,
+    original_size: u64,
+    chunk_size: usize,
+    batch_size: usize,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    if batch_size <= 1 {
+        return encrypt_stream(pubkey_pem, original_size, chunk_size, reader, writer);
+    }
+    if chunk_size == 0 {
+        return Err(PqfileError::EncryptionFailure);
+    }
+
+    let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
+    let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let version = if chunk_size == CHUNK_SIZE { VERSION_V3 } else { VERSION_V5 };
+    let header = PqfHeader {
+        version,
+        kem_variant,
+        kem_ciphertext: kem_ct_bytes,
+        nonce: nonce_bytes,
+        original_size,
+        chunk_size: chunk_size as u32,
+        compression_algo: COMPRESSION_NONE,
+    };
+    header.write(writer)?;
+
+    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into().unwrap();
+    let key_bytes: [u8; 32] = *ss_bytes;
+
+    // Prime: read the very first chunk
+    let mut first = vec![0u8; chunk_size];
+    let first_len = fill_chunk(reader, &mut first)?;
+    if first_len == 0 {
+        // Empty input: emit a single empty authenticated last chunk
+        let cn = chunk_nonce(&base_nonce, 0);
+        let aad = chunk_aad(0, true);
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+        let tag = cipher
+            .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut [])
+            .map_err(|_| PqfileError::EncryptionFailure)?;
+        writer.write_all(tag.as_ref())?;
+        return Ok(());
+    }
+
+    let mut carry: Option<(Vec<u8>, usize)> = Some((first, first_len));
+    let mut counter: u32 = 0;
+
+    loop {
+        let mut batch: Vec<(Vec<u8>, usize)> = Vec::with_capacity(batch_size);
+        if let Some(c) = carry.take() {
+            batch.push(c);
+        }
+        while batch.len() < batch_size {
+            let mut buf = vec![0u8; chunk_size];
+            let n = fill_chunk(reader, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            batch.push((buf, n));
+        }
+
+        if batch.is_empty() {
+            break;
+        }
+
+        // Peek one more chunk to determine if this batch ends the stream
+        let mut peek = vec![0u8; chunk_size];
+        let peek_len = fill_chunk(reader, &mut peek)?;
+        let batch_is_final = peek_len == 0;
+        if !batch_is_final {
+            carry = Some((peek, peek_len));
+        }
+
+        let batch_len = batch.len();
+        let batch_start = counter;
+
+        let results: Vec<Result<(Vec<u8>, usize, Vec<u8>), PqfileError>> = batch
+            .into_par_iter()
+            .enumerate()
+            .map(|(i, (mut chunk, chunk_len))| {
+                let c = batch_start.checked_add(i as u32).ok_or(PqfileError::EncryptionFailure)?;
+                let is_last = batch_is_final && i == batch_len - 1;
+                let cn = chunk_nonce(&base_nonce, c);
+                let aad = chunk_aad(c, is_last);
+                let cipher = ChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+                let tag = cipher
+                    .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut chunk[..chunk_len])
+                    .map_err(|_| PqfileError::EncryptionFailure)?;
+                let tag_bytes: Vec<u8> = tag[..].to_vec();
+                Ok((chunk, chunk_len, tag_bytes))
+            })
+            .collect();
+
+        for r in results {
+            let (ct, ct_len, tag): (Vec<u8>, usize, Vec<u8>) = r?;
+            writer.write_all(&ct[..ct_len])?;
+            writer.write_all(&tag)?;
+        }
+
+        counter = batch_start
+            .checked_add(batch_len as u32)
+            .ok_or(PqfileError::EncryptionFailure)?;
+
+        if batch_is_final {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -655,6 +857,43 @@ mod tests {
         let mut writer = Vec::new();
         let result = encrypt_stream_compressed(&pub_pem, 4, 0, 3, &mut reader, &mut writer);
         assert!(matches!(result, Err(PqfileError::EncryptionFailure)));
+    }
+
+    // ── Parallel encryption ───────────────────────────────────────────────────
+
+    #[test]
+    fn parallel_encrypt_small_input_decrypts_correctly() {
+        use crate::decrypt::decrypt_stream;
+        let (pub_pem, priv_pem) = keypair();
+        let plaintext = b"parallel small";
+        let mut ct = Vec::new();
+        encrypt_stream_parallel(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 4, &mut plaintext.as_slice(), &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn parallel_encrypt_multi_batch_decrypts_correctly() {
+        use crate::decrypt::decrypt_stream;
+        let (pub_pem, priv_pem) = keypair();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 10 + 7).collect();
+        let mut ct = Vec::new();
+        encrypt_stream_parallel(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 4, &mut plaintext.as_slice(), &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn parallel_encrypt_empty_input_decrypts_correctly() {
+        use crate::decrypt::decrypt_stream;
+        let (pub_pem, priv_pem) = keypair();
+        let mut ct = Vec::new();
+        encrypt_stream_parallel(&pub_pem, 0, CHUNK_SIZE, 4, &mut [].as_slice(), &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert!(out.is_empty());
     }
 
     #[cfg(not(target_arch = "wasm32"))]

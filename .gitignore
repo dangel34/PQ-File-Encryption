@@ -3,6 +3,9 @@
 debug
 target
 
+# trunk (WASM bundler) build output
+pqfile-gui/dist/
+
 # Compiled installer artifacts — built by Inno Setup, not source
 pqfile-desktop/packaging/output/
 
