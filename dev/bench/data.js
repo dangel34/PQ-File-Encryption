@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779388262255,
+  "lastUpdate": 1779888756927,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -815,6 +815,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 56945,
             "range": "± 894",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "3114c746c5f81617909604c12a888f5e6c529c22",
+          "message": "feat: add support for encrypted archives and parallel processing\n\n- Introduced a new `create` function to generate encrypted archives from multiple files, including metadata for each entry.\n- Added an `extract` function to decrypt and extract files from the encrypted archive format.\n- Implemented a `list` function to read the archive manifest without decrypting the contents.\n- Enhanced encryption and decryption functions to support parallel processing using the `rayon` crate, improving performance for chunked files.\n- Updated documentation to include instructions for building and testing locally, as well as details on the new archive functionality.",
+          "timestamp": "2026-05-27T09:26:17-04:00",
+          "tree_id": "bf624594755efbd086ac014cb53e3cabff19da60",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/3114c746c5f81617909604c12a888f5e6c529c22"
+        },
+        "date": 1779888755650,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67395,
+            "range": "± 4547",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1075710,
+            "range": "± 16049",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 116125685,
+            "range": "± 323655",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 111038,
+            "range": "± 1324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1100271,
+            "range": "± 12813",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 106097343,
+            "range": "± 3881540",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 67860,
+            "range": "± 569",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1103541,
+            "range": "± 17454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 112597918,
+            "range": "± 1792842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 112561,
+            "range": "± 2174",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1177844,
+            "range": "± 13548",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 111992284,
+            "range": "± 414492",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 57026,
+            "range": "± 1238",
             "unit": "ns/iter"
           }
         ]
