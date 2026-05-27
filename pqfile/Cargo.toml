@@ -26,7 +26,7 @@ rpassword = "7"
 ml-dsa = { version = "0.1.0", features = ["getrandom", "zeroize"] }
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 hkdf = "0.12"
-sha2 = "0.10"
+sha2 = "0.11"
 rayon = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
