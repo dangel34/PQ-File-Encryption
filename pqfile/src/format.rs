@@ -6,8 +6,11 @@ use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 
+/// File magic bytes: ASCII `PQFL`.
 pub const MAGIC: &[u8; 4] = b"PQFL";
+/// v2 format version byte (whole-file AEAD, single recipient).
 pub const VERSION: u8 = 0x02;
+/// v3 format version byte (64 KiB chunked STREAM, single recipient).
 pub const VERSION_V3: u8 = 0x03;
 /// Multi-recipient format: MAGIC | 0x04 | COUNT(2) | [VARIANT(2) | CT(var) | WRAPPED_KEY(48)]... | NONCE(12) | ORIGINAL_SIZE(8)
 pub const VERSION_V4: u8 = 0x04;
@@ -24,22 +27,28 @@ pub const VERSION_V7: u8 = 0x07;
 /// All v7 recipient entries use this fixed CT slot size.
 pub const PADDED_CT_LEN: usize = KEM_CT_LEN_1024;
 
+/// ML-KEM-512 variant identifier.
 pub const KEM_VARIANT_512: u16 = 512;
+/// ML-KEM-768 variant identifier (default security level).
 pub const KEM_VARIANT: u16 = 768;
+/// ML-KEM-1024 variant identifier.
 pub const KEM_VARIANT_1024: u16 = 1024;
 /// Hybrid X25519+ML-KEM-768 variant identifier (0x0301).
 pub const KEM_VARIANT_HYBRID_768: u16 = 0x0301;
 
-/// ML-KEM-512 sizes.
+/// ML-KEM-512 ciphertext length in bytes.
 pub const KEM_CT_LEN_512: usize = 768;
+/// ML-KEM-512 encapsulation key (public key) length in bytes.
 pub const EK_LEN_512: usize = 800;
 
-/// ML-KEM-768 sizes.
+/// ML-KEM-768 ciphertext length in bytes.
 pub const KEM_CT_LEN: usize = 1088;
+/// ML-KEM-768 encapsulation key (public key) length in bytes.
 pub const EK_LEN: usize = 1184;
 
-/// ML-KEM-1024 sizes.
+/// ML-KEM-1024 ciphertext length in bytes.
 pub const KEM_CT_LEN_1024: usize = 1568;
+/// ML-KEM-1024 encapsulation key (public key) length in bytes.
 pub const EK_LEN_1024: usize = 1568;
 
 /// Hybrid X25519+ML-KEM-768 sizes.
@@ -47,6 +56,7 @@ pub const EK_LEN_1024: usize = 1568;
 pub const X25519_PUBKEY_LEN: usize = 32;
 /// X25519 static public key length (same as ephemeral).
 pub const X25519_SCALAR_LEN: usize = 32;
+/// Hybrid KEM ciphertext length: X25519 ephemeral pubkey (32) + ML-KEM-768 CT (1088).
 pub const HYBRID_CT_LEN_768: usize = X25519_PUBKEY_LEN + KEM_CT_LEN;
 /// Combined hybrid public key stored in PEM: X25519 pubkey (32) + ML-KEM-768 EK (1184).
 pub const HYBRID_EK_LEN_768: usize = X25519_PUBKEY_LEN + EK_LEN;
@@ -56,6 +66,7 @@ pub const HYBRID_SEED_LEN_768: usize = X25519_SCALAR_LEN + 64;
 /// AES-256-GCM wrapped session key size: 32-byte key + 16-byte tag.
 pub const WRAPPED_KEY_LEN: usize = 48;
 
+/// Full ChaCha20-Poly1305 nonce length (12 bytes = 8-byte base + 4-byte counter).
 pub const NONCE_LEN: usize = 12;
 
 /// Fixed prefix: MAGIC(4) + VERSION(1) + KEM_VARIANT(2) = 7 bytes.
@@ -81,6 +92,7 @@ pub const V6_COMPRESSION_FIELD_LEN: usize = 1;
 
 /// Compression algorithm identifiers used in v6 format.
 pub const COMPRESSION_NONE: u8 = 0x00;
+/// zstd compression (RFC 8878) for v6 format.
 pub const COMPRESSION_ZSTD: u8 = 0x01;
 
 /// Chunk size for v3/v4 streaming encryption (64 KiB).
@@ -94,11 +106,17 @@ pub(crate) const STREAM_AAD_PREFIX: &[u8] = b"pqfile";
 
 // ── Single-recipient header (v2 / v3) ────────────────────────────────────
 
+/// Parsed header for single-recipient formats (v2, v3, v5, v6).
 pub struct PqfHeader {
+    /// Format version byte.
     pub version: u8,
+    /// KEM variant identifier (e.g. 768 for ML-KEM-768).
     pub kem_variant: u16,
+    /// KEM ciphertext bytes (length depends on the variant).
     pub kem_ciphertext: Vec<u8>,
+    /// Per-file or per-stream base nonce (12 bytes).
     pub nonce: [u8; NONCE_LEN],
+    /// Uncompressed plaintext size in bytes (informational; not trusted for allocation).
     pub original_size: u64,
     /// Chunk size for v3/v5/v6 streaming. Stored on disk only in v5/v6; v3 uses CHUNK_SIZE.
     pub chunk_size: u32,
@@ -117,6 +135,7 @@ impl PqfHeader {
         }
     }
 
+    /// Serializes the header to `w`.
     pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
         w.write_all(MAGIC)?;
         w.write_all(&[self.version])?;
@@ -133,6 +152,7 @@ impl PqfHeader {
         Ok(())
     }
 
+    /// Deserializes a v2/v3/v5/v6 header from `r`. Returns `UnsupportedVersion` for v4/v7.
     pub fn read<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
         let version = Self::read_magic_version(r)?;
         if version != VERSION && version != VERSION_V3 && version != VERSION_V5 && version != VERSION_V6 {
@@ -168,13 +188,17 @@ impl PqfHeader {
         let (chunk_size, compression_algo) = if version == VERSION_V5 {
             let mut cs = [0u8; 4];
             r.read_exact(&mut cs)?;
-            (u32::from_le_bytes(cs), COMPRESSION_NONE)
+            let val = u32::from_le_bytes(cs);
+            validate_chunk_size(val)?;
+            (val, COMPRESSION_NONE)
         } else if version == VERSION_V6 {
             let mut cs = [0u8; 4];
             r.read_exact(&mut cs)?;
+            let val = u32::from_le_bytes(cs);
+            validate_chunk_size(val)?;
             let mut algo = [0u8; 1];
             r.read_exact(&mut algo)?;
-            (u32::from_le_bytes(cs), algo[0])
+            (val, algo[0])
         } else {
             (CHUNK_SIZE as u32, COMPRESSION_NONE)
         };
@@ -184,32 +208,47 @@ impl PqfHeader {
 
 // ── Multi-recipient header (v4) ───────────────────────────────────────────
 
+/// One recipient slot in a v4 multi-recipient header.
 pub struct RecipientEntryV4 {
+    /// KEM variant for this recipient's key.
     pub kem_variant: u16,
+    /// KEM ciphertext encapsulating the per-file session key for this recipient.
     pub kem_ciphertext: Vec<u8>,
     /// AES-256-GCM encrypted session key (32-byte key + 16-byte tag = 48 bytes).
     pub wrapped_key: [u8; WRAPPED_KEY_LEN],
 }
 
+/// Parsed header for v4 (multi-recipient) format.
 pub struct PqfHeaderV4 {
+    /// Ordered list of recipient slots.
     pub recipients: Vec<RecipientEntryV4>,
+    /// Base nonce for the STREAM payload.
     pub nonce: [u8; NONCE_LEN],
+    /// Uncompressed plaintext size in bytes.
     pub original_size: u64,
 }
 
+fn write_multi_header_prefix<W: Write + ?Sized>(w: &mut W, version: u8, count: usize) -> Result<(), std::io::Error> {
+    w.write_all(MAGIC)?;
+    w.write_all(&[version])?;
+    w.write_all(&(count as u16).to_le_bytes())
+}
+
+fn write_nonce_and_size<W: Write + ?Sized>(w: &mut W, nonce: &[u8; NONCE_LEN], size: u64) -> Result<(), std::io::Error> {
+    w.write_all(nonce)?;
+    w.write_all(&size.to_le_bytes())
+}
+
 impl PqfHeaderV4 {
+    /// Serializes the v4 header to `w`.
     pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
-        w.write_all(MAGIC)?;
-        w.write_all(&[VERSION_V4])?;
-        w.write_all(&(self.recipients.len() as u16).to_le_bytes())?;
+        write_multi_header_prefix(w, VERSION_V4, self.recipients.len())?;
         for r in &self.recipients {
             w.write_all(&r.kem_variant.to_le_bytes())?;
             w.write_all(&r.kem_ciphertext)?;
             w.write_all(&r.wrapped_key)?;
         }
-        w.write_all(&self.nonce)?;
-        w.write_all(&self.original_size.to_le_bytes())?;
-        Ok(())
+        write_nonce_and_size(w, &self.nonce, self.original_size)
     }
 
     /// Reads the v4 header body (everything after MAGIC + VERSION byte).
@@ -217,6 +256,13 @@ impl PqfHeaderV4 {
         let mut count_bytes = [0u8; 2];
         r.read_exact(&mut count_bytes)?;
         let count = u16::from_le_bytes(count_bytes) as usize;
+        const MAX_RECIPIENTS: usize = 1000;
+        if count > MAX_RECIPIENTS {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("recipient count {count} exceeds maximum ({MAX_RECIPIENTS})"),
+            )));
+        }
 
         let mut recipients = Vec::with_capacity(count);
         for _ in 0..count {
@@ -243,6 +289,7 @@ impl PqfHeaderV4 {
 
 /// One recipient entry in a v7 header. The KEM ciphertext is zero-padded to PADDED_CT_LEN.
 pub struct RecipientEntryV7 {
+    /// KEM variant for this recipient's key.
     pub kem_variant: u16,
     /// Actual KEM ciphertext (only the first `ct_len_for_variant(kem_variant)` bytes are real).
     pub kem_ciphertext: Vec<u8>,
@@ -250,31 +297,31 @@ pub struct RecipientEntryV7 {
     pub wrapped_key: [u8; WRAPPED_KEY_LEN],
 }
 
+/// Parsed header for v7 (anonymous multi-recipient) format.
 pub struct PqfHeaderV7 {
+    /// Shuffled recipient slots, each with a fixed 1618-byte layout.
     pub recipients: Vec<RecipientEntryV7>,
+    /// Base nonce for the STREAM payload.
     pub nonce: [u8; NONCE_LEN],
+    /// Uncompressed plaintext size in bytes.
     pub original_size: u64,
 }
 
 impl PqfHeaderV7 {
+    /// Serializes the v7 header to `w`, zero-padding each KEM ciphertext to PADDED_CT_LEN.
     pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
-        w.write_all(MAGIC)?;
-        w.write_all(&[VERSION_V7])?;
-        w.write_all(&(self.recipients.len() as u16).to_le_bytes())?;
+        write_multi_header_prefix(w, VERSION_V7, self.recipients.len())?;
         let pad = [0u8; PADDED_CT_LEN];
         for r in &self.recipients {
             w.write_all(&r.kem_variant.to_le_bytes())?;
             w.write_all(&r.kem_ciphertext)?;
-            // Zero-pad up to PADDED_CT_LEN
             let written = r.kem_ciphertext.len();
             if written < PADDED_CT_LEN {
                 w.write_all(&pad[..PADDED_CT_LEN - written])?;
             }
             w.write_all(&r.wrapped_key)?;
         }
-        w.write_all(&self.nonce)?;
-        w.write_all(&self.original_size.to_le_bytes())?;
-        Ok(())
+        write_nonce_and_size(w, &self.nonce, self.original_size)
     }
 
     /// Reads the v7 header body (everything after MAGIC + VERSION byte).
@@ -282,6 +329,13 @@ impl PqfHeaderV7 {
         let mut count_bytes = [0u8; 2];
         r.read_exact(&mut count_bytes)?;
         let count = u16::from_le_bytes(count_bytes) as usize;
+        const MAX_RECIPIENTS: usize = 1000;
+        if count > MAX_RECIPIENTS {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("recipient count {count} exceeds maximum ({MAX_RECIPIENTS})"),
+            )));
+        }
 
         let mut recipients = Vec::with_capacity(count);
         for _ in 0..count {
@@ -307,6 +361,20 @@ impl PqfHeaderV7 {
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────
+
+/// Maximum chunk size accepted when reading a v5/v6 header (256 MiB).
+/// Matches the upper bound enforced by the CLI `--chunk-size` flag.
+pub const MAX_CHUNK_SIZE: u32 = 256 * 1024 * 1024;
+
+fn validate_chunk_size(val: u32) -> Result<(), PqfileError> {
+    if val == 0 || val > MAX_CHUNK_SIZE {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("chunk_size {val} is out of valid range (1..={MAX_CHUNK_SIZE})"),
+        )));
+    }
+    Ok(())
+}
 
 /// Returns the KEM ciphertext length for a given kem_variant, or UnsupportedKem.
 pub fn ct_len_for_variant(kem_variant: u16) -> Result<usize, PqfileError> {

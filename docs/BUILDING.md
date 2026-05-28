@@ -13,7 +13,7 @@ winget install Rustlang.Rustup
 # WASM target for the web build
 rustup target add wasm32-unknown-unknown
 
-# Trunk — dev server + bundler for the web build
+# Trunk - dev server + bundler for the web build
 cargo install trunk
 
 # Optional: code coverage

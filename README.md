@@ -1,13 +1,11 @@
 # pqfile - Post-Quantum File Encryption
 
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=dangel34_PQ-File-Encryption&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=dangel34_PQ-File-Encryption&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=dangel34_PQ-File-Encryption)
 
 A quantum-resistant file encryption tool with a CLI and a cross-platform GUI. It combines post-quantum key encapsulation (ML-KEM, NIST FIPS 203) with ChaCha20-Poly1305 authenticated encryption. Three key types are supported: ML-KEM-768, ML-KEM-1024, and a hybrid X25519+ML-KEM-768 mode. A file can be encrypted to multiple recipients in a single pass.
 
 Digital signatures use ML-DSA-65 (NIST FIPS 204).
 
-**[QUICKSTART.md](QUICKSTART.md)**: build, install, common CLI commands, GUI overview, deploying.
+**[docs/QUICKSTART.md](docs/QUICKSTART.md)**: build, install, common CLI commands, GUI overview, deploying.
 
 ---
 
@@ -50,21 +48,29 @@ PQ-File-Encryption/
 │       ├── fuzz_header_read.rs    Fuzzes PqfHeader::read on arbitrary bytes
 │       ├── fuzz_decrypt_bytes.rs  Fuzzes decrypt_bytes on arbitrary ciphertext
 │       └── fuzz_pem_parsing.rs    Fuzzes PEM parsing and fingerprinting
-├── pqfile/                 CLI tool and crypto library
+├── pqfile/                 Core crypto library
 │   ├── src/
-│   │   ├── main.rs         CLI entry point (clap subcommands, stdin/stdout support)
 │   │   ├── lib.rs          Public library re-exports
 │   │   ├── keygen.rs       Key pair generation and PEM serialization
-│   │   ├── encrypt.rs      Hybrid encryption pipeline (v2/v3/v4 formats)
-│   │   ├── decrypt.rs      Hybrid decryption pipeline (v2/v3/v4 auto-detect)
+│   │   ├── encrypt.rs      Hybrid encryption pipeline (v2 through v7 formats)
+│   │   ├── decrypt.rs      Hybrid decryption pipeline (v2 through v7 auto-detect)
 │   │   ├── format.rs       .pqf binary file format definitions
 │   │   ├── passphrase.rs   Argon2id wrapping for passphrase-protected keys
 │   │   ├── sign.rs         ML-DSA-65 signing and verification
+│   │   ├── signcrypt.rs    Combined sign-then-encrypt and signdecrypt
+│   │   ├── reader.rs       PqfReader<R: Read> streaming decryptor type
+│   │   ├── archive.rs      Encrypted multi-file archive (PQFA format)
+│   │   ├── rekey.rs        Re-encryption without payload decryption
+│   │   ├── revoke.rs       Key revocation sidecar (.revoked) support
+│   │   ├── shamir.rs       Shamir secret sharing for M-of-N key splitting
 │   │   └── error.rs        PqfileError enum
-│   ├── benches/
-│   │   └── crypto.rs       Criterion benchmarks (encrypt/decrypt at 1 KB/1 MB/100 MB)
+│   └── benches/
+│       └── crypto.rs       Criterion benchmarks (encrypt/decrypt at 1 KB/1 MB/100 MB)
+├── pqfile-cli/             CLI binary
+│   ├── src/
+│   │   └── main.rs         CLI entry point (clap subcommands, stdin/stdout support)
 │   └── tests/
-│       └── roundtrip.rs    End-to-end CLI integration tests (45 tests)
+│       └── roundtrip.rs    End-to-end CLI integration tests
 ├── pqfile-gui/             Shared GUI logic + WASM web app
 │   ├── index.html          Canvas page for trunk/WASM builds
 │   └── src/
@@ -81,7 +87,7 @@ PQ-File-Encryption/
         └── main.rs         Native entry point (~18 lines)
 ```
 
-The `pqfile` crate is both a library and a CLI binary. The `pqfile-gui` crate compiles to a `cdylib` for WASM and an `rlib` for the native binary. `pqfile-desktop` is the thin native entry point. This follows the official eframe template pattern.
+The `pqfile` crate is a library. The `pqfile-cli` crate provides the CLI binary. The `pqfile-gui` crate compiles to a `cdylib` for WASM and an `rlib` for the native binary. `pqfile-desktop` is the thin native entry point. This follows the official eframe template pattern.
 
 ---
 
@@ -128,11 +134,20 @@ pqfile encrypt -r pubkey.pem --recursive /path/to/dir/
 # Compress before encrypting (single recipient only, not available on WASM)
 pqfile encrypt -r pubkey.pem --compress --compress-level 3 secret.txt
 
+# Encrypt chunks in parallel using rayon (single recipient, incompatible with --compress)
+pqfile encrypt -r pubkey.pem --parallel large_file.bin
+
+# Custom chunk size in bytes (single recipient, produces v5 format)
+pqfile encrypt -r pubkey.pem --chunk-size 131072 large_file.bin
+
+# Hide recipient count and key types (multiple recipients required, produces v7 format)
+pqfile encrypt -r alice/pubkey.pem -r bob/pubkey.pem --anonymous-recipients secret.txt
+
 # Read from stdin, write to stdout
 cat secret.txt | pqfile encrypt -r pubkey.pem - > secret.txt.pqf
 ```
 
-Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3.
+Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--anonymous-recipients` upgrades to v7 format, padding all ciphertexts to a uniform size and randomizing their order. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3. `--parallel` uses rayon for concurrent chunk processing and requires a single recipient.
 
 ### Decryption
 
@@ -147,7 +162,7 @@ pqfile decrypt -k privkey.pem secret.txt.pqf -o recovered.txt
 cat secret.txt.pqf | pqfile decrypt -k privkey.pem - -o -
 ```
 
-If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v6 files (all single-recipient variants) and v4 (multi-recipient).
+If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v7 files (all single-recipient variants) and v4/v7 (multi-recipient).
 
 ### Rekey
 
@@ -214,6 +229,54 @@ pqfile verify -k sign_pubkey.pem -s document.pdf.sig document.pdf
 
 Signatures are ML-DSA-65 (NIST FIPS 204), 3309 bytes, stored in PEM format. The verifying key (1952 bytes) can be distributed alongside the signed content.
 
+### Signcrypt
+
+```bash
+# Sign and encrypt in one step; the signature is embedded inside the ciphertext
+pqfile signcrypt -k sign_privkey.pem -r pubkey.pem document.pdf
+# Output: document.pdf.pqf
+
+# Custom output path
+pqfile signcrypt -k sign_privkey.pem -r pubkey.pem document.pdf -o signed.pqf
+
+# Decrypt and verify the embedded signature in one step
+pqfile signdecrypt -k privkey.pem -v sign_pubkey.pem document.pdf.pqf
+```
+
+Unlike `pqfile sign` followed by `pqfile encrypt`, the signature lives inside the AEAD-authenticated payload and cannot be stripped or substituted after encryption. A recipient cannot re-encrypt the plaintext to a third party while preserving the sender's signature. Stdin is not supported as input because two passes over the file are required (one to hash, one to encrypt).
+
+### Archive and extract
+
+```bash
+# Pack multiple files into a single encrypted archive
+pqfile archive -r pubkey.pem file1.txt file2.txt report.pdf -o bundle.pqf
+
+# Strip a directory prefix so entries use relative paths
+pqfile archive -r pubkey.pem --base ./project/ ./project/src/main.rs ./project/README.md
+
+# List archive contents without extracting
+pqfile extract bundle.pqf -k privkey.pem --list
+
+# Extract to a directory (default: current directory)
+pqfile extract bundle.pqf -k privkey.pem -o recovered/
+```
+
+Archives use the PQFA format: a streaming authenticated payload where the plaintext is a structured entry sequence. Each entry stores the original relative path and file data. All AEAD authentication is verified before any file is written to disk. Path traversal attempts (entries containing `..`) are rejected.
+
+### Threshold key splitting (Shamir)
+
+```bash
+# Split a private key into 3 shares, any 2 of which can reconstruct it
+pqfile split-key --threshold 2 --shares 3 privkey.pem --out ./shares/
+# Writes: shares/share_1.pem, shares/share_2.pem, shares/share_3.pem
+
+# Reconstruct the private key from any 2 of the 3 shares
+pqfile reconstruct-key shares/share_1.pem shares/share_3.pem --out ./recovered/
+# Writes: recovered/privkey.pem, recovered/pubkey.pem
+```
+
+Uses GF(256) Shamir secret sharing over the 64-byte private key seed. Any `threshold` shares reconstruct the key; fewer than `threshold` shares reveal nothing about the seed. Useful for key escrow, disaster recovery, or organizational workflows requiring multi-party approval to access protected data.
+
 ### Shell completions
 
 ```bash
@@ -248,7 +311,7 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 
 - **Keygen tab**: generates key pairs (ML-KEM-768, ML-KEM-1024, or Hybrid), with optional passphrase protection
 - **Encrypt tab**: multi-recipient list, multi-file batch encrypt with per-file status and progress bar
-- **Decrypt tab**: loads any v2/v3/v4 `.pqf` file; shows passphrase field only when needed
+- **Decrypt tab**: loads any v2 through v7 `.pqf` file; shows passphrase field only when needed
 - **Inspect tab**: displays header metadata for v2/v3/v4 `.pqf` files without decrypting
 - **Keys tab**: persistent key-pair registry with fingerprints and quick-load buttons
 - **Settings tab**: theme, auto-clear, confirm-overwrite preferences
@@ -331,6 +394,29 @@ Offset   Length    Field
 
 Produced when `--compress` is passed. The plaintext is compressed with zstd before encryption. Decompression is automatic on decrypt after AEAD verification. Only supported with a single recipient.
 
+### v7: anonymous multi-recipient
+
+Like v4 but all KEM ciphertext slots are padded to 1568 bytes (the ML-KEM-1024 ciphertext length) and recipient entries are written in randomized order.
+
+```
+Offset   Length    Field
+------   ------    -----
+0        4         Magic: "PQFL"
+4        1         Version: 0x07
+5        2         Recipient count N (u16 little-endian)
+--- Per recipient (repeated N times) ----------------------------
+         2         KEM variant (u16 little-endian)
+         1568      KEM ciphertext padded to 1568 bytes (trailing bytes are zero)
+         48        AES-256-GCM wrapped session key (32-byte key + 16-byte tag)
+--- Shared tail -------------------------------------------------
+         12        Base nonce (8 random bytes || 4 zero bytes)
+         8         Original plaintext size (u64 little-endian)
+--- Payload -----------------------------------------------------
+         ...       Chunked STREAM identical to v4, keyed by the session key
+```
+
+The decryptor reads 1568 bytes per entry and truncates to the actual ciphertext length for the declared variant before decapsulation. Entries are shuffled before writing so an observer cannot determine recipient count, order, or key types in use.
+
 ### KEM variant field
 
 | Value    | Algorithm               | CT bytes | EK bytes |
@@ -398,7 +484,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 |------------------------|---------------------------------------------------------------------------|
 | `Io`                   | File system or I/O failure                                                |
 | `InvalidMagic`         | File does not start with "PQFL"                                           |
-| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x06)                         |
+| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x07)                         |
 | `UnsupportedKem`       | KEM variant field is not a recognised value                               |
 | `EncryptionFailure`    | AEAD encryption or nonce generation failed                                |
 | `DecryptionFailure`    | Authentication tag mismatch (file tampered or wrong key)                  |
@@ -420,7 +506,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 cargo test --workspace
 ```
 
-295 tests across all crates (228 unit + 45 integration + 22 GUI). Run benchmarks with:
+216 tests across all crates (149 unit + 45 integration + 22 GUI). Run benchmarks with:
 
 ```
 cargo bench -p pqfile

@@ -2,13 +2,14 @@
 name = "pqfile"
 version = "3.2.0"
 edition = "2021"
-description = "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
+description = "Quantum-resistant file encryption: ML-KEM (512/768/1024), hybrid X25519+ML-KEM-768, ML-DSA-65 signing, multi-recipient, Shamir sharing"
 license = "MIT"
-autobins = false
-
-[[bin]]
-name = "pqfile"
-path = "src/main.rs"
+repository = "https://github.com/dangel34/PQ-File-Encryption"
+homepage = "https://github.com/dangel34/PQ-File-Encryption"
+documentation = "https://docs.rs/pqfile"
+readme = "../README.md"
+keywords = ["encryption", "post-quantum", "ml-kem", "chacha20", "cryptography"]
+categories = ["cryptography", "filesystem"]
 
 [dependencies]
 ml-kem = { version = "0.3", features = ["getrandom", "zeroize"] }
@@ -16,17 +17,14 @@ chacha20poly1305 = "0.10"
 getrandom = { workspace = true }
 zeroize = { version = "1", features = ["derive"] }
 pem = "3"
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
 thiserror = "2"
 sha3 = "0.12"
 argon2 = { version = "0.5", features = ["zeroize"] }
 aes-gcm = "0.10"
-rpassword = "7"
 ml-dsa = { version = "0.1.0", features = ["getrandom", "zeroize"] }
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
-hkdf = "0.12"
-sha2 = "0.10"
+hkdf = "0.13"
+sha2 = "0.11"
 rayon = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -41,19 +39,3 @@ criterion = { version = "0.8", features = ["html_reports"] }
 name = "crypto"
 harness = false
 
-[package.metadata.deb]
-maintainer = "Derek <derek@nappi.work>"
-copyright = "2025"
-license-file = ["LICENSE", "0"]
-extended-description = "Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305"
-depends = "$auto"
-section = "utils"
-priority = "optional"
-assets = [
-  ["target/release/pqfile", "usr/bin/", "755"],
-]
-
-[package.metadata.generate-rpm]
-assets = [
-  { source = "target/release/pqfile", dest = "/usr/bin/pqfile", mode = "755" },
-]

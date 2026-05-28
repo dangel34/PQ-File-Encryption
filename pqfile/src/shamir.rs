@@ -20,9 +20,13 @@ use crate::keygen::{
 };
 use crate::passphrase;
 
+/// PEM tag for an ML-KEM-512 Shamir key share.
 pub const SHARE_TAG_512: &str = "ML-KEM-512 KEY SHARE";
+/// PEM tag for an ML-KEM-768 Shamir key share.
 pub const SHARE_TAG: &str = "ML-KEM-768 KEY SHARE";
+/// PEM tag for an ML-KEM-1024 Shamir key share.
 pub const SHARE_TAG_1024: &str = "ML-KEM-1024 KEY SHARE";
+/// PEM tag for a hybrid X25519+ML-KEM-768 Shamir key share.
 pub const SHARE_TAG_HYBRID_768: &str = "X25519+ML-KEM-768 KEY SHARE";
 
 // Share body layout:
@@ -111,6 +115,16 @@ fn reconstruct_raw(shares: &[(u8, Vec<u8>)]) -> Result<Zeroizing<Vec<u8>>, Pqfil
     let len = shares[0].1.len();
     let xs: Vec<u8> = shares.iter().map(|(x, _)| *x).collect();
 
+    // Reject shares with mismatched y-vector lengths (corrupted or mixed-key shares).
+    for (i, (_, y)) in shares.iter().enumerate() {
+        if y.len() != len {
+            return Err(bad_arg(&format!(
+                "share {} has wrong length ({} bytes, expected {})",
+                i + 1, y.len(), len
+            )));
+        }
+    }
+
     // Reject duplicate x values
     for i in 0..xs.len() {
         for j in i + 1..xs.len() {
@@ -159,7 +173,7 @@ fn extract_seed(privkey_pem: &str, passphrase: Option<&str>) -> Result<(u16, Zer
             (KEM_VARIANT_1024, seed)
         }
         t @ (PRIV_TAG_HYBRID_768 | PRIV_ENC_TAG_HYBRID_768) => {
-            let seed = if t.contains("ENCRYPTED") {
+            let seed = if t == PRIV_ENC_TAG_HYBRID_768 {
                 let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
                 Zeroizing::new(passphrase::decrypt_hybrid_seed(parsed.contents(), pp)?.to_vec())
             } else {
@@ -310,11 +324,15 @@ fn decode_share_pem(pem_str: &str) -> Result<DecodedShare, PqfileError> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Result of splitting a private key into Shamir shares.
 pub struct SplitResult {
+    /// PEM-encoded share files, one per share index.
     pub share_pems: Vec<String>,
     /// SHA3-256 fingerprint of the public key, colon-separated hex (matches keygen output).
     pub pubkey_fingerprint: String,
+    /// Minimum number of shares required for reconstruction.
     pub threshold: u8,
+    /// Total number of shares produced.
     pub total: u8,
 }
 
@@ -412,6 +430,7 @@ pub fn write_shares(
     Ok(paths)
 }
 
+/// Returns `true` if `pem_str` contains a PEM block with a Shamir key share tag.
 #[allow(dead_code)]
 pub fn is_share_pem(pem_str: &str) -> bool {
     pem::parse(pem_str)

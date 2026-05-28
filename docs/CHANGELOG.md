@@ -4,16 +4,31 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
-## [3.2.0] - 2026-05-21
+## [3.2.0] - 2026-05-28
 
 ### Added
 
+- Anonymous recipients (v7 format): `--anonymous-recipients` on `pqfile encrypt` pads all recipient KEM ciphertext slots to 1568 bytes (the ML-KEM-1024 ciphertext length) and writes entries in randomized order. An observer cannot determine the number of recipients or which key variants are in use. Requires multiple `-r` recipients; single-recipient files are unaffected.
+- Signcrypt and signdecrypt: `pqfile signcrypt -k sign_privkey.pem -r pubkey.pem <file>` signs the plaintext under ML-DSA-65 and embeds the signature inside the AEAD-authenticated ciphertext. `pqfile signdecrypt -k privkey.pem -v sign_pubkey.pem <file.pqf>` decrypts and verifies in one step. The embedded signature cannot be stripped or substituted after encryption. Stdin is not supported as input because signcrypt requires two passes over the file. Note: `signdecrypt` streams plaintext to the output writer before the ML-DSA signature is verified; callers should write to a `Vec<u8>` and only act on the data after the function returns `Ok(())`.
+- Encrypted archive and extract: `pqfile archive -r pubkey.pem [files...] -o bundle.pqf` packs multiple files into a single authenticated archive. `pqfile extract bundle.pqf -k privkey.pem [-o dir] [--list]` restores files or lists contents. Path-traversal entries are rejected on extract. All AEAD authentication is verified before any file is written to disk.
+- Threshold key splitting via Shamir secret sharing: `pqfile split-key --threshold M --shares N privkey.pem --out <dir>` splits a private key seed into N shares over GF(256). `pqfile reconstruct-key share_1.pem share_2.pem ... --out <dir>` reassembles the seed from any M shares. Fewer than M shares reveal nothing about the key.
+- Parallel chunk processing: `--parallel` flag on `pqfile encrypt` and `pqfile decrypt` uses a rayon work-stealing thread pool to process independent AEAD chunks concurrently. Not supported with multiple recipients or `--compress`.
+- Passphrase-protected ML-DSA-65 signing keys: `pqfile sign-keygen --passphrase` encrypts the 32-byte signing seed with AES-256-GCM using an Argon2id-derived key (same parameters as KEM keys: m=64 MiB, t=3, p=1). New PEM label: `ML-DSA-65 ENCRYPTED SIGNING KEY`. `pqfile sign` and `pqfile signcrypt` auto-detect the encrypted label and prompt for the passphrase interactively.
 - Key revocation: `pqfile revoke --key pubkey.pem --reason "..."` creates a `pubkey.pem.revoked` JSON sidecar containing the key fingerprint and reason. `pqfile encrypt` checks for a `.revoked` sidecar alongside each recipient public key and aborts with a clear error if one is found. The sidecar is a plain JSON file checked at encrypt time (not signed; signed revocation is a future roadmap item).
 - Compress-then-encrypt (`--compress`, `--compress-level`): `pqfile encrypt --compress -r pubkey.pem file` compresses plaintext with zstd before encryption, producing a v6 `.pqf` file. `--compress-level <1-22>` (default 3) trades speed for ratio. Decompression is automatic on decrypt. Only supported with a single recipient (incompatible with multi-recipient v4 format). Not available in WASM builds (zstd requires C FFI). New format constants: `VERSION_V6 = 0x06`, `COMPRESSION_NONE = 0x00`, `COMPRESSION_ZSTD = 0x01`.
 - Rekey without payload re-encryption: `pqfile rekey --key old_privkey.pem --recipient new_pubkey.pem -o out.pqf in.pqf` decapsulates the session key with the old private key, re-encapsulates it under the new public key, and rewrites only the header. Payload ciphertext bytes are streamed through unchanged. Produces a valid v4 `.pqf` file. Supported for v3 and v5 files with the default 64 KiB chunk size.
 - `PqfReader<R: Read>`: a streaming decryptor that wraps any `R: Read` source and implements `Read`, yielding decrypted plaintext bytes incrementally. Supports v2, v3, v4, and v5 files. Exposes a `.info()` method returning `PqfInfo` (version, KEM variant, original size, chunk size). Each AEAD chunk is verified before plaintext bytes are yielded; a tampered chunk returns an I/O error. Available as a public library type in `pqfile::reader`.
 - GUI compress checkbox (native only): an "compress before encrypting" checkbox on the Encrypt tab, enabled only when a single recipient is selected. A level slider (1-19) appears when compression is active.
 - cargo-vet exemptions for `zstd 0.13.3`, `zstd-safe 7.2.4`, and `zstd-sys 2.0.16+zstd.1.5.7`.
+
+### Security
+
+- `rekey_stream` now rejects v2 (whole-file AEAD) files with `UnsupportedVersion(0x02)`. Previously v2 files were silently accepted and produced a v4 output file that could never be decrypted because the payload format is incompatible with the v4 streaming chunk layout.
+- v5 and v6 `CHUNK_SIZE` fields are validated on decode. Values of zero or greater than 268435456 are rejected with an I/O error. A crafted file with `chunk_size = u32::MAX` previously caused an out-of-memory allocation attempt.
+- v4 and v7 recipient counts are capped at 1000 on decode. A crafted file with `COUNT = 65535` previously caused a large allocation before any I/O validation.
+- `extract_json_str` in the revocation sidecar reader now includes the colon in the JSON key needle (`"fingerprint":` instead of `"fingerprint"`). The previous form could match a key prefix such as `"fingerprint_extra":` in a crafted sidecar and return the wrong value, potentially allowing revocation to be bypassed without deleting the sidecar file.
+- `encrypt_stream_compressed` now streams through a `zstd::stream::read::Encoder` rather than buffering the full compressed payload in a `Vec`. Peak memory for compress-then-encrypt operations is now O(chunk_size) instead of O(file_size).
+- Fisher-Yates shuffle in `encrypt_stream_multi_anon` (v7 format) replaced with a rejection-sampling loop that eliminates modulo bias.
 
 ---
 

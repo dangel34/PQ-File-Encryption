@@ -1,24 +1,11 @@
-mod archive;
-mod decrypt;
-mod encrypt;
-mod error;
-mod format;
-mod keygen;
-mod passphrase;
-mod reader;
-mod rekey;
-mod revoke;
-mod shamir;
-mod sign;
-mod signcrypt;
-
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
-use error::PqfileError;
+use pqfile::{archive, decrypt, encrypt, format, keygen, rekey, revoke, shamir, sign, signcrypt};
+use pqfile::error::PqfileError;
 
 #[derive(Parser)]
 #[command(name = "pqfile", about = "Quantum-resistant file encryption for the post-quantum era. Encrypt any file with a public key. Only the matching private key can decrypt it.")]
@@ -118,6 +105,9 @@ enum Command {
         /// Overwrite existing key files without prompting.
         #[arg(long, default_value_t = false)]
         force: bool,
+        /// Protect the signing private key with a passphrase (prompted interactively).
+        #[arg(long, default_value_t = false)]
+        passphrase: bool,
     },
     /// Sign a file with an ML-DSA-65 signing key, producing a detached .sig file.
     Sign {
@@ -242,16 +232,16 @@ enum Command {
     /// Split a private key into M-of-N Shamir shares.
     ///
     /// Any `threshold` shares can reconstruct the private key; fewer reveal nothing.
-    /// Writes share_1.pem … share_N.pem into --out (or the directory of the key file).
+    /// Writes share_1.pem ... share_N.pem into --out (or the directory of the key file).
     #[command(name = "split-key")]
     SplitKey {
         /// Private key to split (privkey.pem or a passphrase-protected variant).
         #[arg(value_name = "PRIVKEY")]
         key: PathBuf,
-        /// Minimum shares required to reconstruct (≥ 2).
+        /// Minimum shares required to reconstruct (>= 2).
         #[arg(long, value_name = "N")]
         threshold: u8,
-        /// Total number of shares to produce (≥ threshold).
+        /// Total number of shares to produce (>= threshold).
         #[arg(long, value_name = "N")]
         shares: u8,
         /// Directory to write share files. Defaults to the directory of the key file.
@@ -267,7 +257,7 @@ enum Command {
     /// Writes privkey.pem and pubkey.pem to --out (or current directory).
     #[command(name = "reconstruct-key")]
     ReconstructKey {
-        /// Share PEM files (share_1.pem, share_3.pem, …). At least `threshold` required.
+        /// Share PEM files (share_1.pem, share_3.pem, ...). At least `threshold` required.
         #[arg(value_name = "SHARE", required = true)]
         shares: Vec<PathBuf>,
         /// Directory to write the reconstructed privkey.pem and pubkey.pem.
@@ -317,7 +307,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             clap_complete::generate(shell, &mut Cli::command(), "pqfile", &mut io::stdout());
             Ok(())
         }
-        Command::SignKeygen { out, force } => run_sign_keygen(out, force, json),
+        Command::SignKeygen { out, force, passphrase } => run_sign_keygen(out, force, passphrase, json),
         Command::Sign { key, input, output } => run_sign(key, input, output, json),
         Command::Verify { key, sig, input } => run_verify(key, sig, input, json),
         Command::Revoke { key, reason } => run_revoke(key, &reason, json),
@@ -377,8 +367,7 @@ fn run_encrypt(
         .collect::<Result<_, _>>()?;
     if recursive {
         if pubkey_pems.len() != 1 {
-            return Err(PqfileError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(PqfileError::Io(std::io::Error::other(
                 "--recursive supports only one recipient",
             )));
         }
@@ -459,6 +448,12 @@ fn perform_encrypt(
                 "--compress is not supported with multiple recipients",
             )));
         }
+        if opts.parallel {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--parallel is not supported with multiple recipients",
+            )));
+        }
         let refs: Vec<&str> = pubkey_pems.iter().map(|s| s.as_str()).collect();
         if opts.anonymous_recipients {
             encrypt::encrypt_stream_multi_anon(&refs, original_size, reader, writer)
@@ -471,8 +466,7 @@ fn perform_encrypt(
 fn run_encrypt_recursive(pubkey_pem: &str, input: &str, opts: EncryptOpts) -> Result<(), PqfileError> {
     let dir = PathBuf::from(input);
     if !dir.is_dir() {
-        return Err(PqfileError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(PqfileError::Io(std::io::Error::other(
             format!("'{input}' is not a directory (--recursive requires a directory path)"),
         )));
     }
@@ -524,8 +518,7 @@ fn run_encrypt_recursive(pubkey_pem: &str, input: &str, opts: EncryptOpts) -> Re
     }
 
     if any_error {
-        Err(PqfileError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(PqfileError::Io(std::io::Error::other(
             "one or more files failed to encrypt",
         )))
     } else {
@@ -558,7 +551,7 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), PqfileError
         let ft = entry.file_type()?;
         if ft.is_dir() {
             collect_files(&path, files)?;
-        } else if ft.is_file() && path.extension().map_or(true, |e| e != "pqf") {
+        } else if ft.is_file() && path.extension().is_none_or(|e| e != "pqf") {
             files.push(path);
         }
     }
@@ -710,71 +703,85 @@ fn print_v2_header(header: &format::PqfHeader, json: bool) -> Result<(), PqfileE
     Ok(())
 }
 
-fn print_v4_header(header: &format::PqfHeaderV4, json: bool) -> Result<(), PqfileError> {
-    let nonce_hex: String = header.nonce.iter().map(|b| format!("{b:02x}")).collect();
+#[allow(clippy::too_many_arguments)]
+fn print_multi_recipient_header(
+    version_num: &str,
+    version_label: &str,
+    nonce: &[u8; 12],
+    original_size: u64,
+    recipients: &[(u16, String)],
+    mode_json: Option<&str>,
+    count_suffix: &str,
+    row_fmt: &dyn Fn(usize, u16, &str),
+    json: bool,
+) {
+    let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
     if json {
-        let recipients_json: Vec<String> = header.recipients.iter().map(|r| {
+        let recipients_json: Vec<String> = recipients.iter().map(|(v, name)| {
             json_object(&[
-                kv_raw("kem_variant", &r.kem_variant.to_string()),
-                kv_str("kem_variant_name", kem_variant_name(r.kem_variant)),
+                kv_raw("kem_variant", &v.to_string()),
+                kv_str("kem_variant_name", name),
             ])
         }).collect();
-        println!("{}", json_object(&[
+        let mut fields = vec![
             kv_str("status", "ok"),
             kv_str("magic", "PQFL"),
-            kv_str("version", "0x04"),
-            kv_raw("recipient_count", &header.recipients.len().to_string()),
+            kv_str("version", version_num),
+        ];
+        if let Some(m) = mode_json {
+            fields.push(kv_str("mode", m));
+        }
+        fields.extend([
+            kv_raw("recipient_count", &recipients.len().to_string()),
             format!("\"recipients\":[{}]", recipients_json.join(",")),
             kv_str("nonce", &nonce_hex),
-            kv_raw("original_size", &header.original_size.to_string()),
-        ]));
+            kv_raw("original_size", &original_size.to_string()),
+        ]);
+        println!("{}", json_object(&fields));
     } else {
         println!("Magic:              PQFL");
-        println!("Version:            0x04 (multi-recipient)");
-        println!("Recipients:         {}", header.recipients.len());
-        for (i, r) in header.recipients.iter().enumerate() {
-            println!("  Recipient {i}:      {} ({})", r.kem_variant, kem_variant_name(r.kem_variant));
+        println!("Version:            {version_label}");
+        println!("Recipients:         {}{count_suffix}", recipients.len());
+        for (i, (v, name)) in recipients.iter().enumerate() {
+            row_fmt(i, *v, name);
         }
         println!("Nonce:              {nonce_hex}");
-        println!("Original file size: {} bytes", header.original_size);
+        println!("Original file size: {} bytes", original_size);
     }
+}
+
+fn print_v4_header(header: &format::PqfHeaderV4, json: bool) -> Result<(), PqfileError> {
+    let recipients: Vec<(u16, String)> = header.recipients.iter()
+        .map(|r| (r.kem_variant, kem_variant_name(r.kem_variant).to_owned()))
+        .collect();
+    print_multi_recipient_header(
+        "0x04", "0x04 (multi-recipient)",
+        &header.nonce, header.original_size,
+        &recipients, None, "",
+        &|i, v, name| println!("  Recipient {i}:      {v} ({name})"),
+        json,
+    );
     Ok(())
 }
 
 fn print_v7_header(header: &format::PqfHeaderV7, json: bool) -> Result<(), PqfileError> {
-    let nonce_hex: String = header.nonce.iter().map(|b| format!("{b:02x}")).collect();
-    if json {
-        let recipients_json: Vec<String> = header.recipients.iter().map(|r| {
-            json_object(&[
-                kv_raw("kem_variant", &r.kem_variant.to_string()),
-                kv_str("kem_variant_name", kem_variant_name(r.kem_variant)),
-            ])
-        }).collect();
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("magic", "PQFL"),
-            kv_str("version", "0x07"),
-            kv_str("mode", "anonymous-recipients"),
-            kv_raw("recipient_count", &header.recipients.len().to_string()),
-            format!("\"recipients\":[{}]", recipients_json.join(",")),
-            kv_str("nonce", &nonce_hex),
-            kv_raw("original_size", &header.original_size.to_string()),
-        ]));
-    } else {
-        println!("Magic:              PQFL");
-        println!("Version:            0x07 (anonymous multi-recipient)");
-        println!("Recipients:         {} (order shuffled)", header.recipients.len());
-        for (i, r) in header.recipients.iter().enumerate() {
-            println!("  Slot {i}:           {} ({})", r.kem_variant, kem_variant_name(r.kem_variant));
-        }
-        println!("Nonce:              {nonce_hex}");
-        println!("Original file size: {} bytes", header.original_size);
-    }
+    let recipients: Vec<(u16, String)> = header.recipients.iter()
+        .map(|r| (r.kem_variant, kem_variant_name(r.kem_variant).to_owned()))
+        .collect();
+    print_multi_recipient_header(
+        "0x07", "0x07 (anonymous multi-recipient)",
+        &header.nonce, header.original_size,
+        &recipients, Some("anonymous-recipients"), " (order shuffled)",
+        &|i, v, name| println!("  Slot {i}:           {v} ({name})"),
+        json,
+    );
     Ok(())
 }
 
-fn run_sign_keygen(out: PathBuf, force: bool, json: bool) -> Result<(), PqfileError> {
-    let r = sign::sign_keygen(&out, force)?;
+fn run_sign_keygen(out: PathBuf, force: bool, use_passphrase: bool, json: bool) -> Result<(), PqfileError> {
+    let pp = if use_passphrase { Some(prompt_new_passphrase()?) } else { None };
+    let pp_str = pp.as_deref().map(|z| z.as_str());
+    let r = sign::sign_keygen(&out, force, pp_str)?;
     if json {
         println!("{}", json_object(&[
             kv_str("status", "ok"),
@@ -791,8 +798,14 @@ fn run_sign_keygen(out: PathBuf, force: bool, json: bool) -> Result<(), PqfileEr
 
 fn run_sign(key: PathBuf, input: PathBuf, output: Option<PathBuf>, json: bool) -> Result<(), PqfileError> {
     let sk_pem = std::fs::read_to_string(&key)?;
+    let pp = if sign::is_encrypted_signing_key(&sk_pem) {
+        Some(prompt_passphrase("Enter passphrase for signing key: ")?)
+    } else {
+        None
+    };
+    let pp_str = pp.as_deref().map(|z| z.as_str());
     let sig_path = output.unwrap_or_else(|| sign::default_sig_path(&input));
-    sign::sign_file(&sk_pem, &input, &sig_path)?;
+    sign::sign_file(&sk_pem, pp_str, &input, &sig_path)?;
     if json {
         println!("{}", json_object(&[
             kv_str("status", "ok"),
@@ -978,6 +991,12 @@ fn run_signcrypt(
     json: bool,
 ) -> Result<(), PqfileError> {
     let sk_pem = std::fs::read_to_string(&key)?;
+    let pp = if sign::is_encrypted_signing_key(&sk_pem) {
+        Some(prompt_passphrase("Enter passphrase for signing key: ")?)
+    } else {
+        None
+    };
+    let pp_str = pp.as_deref().map(|z| z.as_str());
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
     revoke::check_not_revoked(&recipient, &pubkey_pem)?;
 
@@ -990,7 +1009,7 @@ fn run_signcrypt(
 
     let mut file = std::io::BufReader::new(std::fs::File::open(&input)?);
     let mut writer = BufWriter::new(std::fs::File::create(&out_path)?);
-    signcrypt::signcrypt(&sk_pem, &pubkey_pem, &mut file, input_len, &mut writer, format::CHUNK_SIZE)?;
+    signcrypt::signcrypt(&sk_pem, pp_str, &pubkey_pem, &mut file, input_len, &mut writer, format::CHUNK_SIZE)?;
 
     if json {
         println!("{}", json_object(&[
@@ -1063,7 +1082,7 @@ fn run_split_key(
     let out_dir = out.unwrap_or_else(|| key.parent().unwrap_or(std::path::Path::new(".")).to_path_buf());
     let paths = shamir::write_shares(&result.share_pems, &out_dir, force)?;
     if json {
-        let path_strs: Vec<String> = paths.iter().map(|p| format!("{}", json_str(&p.to_string_lossy()))).collect();
+        let path_strs: Vec<String> = paths.iter().map(|p| json_str(&p.to_string_lossy())).collect();
         println!("{}", json_object(&[
             kv_str("status", "ok"),
             kv_str("fingerprint", &result.pubkey_fingerprint),
@@ -1087,7 +1106,7 @@ fn run_reconstruct_key(
     force: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
-    let share_pems: Vec<String> = shares.iter().map(|p| std::fs::read_to_string(p)).collect::<Result<_, _>>()?;
+    let share_pems: Vec<String> = shares.iter().map(std::fs::read_to_string).collect::<Result<_, _>>()?;
     let refs: Vec<&str> = share_pems.iter().map(|s| s.as_str()).collect();
     let (priv_pem, pub_pem) = shamir::reconstruct_key(&refs)?;
 

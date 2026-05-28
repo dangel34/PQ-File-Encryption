@@ -352,7 +352,7 @@ fn drain_batch_pending(pending: &BatchPending, files: &mut Vec<MultiFileEntry>) 
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn apply_job_results(results: Vec<(usize, OpStatus)>, files: &mut Vec<MultiFileEntry>) {
+fn apply_job_results(results: Vec<(usize, OpStatus)>, files: &mut [MultiFileEntry]) {
     for (i, status) in results {
         if let Some(e) = files.get_mut(i) {
             e.status = status;

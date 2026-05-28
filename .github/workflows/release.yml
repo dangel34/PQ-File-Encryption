@@ -28,13 +28,13 @@ jobs:
             fi
           }
 
-          check "pqfile/Cargo.toml"                   "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile/Cargo.toml)"
+          check "pqfile/Cargo.toml"                      "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile/Cargo.toml)"
+          check "pqfile-cli/Cargo.toml"               "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-cli/Cargo.toml)"
           check "pqfile-gui/Cargo.toml"               "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-gui/Cargo.toml)"
           check "pqfile-desktop/Cargo.toml"           "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-desktop/Cargo.toml)"
           check "pqfile-gui/src/lib.rs"               "$(grep -oP '(?<=APP_VERSION: &str = ")[^"]+' pqfile-gui/src/lib.rs)"
           check "pqfile-desktop/packaging/setup.iss"  "$(grep -oP '#define AppVersion\s+"\K[^"]+' pqfile-desktop/packaging/setup.iss)"
-          check "pqfile/packaging/pqfile.spec"        "$(grep -oP '^Version:\s+\K\S+' pqfile/packaging/pqfile.spec)"
-          check "sonar-project.properties"            "$(grep -oP '(?<=sonar\.projectVersion=)\S+' sonar-project.properties)"
+          check "pqfile-cli/packaging/pqfile.spec"    "$(grep -oP '^Version:\s+\K\S+' pqfile-cli/packaging/pqfile.spec)"
 
           exit $FAIL
 
@@ -129,7 +129,7 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ matrix.target }}-
 
       - name: Build CLI
-        run: cargo build --release --locked -p pqfile --target ${{ matrix.target }}
+        run: cargo build --release --locked -p pqfile-cli --target ${{ matrix.target }}
 
       - name: Build desktop GUI
         run: cargo build --release --locked -p pqfile-desktop --target ${{ matrix.target }}
@@ -253,7 +253,7 @@ jobs:
           cargo cyclonedx --format json --override-filename bom --all
           # cargo-cyclonedx writes bom.json next to each Cargo.toml; collect them all
           mkdir -p artifacts
-          for bom in pqfile/bom.json pqfile-gui/bom.json pqfile-desktop/bom.json; do
+          for bom in pqfile/bom.json pqfile-cli/bom.json pqfile-gui/bom.json pqfile-desktop/bom.json; do
             crate=$(dirname "$bom")
             cp "$bom" "artifacts/sbom-${crate}.cdx.json"
           done

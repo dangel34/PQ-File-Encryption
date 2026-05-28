@@ -34,6 +34,8 @@ enum EkVariant {
     HybridKem768 { x25519_pk: [u8; 32], ml_ek: EncapsulationKey768 },
 }
 
+/// Encrypts the file at `input_path` to a `.pqf` file using the public key at `pubkey_path`.
+/// Output is written to `output_path`, or to `input_path` with `.pqf` appended if `None`.
 #[allow(dead_code)]
 pub fn encrypt(
     pubkey_path: &Path,
@@ -135,39 +137,7 @@ pub fn encrypt_stream(
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = Key::from_slice(ss_bytes.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
-
-    let mut current = vec![0u8; chunk_size];
-    let mut current_len = fill_chunk(reader, &mut current)?;
-    let mut next = vec![0u8; chunk_size];
-    let mut counter: u32 = 0;
-
-    loop {
-        let next_len = fill_chunk(reader, &mut next)?;
-        let is_last = next_len == 0;
-
-        let cn = chunk_nonce(base_nonce, counter);
-        let aad = chunk_aad(counter, is_last);
-        // Encrypt in-place: current[..current_len] becomes ciphertext, tag returned separately.
-        let tag = cipher
-            .encrypt_in_place_detached(
-                Nonce::from_slice(&cn),
-                &aad,
-                &mut current[..current_len],
-            )
-            .map_err(|_| PqfileError::EncryptionFailure)?;
-        writer.write_all(&current[..current_len])?;
-        writer.write_all(tag.as_ref())?;
-
-        if is_last {
-            break;
-        }
-
-        counter = counter.checked_add(1).ok_or(PqfileError::EncryptionFailure)?;
-        std::mem::swap(&mut current, &mut next);
-        current_len = next_len;
-    }
-
-    Ok(())
+    encrypt_chunks(&cipher, base_nonce, chunk_size, reader, writer)
 }
 
 fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u16), PqfileError> {
@@ -286,35 +256,7 @@ pub fn encrypt_stream_multi(
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
-
-    let mut current = vec![0u8; CHUNK_SIZE];
-    let mut current_len = fill_chunk(reader, &mut current)?;
-    let mut next = vec![0u8; CHUNK_SIZE];
-    let mut counter: u32 = 0;
-
-    loop {
-        let next_len = fill_chunk(reader, &mut next)?;
-        let is_last = next_len == 0;
-
-        let cn = chunk_nonce(base_nonce, counter);
-        let aad = chunk_aad(counter, is_last);
-        let tag = cipher
-            .encrypt_in_place_detached(
-                chacha20poly1305::Nonce::from_slice(&cn),
-                &aad,
-                &mut current[..current_len],
-            )
-            .map_err(|_| PqfileError::EncryptionFailure)?;
-        writer.write_all(&current[..current_len])?;
-        writer.write_all(tag.as_ref())?;
-
-        if is_last { break; }
-        counter = counter.checked_add(1).ok_or(PqfileError::EncryptionFailure)?;
-        std::mem::swap(&mut current, &mut next);
-        current_len = next_len;
-    }
-
-    Ok(())
+    encrypt_chunks(&cipher, base_nonce, CHUNK_SIZE, reader, writer)
 }
 
 /// Encrypts a stream to multiple recipients in anonymous (v7) format.
@@ -340,11 +282,20 @@ pub fn encrypt_stream_multi_anon(
         recipients.push(RecipientEntryV7 { kem_variant, kem_ciphertext: kem_ct, wrapped_key });
     }
 
-    // Fisher-Yates shuffle using getrandom for randomness.
+    // Fisher-Yates shuffle with rejection sampling to eliminate modulo bias.
+    // For recipient counts up to 1000 the expected number of retries is < 1.001.
     for i in (1..recipients.len()).rev() {
-        let mut r = [0u8; 4];
-        getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
-        let j = (u32::from_le_bytes(r) as usize) % (i + 1);
+        let range = (i + 1) as u64;
+        // Largest multiple of `range` that fits in u32 (2^32 values: 0..=u32::MAX).
+        let threshold = (1u64 << 32) - ((1u64 << 32) % range);
+        let j = loop {
+            let mut r = [0u8; 4];
+            getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
+            let v = u32::from_le_bytes(r) as u64;
+            if v < threshold {
+                break (v % range) as usize;
+            }
+        };
         recipients.swap(i, j);
     }
 
@@ -359,35 +310,7 @@ pub fn encrypt_stream_multi_anon(
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
-
-    let mut current = vec![0u8; CHUNK_SIZE];
-    let mut current_len = fill_chunk(reader, &mut current)?;
-    let mut next = vec![0u8; CHUNK_SIZE];
-    let mut counter: u32 = 0;
-
-    loop {
-        let next_len = fill_chunk(reader, &mut next)?;
-        let is_last = next_len == 0;
-
-        let cn = chunk_nonce(base_nonce, counter);
-        let aad = chunk_aad(counter, is_last);
-        let tag = cipher
-            .encrypt_in_place_detached(
-                chacha20poly1305::Nonce::from_slice(&cn),
-                &aad,
-                &mut current[..current_len],
-            )
-            .map_err(|_| PqfileError::EncryptionFailure)?;
-        writer.write_all(&current[..current_len])?;
-        writer.write_all(tag.as_ref())?;
-
-        if is_last { break; }
-        counter = counter.checked_add(1).ok_or(PqfileError::EncryptionFailure)?;
-        std::mem::swap(&mut current, &mut next);
-        current_len = next_len;
-    }
-
-    Ok(())
+    encrypt_chunks(&cipher, base_nonce, CHUNK_SIZE, reader, writer)
 }
 
 /// Encapsulates `session_key` under `pubkey_pem` for use during rekey.
@@ -420,10 +343,6 @@ pub fn encrypt_stream_compressed(
         if chunk_size == 0 {
             return Err(PqfileError::EncryptionFailure);
         }
-        let mut compressed = Vec::new();
-        zstd::stream::copy_encode(reader, &mut compressed, compress_level)
-            .map_err(PqfileError::Io)?;
-
         let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
         let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
 
@@ -446,37 +365,45 @@ pub fn encrypt_stream_compressed(
             .expect("BASE_NONCE_LEN <= NONCE_LEN");
         let key = Key::from_slice(ss_bytes.as_ref());
         let cipher = ChaCha20Poly1305::new(key);
-
-        let mut src: &[u8] = &compressed;
-        let mut current = vec![0u8; chunk_size];
-        let mut current_len = fill_chunk(&mut src, &mut current)?;
-        let mut next = vec![0u8; chunk_size];
-        let mut counter: u32 = 0;
-
-        loop {
-            let next_len = fill_chunk(&mut src, &mut next)?;
-            let is_last = next_len == 0;
-
-            let cn = chunk_nonce(base_nonce, counter);
-            let aad = chunk_aad(counter, is_last);
-            let tag = cipher
-                .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut current[..current_len])
-                .map_err(|_| PqfileError::EncryptionFailure)?;
-            writer.write_all(&current[..current_len])?;
-            writer.write_all(tag.as_ref())?;
-
-            if is_last { break; }
-            counter = counter.checked_add(1).ok_or(PqfileError::EncryptionFailure)?;
-            std::mem::swap(&mut current, &mut next);
-            current_len = next_len;
-        }
-        Ok(())
+        // Stream through a zstd encoder instead of buffering the full compressed payload.
+        let mut zstd_src = zstd::stream::read::Encoder::new(reader, compress_level)
+            .map_err(PqfileError::Io)?;
+        encrypt_chunks(&cipher, base_nonce, chunk_size, &mut zstd_src, writer)
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (pubkey_pem, original_size, chunk_size, compress_level, reader, writer);
         Err(PqfileError::CompressionNotSupported)
     }
+}
+
+fn encrypt_chunks(
+    cipher: &ChaCha20Poly1305,
+    base_nonce: &[u8; BASE_NONCE_LEN],
+    chunk_size: usize,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let mut current = vec![0u8; chunk_size];
+    let mut current_len = fill_chunk(reader, &mut current)?;
+    let mut next = vec![0u8; chunk_size];
+    let mut counter: u32 = 0;
+    loop {
+        let next_len = fill_chunk(reader, &mut next)?;
+        let is_last = next_len == 0;
+        let cn = chunk_nonce(base_nonce, counter);
+        let aad = chunk_aad(counter, is_last);
+        let tag = cipher
+            .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut current[..current_len])
+            .map_err(|_| PqfileError::EncryptionFailure)?;
+        writer.write_all(&current[..current_len])?;
+        writer.write_all(tag.as_ref())?;
+        if is_last { break; }
+        counter = counter.checked_add(1).ok_or(PqfileError::EncryptionFailure)?;
+        std::mem::swap(&mut current, &mut next);
+        current_len = next_len;
+    }
+    Ok(())
 }
 
 /// Wraps `session_key` under `ss` using AES-256-GCM with a zero nonce.
@@ -541,7 +468,7 @@ pub fn encrypt_stream_parallel(
     header.write(writer)?;
 
     let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into().unwrap();
-    let key_bytes: [u8; 32] = *ss_bytes;
+    let key_bytes = Zeroizing::new(*ss_bytes);
 
     // Prime: read the very first chunk
     let mut first = vec![0u8; chunk_size];
@@ -550,7 +477,7 @@ pub fn encrypt_stream_parallel(
         // Empty input: emit a single empty authenticated last chunk
         let cn = chunk_nonce(&base_nonce, 0);
         let aad = chunk_aad(0, true);
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
         let tag = cipher
             .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut [])
             .map_err(|_| PqfileError::EncryptionFailure)?;
@@ -590,7 +517,7 @@ pub fn encrypt_stream_parallel(
         let batch_len = batch.len();
         let batch_start = counter;
 
-        let results: Vec<Result<(Vec<u8>, usize, Vec<u8>), PqfileError>> = batch
+        let results: Vec<Result<_, PqfileError>> = batch
             .into_par_iter()
             .enumerate()
             .map(|(i, (mut chunk, chunk_len))| {
@@ -598,17 +525,18 @@ pub fn encrypt_stream_parallel(
                 let is_last = batch_is_final && i == batch_len - 1;
                 let cn = chunk_nonce(&base_nonce, c);
                 let aad = chunk_aad(c, is_last);
-                let cipher = ChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+                let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
                 let tag = cipher
                     .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut chunk[..chunk_len])
                     .map_err(|_| PqfileError::EncryptionFailure)?;
-                let tag_bytes: Vec<u8> = tag[..].to_vec();
-                Ok((chunk, chunk_len, tag_bytes))
+                let mut tag_arr = [0u8; 16];
+                tag_arr.copy_from_slice(tag.as_ref());
+                Ok((chunk, chunk_len, tag_arr))
             })
             .collect();
 
         for r in results {
-            let (ct, ct_len, tag): (Vec<u8>, usize, Vec<u8>) = r?;
+            let (ct, ct_len, tag): (Vec<u8>, usize, [u8; 16]) = r?;
             writer.write_all(&ct[..ct_len])?;
             writer.write_all(&tag)?;
         }

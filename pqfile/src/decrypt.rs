@@ -48,6 +48,7 @@ impl DkVariant {
     }
 }
 
+/// Decrypts the `.pqf` file at `input_path` to `output_path` (defaults to `input_path` minus `.pqf` extension).
 #[allow(dead_code)]
 pub fn decrypt(
     privkey_path: &Path,
@@ -149,27 +150,31 @@ pub fn decrypt_stream(
     }
 }
 
+fn find_session_key(
+    dk: &DkVariant,
+    entries: &[(u16, &[u8], &[u8; WRAPPED_KEY_LEN])],
+) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    let dk_variant = dk.kem_variant();
+    for (kem_variant, kem_ciphertext, wrapped_key) in entries {
+        if *kem_variant != dk_variant { continue; }
+        let ss = decapsulate_shared_secret(dk, kem_ciphertext)?;
+        if let Ok(k) = unwrap_session_key(wrapped_key, &ss) {
+            return Ok(k);
+        }
+    }
+    Err(PqfileError::NoMatchingRecipient)
+}
+
 fn decrypt_v4(
     dk: &DkVariant,
     header: PqfHeaderV4,
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    let dk_variant = dk.kem_variant();
-    let mut session_key: Option<Zeroizing<[u8; 32]>> = None;
-
-    for entry in &header.recipients {
-        if entry.kem_variant != dk_variant {
-            continue;
-        }
-        let ss = decapsulate_shared_secret(dk, &entry.kem_ciphertext)?;
-        if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
-            session_key = Some(k);
-            break;
-        }
-    }
-
-    let session_key = session_key.ok_or(PqfileError::NoMatchingRecipient)?;
+    let entries: Vec<(u16, &[u8], &[u8; WRAPPED_KEY_LEN])> = header.recipients.iter()
+        .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
+        .collect();
+    let session_key = find_session_key(dk, &entries)?;
     let key = Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
     decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
@@ -181,21 +186,10 @@ fn decrypt_v7(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    let dk_variant = dk.kem_variant();
-    let mut session_key: Option<Zeroizing<[u8; 32]>> = None;
-
-    for entry in &header.recipients {
-        if entry.kem_variant != dk_variant {
-            continue;
-        }
-        let ss = decapsulate_shared_secret(dk, &entry.kem_ciphertext)?;
-        if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
-            session_key = Some(k);
-            break;
-        }
-    }
-
-    let session_key = session_key.ok_or(PqfileError::NoMatchingRecipient)?;
+    let entries: Vec<(u16, &[u8], &[u8; WRAPPED_KEY_LEN])> = header.recipients.iter()
+        .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
+        .collect();
+    let session_key = find_session_key(dk, &entries)?;
     let key = Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
     decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
@@ -252,7 +246,12 @@ fn decrypt_v6(
 /// Returns `(version, kem_variant, original_size, chunk_size, cipher, nonce, v2_plaintext)`.
 /// For v2 files, `v2_plaintext` contains the fully-decrypted payload.
 /// For streaming formats, it is `None` and the caller must consume chunks from the reader.
+///
+/// **v6 (compressed) files are not supported** — this function returns
+/// `PqfileError::CompressionNotSupported` for `VERSION_V6`. Use
+/// [`decrypt_stream`] instead, which decompresses the payload after decryption.
 #[allow(dead_code)] // used by lib target (reader.rs) but not by the binary
+#[allow(clippy::type_complexity)]
 pub(crate) fn decapsulate_stream_init(
     reader: &mut dyn Read,
     privkey_pem: &str,
@@ -291,37 +290,23 @@ pub(crate) fn decapsulate_stream_init(
         }
         VERSION_V4 => {
             let header = PqfHeaderV4::read_body(reader)?;
-            let dk_variant = dk.kem_variant();
-            let mut session_key: Option<Zeroizing<[u8; 32]>> = None;
-            for entry in &header.recipients {
-                if entry.kem_variant != dk_variant { continue; }
-                let ss = decapsulate_shared_secret(&dk, &entry.kem_ciphertext)?;
-                if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
-                    session_key = Some(k);
-                    break;
-                }
-            }
-            let session_key = session_key.ok_or(PqfileError::NoMatchingRecipient)?;
+            let entries: Vec<(u16, &[u8], &[u8; WRAPPED_KEY_LEN])> = header.recipients.iter()
+                .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
+                .collect();
+            let session_key = find_session_key(&dk, &entries)?;
             let key = Key::from_slice(session_key.as_ref());
             let cipher = ChaCha20Poly1305::new(key);
-            Ok((VERSION_V4, dk_variant, header.original_size, CHUNK_SIZE, cipher, header.nonce, None))
+            Ok((VERSION_V4, dk.kem_variant(), header.original_size, CHUNK_SIZE, cipher, header.nonce, None))
         }
         VERSION_V7 => {
             let header = PqfHeaderV7::read_body(reader)?;
-            let dk_variant = dk.kem_variant();
-            let mut session_key: Option<Zeroizing<[u8; 32]>> = None;
-            for entry in &header.recipients {
-                if entry.kem_variant != dk_variant { continue; }
-                let ss = decapsulate_shared_secret(&dk, &entry.kem_ciphertext)?;
-                if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
-                    session_key = Some(k);
-                    break;
-                }
-            }
-            let session_key = session_key.ok_or(PqfileError::NoMatchingRecipient)?;
+            let entries: Vec<(u16, &[u8], &[u8; WRAPPED_KEY_LEN])> = header.recipients.iter()
+                .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
+                .collect();
+            let session_key = find_session_key(&dk, &entries)?;
             let key = Key::from_slice(session_key.as_ref());
             let cipher = ChaCha20Poly1305::new(key);
-            Ok((VERSION_V7, dk_variant, header.original_size, CHUNK_SIZE, cipher, header.nonce, None))
+            Ok((VERSION_V7, dk.kem_variant(), header.original_size, CHUNK_SIZE, cipher, header.nonce, None))
         }
         VERSION_V6 => Err(PqfileError::CompressionNotSupported),
         v => Err(PqfileError::UnsupportedVersion(v)),
@@ -577,7 +562,7 @@ pub fn decrypt_stream_parallel(
     let header = PqfHeader::read_body(reader, version)?;
     check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
     let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
-    let key_bytes: [u8; 32] = *ss_bytes;
+    let key_bytes = Zeroizing::new(*ss_bytes);
     let chunk_size = header.chunk_size as usize;
     let max_chunk = chunk_size + 16;
     let base_nonce: [u8; BASE_NONCE_LEN] = header.nonce[..BASE_NONCE_LEN].try_into().unwrap();
@@ -633,11 +618,12 @@ pub fn decrypt_stream_parallel(
                 }
                 let pt_len = ct_len - 16;
                 let tag = Tag::<ChaCha20Poly1305>::clone_from_slice(&ct_buf[pt_len..ct_len]);
-                let cipher = ChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+                let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
                 cipher
                     .decrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut ct_buf[..pt_len], &tag)
                     .map_err(|_| PqfileError::DecryptionFailure)?;
-                Ok(ct_buf[..pt_len].to_vec())
+                ct_buf.truncate(pt_len);
+                Ok(ct_buf)
             })
             .collect();
 

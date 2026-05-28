@@ -15,9 +15,9 @@ Only the latest 3.x release receives security patches. Upgrade to the latest tag
 
 ## Reporting a vulnerability
 
-**Do not open a public GitHub issue for security vulnerabilities.**
+**Do not open a public issue for security vulnerabilities.**
 
-Use GitHub's private security advisory feature:
+Use the private security advisory feature on GitHub:
 
 > https://github.com/dangel34/PQ-File-Encryption/security/advisories/new
 
@@ -77,7 +77,10 @@ Symmetric encryption uses ChaCha20-Poly1305 (RFC 8439). For v2 (whole-file) form
 A new ML-KEM encapsulation and a new random base nonce are generated independently for every encryption operation using the OS CSPRNG (`getrandom`). In hybrid mode, a fresh ephemeral X25519 scalar is also generated per encryption. Nonce reuse is structurally impossible under normal usage.
 
 **Digital signatures**
-Signing uses ML-DSA-65 (NIST FIPS 204). Signing keys are separate from encryption keys and are not passphrase-protected. Signatures are detached PEM files. Verification rejects signatures from any key other than the one used to sign.
+Signing uses ML-DSA-65 (NIST FIPS 204). Signing keys are separate from encryption keys. Passphrase protection is supported for signing keys using the same Argon2id + AES-256-GCM scheme as KEM keys. Signatures are detached PEM files. Verification rejects signatures from any key other than the one used to sign.
+
+**Signcrypt write-before-verify design**
+`signdecrypt` is a streaming operation: it writes decrypted plaintext bytes to the output writer as it goes, and verifies the ML-DSA sender signature only after the full stream has been processed. Each chunk is AEAD-authenticated before output, so the plaintext content is integrity-protected throughout. However, the sender's *identity* is not confirmed until `signdecrypt` returns `Ok(())`. Callers MUST write to a `Vec<u8>` (or equivalent retractable buffer) and only act on the data after the call succeeds. Writing directly to a file or socket before the return value is checked means data from an unverified sender may already be on disk or on the wire.
 
 **Memory safety**
 Private key seeds, shared secrets, session keys, and passphrase-derived keys are wrapped in `Zeroizing` from the `zeroize` crate, which overwrites the memory before deallocation. The `ml-kem`, `ml-dsa`, and `x25519-dalek` crates are compiled with their `zeroize` features enabled.

@@ -95,7 +95,6 @@ impl PqfileApp {
                 job.lock().unwrap().finished = true;
                 ctx.request_repaint();
             });
-            return;
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -153,7 +152,7 @@ impl PqfileApp {
 
         // Show passphrase field only when the loaded key is encrypted.
         let key_is_encrypted = self.decrypt_privkey.as_str()
-            .map(|pem_str| keygen::is_encrypted_key(pem_str))
+            .map(keygen::is_encrypted_key)
             .unwrap_or(false);
         if key_is_encrypted {
             section_label(ui, "PASSPHRASE", dark);

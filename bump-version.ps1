@@ -46,6 +46,7 @@ Write-Host "Bumping to v$Version..."
 $cargoPattern     = '(?m)^version = "\d+\.\d+\.\d+"'
 $cargoReplacement = "version = `"$Version`""
 Replace-InFile "$root\pqfile\Cargo.toml"         $cargoPattern $cargoReplacement
+Replace-InFile "$root\pqfile-cli\Cargo.toml"     $cargoPattern $cargoReplacement
 Replace-InFile "$root\pqfile-gui\Cargo.toml"     $cargoPattern $cargoReplacement
 Replace-InFile "$root\pqfile-desktop\Cargo.toml" $cargoPattern $cargoReplacement
 
@@ -71,13 +72,8 @@ Replace-InFile "$root\pqfile-desktop\packaging\setup.iss" `
     '#define AppVersion\s+"[\d.]+"' `
     "#define AppVersion   `"$Version`""
 
-# sonar-project.properties
-Replace-InFile "$root\sonar-project.properties" `
-    'sonar\.projectVersion=[\d.]+' `
-    "sonar.projectVersion=$Version"
-
 # RPM spec — Version field + prepend changelog entry
-$specPath = "$root\pqfile\packaging\pqfile.spec"
+$specPath = "$root\pqfile-cli\packaging\pqfile.spec"
 Replace-InFile $specPath `
     '(?m)^Version:\s+[\d.]+' `
     "Version:        $Version"
@@ -89,7 +85,7 @@ $entry    = "* $date $name <$email> - $Version-1`n- $SpecChangelog"
 $specContent = Get-Content $specPath -Raw
 $specContent = $specContent -replace '(%changelog)', "%changelog`n$entry`n"
 Set-Content $specPath $specContent -NoNewline
-Write-Host "  added %changelog entry to pqfile/packaging/pqfile.spec"
+Write-Host "  added %changelog entry to pqfile-cli/packaging/pqfile.spec"
 
 # Regenerate Cargo.lock
 Write-Host "Regenerating Cargo.lock..."

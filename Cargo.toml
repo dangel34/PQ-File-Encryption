@@ -1,5 +1,5 @@
 [workspace]
-members = ["pqfile", "pqfile-gui", "pqfile-desktop"]
+members = ["pqfile", "pqfile-cli", "pqfile-gui", "pqfile-desktop"]
 exclude = ["fuzz"]  # managed by cargo-fuzz, not the main workspace
 resolver = "2"
 

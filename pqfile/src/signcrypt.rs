@@ -16,7 +16,7 @@ const SIG_LEN: usize = 3309;
 ///
 /// The signature covers SHA3-256(plaintext), not the raw plaintext, to allow
 /// streaming without buffering the entire plaintext before signing.
-
+///
 /// Sign `plaintext_reader` with `sk_pem`, then encrypt the combined payload
 /// (signature ++ plaintext) to `pubkey_pem`.  Two-pass: first hashes the input
 /// to sign it, then reads it again to prepend the signature and encrypt.
@@ -25,6 +25,7 @@ const SIG_LEN: usize = 3309;
 /// it cannot be stripped after the fact.
 pub fn signcrypt<R: Read + io::Seek>(
     sk_pem: &str,
+    sign_passphrase: Option<&str>,
     pubkey_pem: &str,
     input: &mut R,
     input_len: u64,
@@ -35,7 +36,7 @@ pub fn signcrypt<R: Read + io::Seek>(
     let hash = hash_stream(input)?;
 
     // Sign the 32-byte hash
-    let sig_bytes = sign::sign_bytes(sk_pem, &hash)?;
+    let sig_bytes = sign::sign_bytes(sk_pem, sign_passphrase, &hash)?;
     debug_assert_eq!(sig_bytes.len(), SIG_LEN);
 
     // Rewind for pass 2
@@ -51,10 +52,16 @@ pub fn signcrypt<R: Read + io::Seek>(
 
 /// Decrypt a signcrypted file, verify the sender's signature, and write plaintext.
 ///
-/// The signature is verified after the plaintext is written (streaming trade-off):
-/// each chunk is AEAD-authenticated before output, so the plaintext is
-/// integrity-protected throughout.  The ML-DSA signature additionally proves
-/// sender identity; if it fails the caller should discard the output.
+/// # Streaming write-before-verify hazard
+///
+/// Plaintext is written to `writer` **while streaming**, before the ML-DSA sender
+/// signature is checked.  Each chunk is AEAD-authenticated (integrity guaranteed),
+/// but sender identity is only confirmed when this function returns `Ok(())`.
+///
+/// **To avoid acting on data from an unverified sender, pass a `Vec<u8>` as
+/// `writer` and only use the output after the function returns `Ok(())`.**
+/// Do NOT pass a `File`, a socket, or any writer whose output you cannot retract,
+/// unless you are prepared to discard everything written on a subsequent error.
 pub fn signdecrypt<R: Read>(
     privkey_pem: &str,
     vk_pem: &str,
@@ -113,10 +120,10 @@ mod tests {
 
     fn do_signcrypt(plaintext: &[u8]) -> (Vec<u8>, String, String, String) {
         let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
-        let sk_result = sign_keygen_bytes().unwrap();
+        let sk_result = sign_keygen_bytes(None).unwrap();
         let mut input = Cursor::new(plaintext);
         let mut output = Vec::new();
-        signcrypt(&sk_result.sk_pem, &pub_pem, &mut input, plaintext.len() as u64, &mut output, CHUNK_SIZE).unwrap();
+        signcrypt(&sk_result.sk_pem, None, &pub_pem, &mut input, plaintext.len() as u64, &mut output, CHUNK_SIZE).unwrap();
         (output, priv_pem, sk_result.vk_pem, pub_pem)
     }
 
@@ -142,7 +149,7 @@ mod tests {
     fn signcrypt_wrong_verifying_key_fails() {
         let plaintext = b"test payload";
         let (ciphertext, priv_pem, _, _) = do_signcrypt(plaintext);
-        let other_sk = sign_keygen_bytes().unwrap();
+        let other_sk = sign_keygen_bytes(None).unwrap();
         let mut output = Vec::new();
         let result = signdecrypt(&priv_pem, &other_sk.vk_pem, ciphertext.as_slice(), &mut output, None);
         assert!(matches!(result, Err(PqfileError::SignatureVerificationFailed)));

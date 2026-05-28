@@ -47,6 +47,7 @@ pub fn start() -> Result<(), JsValue> {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use crate::app::PqfileApp;
     use crate::types::{FileInput, MultiFileEntry, OpStatus, Settings, Tab};

@@ -139,52 +139,46 @@ fn format_v2_header(h: &format::PqfHeader) -> String {
     result
 }
 
-fn format_v4_header(h: &format::PqfHeaderV4) -> String {
-    let nonce: String = h.nonce.iter().map(|b| format!("{b:02x}")).collect();
-    let n = h.recipients.len();
+fn format_multi_recipient_header(
+    version_label: &str,
+    recipients: &[(u16, &[u8])],
+    nonce: &[u8],
+    original_size: u64,
+) -> String {
+    let nonce_str: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+    let n = recipients.len();
     let mut lines = format!(
         "Magic            PQFL\n\
-         Version          0x04  (multi-recipient)\n\
+         Version          {version_label}\n\
          Recipients       {n}\n"
     );
-    for (i, r) in h.recipients.iter().enumerate() {
-        let vname = variant_display(r.kem_variant);
-        let ct_fp = keygen::fingerprint(&r.kem_ciphertext);
+    for (i, (kem_variant, kem_ciphertext)) in recipients.iter().enumerate() {
+        let vname = variant_display(*kem_variant);
+        let ct_fp = keygen::fingerprint(kem_ciphertext);
         lines.push_str(&format!(
             "  [{i}] variant      {vname}\n\
              \x20    CT FP        {ct_fp}\n"
         ));
     }
     lines.push_str(&format!(
-        "Nonce            {}\n\
-         Original size    {} bytes",
-        nonce, h.original_size,
+        "Nonce            {nonce_str}\n\
+         Original size    {original_size} bytes"
     ));
     lines
 }
 
+fn format_v4_header(h: &format::PqfHeaderV4) -> String {
+    let recipients: Vec<(u16, &[u8])> = h.recipients.iter()
+        .map(|r| (r.kem_variant, r.kem_ciphertext.as_slice()))
+        .collect();
+    format_multi_recipient_header("0x04  (multi-recipient)", &recipients, &h.nonce, h.original_size)
+}
+
 fn format_v7_header(h: &format::PqfHeaderV7) -> String {
-    let nonce: String = h.nonce.iter().map(|b| format!("{b:02x}")).collect();
-    let n = h.recipients.len();
-    let mut lines = format!(
-        "Magic            PQFL\n\
-         Version          0x07  (anonymous multi-recipient)\n\
-         Recipients       {n}\n"
-    );
-    for (i, r) in h.recipients.iter().enumerate() {
-        let vname = variant_display(r.kem_variant);
-        let ct_fp = keygen::fingerprint(&r.kem_ciphertext);
-        lines.push_str(&format!(
-            "  [{i}] variant      {vname}\n\
-             \x20    CT FP        {ct_fp}\n"
-        ));
-    }
-    lines.push_str(&format!(
-        "Nonce            {}\n\
-         Original size    {} bytes",
-        nonce, h.original_size,
-    ));
-    lines
+    let recipients: Vec<(u16, &[u8])> = h.recipients.iter()
+        .map(|r| (r.kem_variant, r.kem_ciphertext.as_slice()))
+        .collect();
+    format_multi_recipient_header("0x07  (anonymous multi-recipient)", &recipients, &h.nonce, h.original_size)
 }
 
 fn variant_display(kem_variant: u16) -> String {

@@ -22,8 +22,11 @@ const PQFA_VERSION: u8 = 1;
 pub struct ArchiveEntry {
     /// Relative path stored in the archive.
     pub path: String,
+    /// Uncompressed size of the file in bytes.
     pub file_size: u64,
+    /// Last-modification time as Unix seconds; 0 if unavailable.
     pub mtime_secs: i64,
+    /// Unix permission bits; 0 on Windows.
     pub mode: u32,
 }
 
@@ -161,6 +164,13 @@ fn read_manifest<R: Read>(reader: &mut R) -> Result<Vec<ArchiveEntry>, PqfileErr
     let mut count_bytes = [0u8; 4];
     reader.read_exact(&mut count_bytes).map_err(io_err)?;
     let count = u32::from_le_bytes(count_bytes) as usize;
+    const MAX_ARCHIVE_ENTRIES: usize = 65536;
+    if count > MAX_ARCHIVE_ENTRIES {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("archive entry count {count} exceeds maximum ({MAX_ARCHIVE_ENTRIES})"),
+        )));
+    }
 
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {

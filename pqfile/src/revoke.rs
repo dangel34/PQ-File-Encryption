@@ -66,11 +66,11 @@ fn json_str(s: &str) -> String {
 
 /// Extracts the value of `key` from a simple flat JSON object (no nesting).
 fn extract_json_str(json: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{}\"", key);
+    // Include the colon in the needle so "fingerprint": never matches a
+    // key like "fingerprint_extra": (prefix-key bypass prevention).
+    let needle = format!("\"{}\":", key);
     let pos = json.find(&needle)?;
-    let after_key = &json[pos + needle.len()..];
-    let colon = after_key.find(':')? + 1;
-    let after_colon = after_key[colon..].trim_start();
+    let after_colon = json[pos + needle.len()..].trim_start();
     if !after_colon.starts_with('"') {
         return None;
     }

@@ -11,20 +11,32 @@ use crate::error::PqfileError;
 use crate::format::{HYBRID_EK_LEN_768, HYBRID_SEED_LEN_768, KEM_VARIANT_512, KEM_VARIANT, KEM_VARIANT_1024};
 use crate::passphrase;
 
+/// PEM tag for an ML-KEM-512 public (encapsulation) key.
 pub const PUB_TAG_512: &str = "ML-KEM-512 PUBLIC KEY";
+/// PEM tag for an unencrypted ML-KEM-512 private key seed.
 pub const PRIV_TAG_512: &str = "ML-KEM-512 PRIVATE KEY";
+/// PEM tag for a passphrase-encrypted ML-KEM-512 private key.
 pub const PRIV_ENC_TAG_512: &str = "ML-KEM-512 ENCRYPTED PRIVATE KEY";
 
+/// PEM tag for an ML-KEM-768 public (encapsulation) key.
 pub const PUB_TAG: &str = "ML-KEM-768 PUBLIC KEY";
+/// PEM tag for an unencrypted ML-KEM-768 private key seed.
 pub const PRIV_TAG: &str = "ML-KEM-768 PRIVATE KEY";
+/// PEM tag for a passphrase-encrypted ML-KEM-768 private key.
 pub const PRIV_ENC_TAG: &str = "ML-KEM-768 ENCRYPTED PRIVATE KEY";
 
+/// PEM tag for an ML-KEM-1024 public (encapsulation) key.
 pub const PUB_TAG_1024: &str = "ML-KEM-1024 PUBLIC KEY";
+/// PEM tag for an unencrypted ML-KEM-1024 private key seed.
 pub const PRIV_TAG_1024: &str = "ML-KEM-1024 PRIVATE KEY";
+/// PEM tag for a passphrase-encrypted ML-KEM-1024 private key.
 pub const PRIV_ENC_TAG_1024: &str = "ML-KEM-1024 ENCRYPTED PRIVATE KEY";
 
+/// PEM tag for a hybrid X25519+ML-KEM-768 public key.
 pub const PUB_TAG_HYBRID_768: &str = "X25519+ML-KEM-768 PUBLIC KEY";
+/// PEM tag for an unencrypted hybrid X25519+ML-KEM-768 private key seed.
 pub const PRIV_TAG_HYBRID_768: &str = "X25519+ML-KEM-768 PRIVATE KEY";
+/// PEM tag for a passphrase-encrypted hybrid X25519+ML-KEM-768 private key.
 pub const PRIV_ENC_TAG_HYBRID_768: &str = "X25519+ML-KEM-768 ENCRYPTED PRIVATE KEY";
 
 /// Generates a key pair and writes it to `out_dir`.
@@ -139,6 +151,9 @@ fn encode_private_key(
     plain_tag: &str,
     enc_tag: &str,
 ) -> Result<String, PqfileError> {
+    if seed_bytes.len() != 64 {
+        return Err(PqfileError::InvalidKeyLength { expected: 64, got: seed_bytes.len() });
+    }
     if let Some(pp) = passphrase {
         let mut seed_arr = Zeroizing::new([0u8; 64]);
         seed_arr.copy_from_slice(seed_bytes);

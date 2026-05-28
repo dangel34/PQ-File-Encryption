@@ -14,9 +14,13 @@ use crate::format::{BASE_NONCE_LEN, chunk_aad, chunk_nonce, fill_chunk};
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PqfInfo {
+    /// Format version byte.
     pub version: u8,
+    /// KEM variant identifier.
     pub kem_variant: u16,
+    /// Uncompressed plaintext size in bytes (informational).
     pub original_size: u64,
+    /// Chunk size used for STREAM decryption.
     pub chunk_size: usize,
 }
 
@@ -182,7 +186,7 @@ impl<R: Read> Read for PqfReader<R> {
                     let max_ct = *chunk_size + 16;
                     next_ct.resize(max_ct, 0);
                     *next_ct_len = fill_chunk(inner, &mut next_ct[..max_ct])
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                        .map_err(|e| io::Error::other(e.to_string()))?;
                 }
 
                 let n = plaintext.len().min(buf.len());

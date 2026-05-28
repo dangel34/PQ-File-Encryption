@@ -13,7 +13,7 @@ use crate::decrypt::decapsulate_for_rekey;
 use crate::encrypt::encapsulate_for_rekey;
 use crate::error::PqfileError;
 use crate::format::{
-    CHUNK_SIZE, VERSION, VERSION_V3, VERSION_V5,
+    CHUNK_SIZE, VERSION_V3, VERSION_V5,
     PqfHeader, PqfHeaderV4, RecipientEntryV4, fill_chunk,
 };
 
@@ -32,7 +32,7 @@ pub fn rekey_stream(
 ) -> Result<(), PqfileError> {
     let version = PqfHeader::read_magic_version(reader)?;
     match version {
-        VERSION | VERSION_V3 | VERSION_V5 => {}
+        VERSION_V3 | VERSION_V5 => {}
         v => return Err(PqfileError::UnsupportedVersion(v)),
     }
 
@@ -111,6 +111,16 @@ mod tests {
         let mut out = Vec::new();
         let result = decrypt_stream(&priv_old, &mut rekeyed.as_slice(), &mut out, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rekey_rejects_v2_input() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let (pub2, _) = keygen_bytes(768, None).unwrap();
+        let pqf = crate::encrypt::encrypt_bytes(&pub_pem, b"v2 payload").unwrap();
+        let mut out = Vec::new();
+        let result = rekey_stream(&priv_pem, &pub2, None, &mut pqf.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x02))));
     }
 
     #[test]

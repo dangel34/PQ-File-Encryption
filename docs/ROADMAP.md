@@ -111,19 +111,22 @@ This document tracks planned improvements, new features, and security work acros
 - **ML-KEM-512 support** ✓ _released_
   `pqfile keygen --level 512` generates an ML-KEM-512 key pair (EK 800 bytes, CT 768 bytes, seed 64 bytes). New PEM tags: `ML-KEM-512 PUBLIC KEY`, `ML-KEM-512 PRIVATE KEY`, `ML-KEM-512 ENCRYPTED PRIVATE KEY`. KEM variant value `512` (u16). Decryption auto-detects from the file header. Passphrase protection supported. Completes FIPS 203 parameter set coverage.
 
-- **Anonymous recipients in v4 format**
-  In the current v4 header, the recipient count and each entry's KEM variant are visible in plaintext. An `--anonymous-recipients` flag on `pqfile encrypt` pads all recipient entries to the maximum variant size and randomizes their serialization order before writing the header. An eavesdropper cannot determine the number of recipients or which key types are in use. Adds a v5 format flag byte to signal anonymous mode; the decryptor must try each entry regardless of variant instead of filtering by the key's own variant first.
+- **Anonymous recipients** ✓ _released_
+  An `--anonymous-recipients` flag on `pqfile encrypt` (v7 format) pads all recipient KEM ciphertext entries to the maximum variant size and randomizes their serialization order before writing the header. An eavesdropper cannot determine the number of recipients or which key types are in use. The decryptor tries each entry regardless of variant instead of filtering by the key's own variant first.
 
-- **Signcrypt (combined authenticate and encrypt)**
+- **Signcrypt (combined authenticate and encrypt)** ✓ _released_
   A `pqfile signcrypt -k sign_privkey.pem -r pubkey.pem <file>` command that signs the plaintext under ML-DSA-65 and embeds the detached signature inside the encrypted payload. `pqfile signdecrypt -k privkey.pem -v sign_pubkey.pem <file.pqf>` decrypts and verifies in one step. Because the signature lives inside the AEAD-authenticated ciphertext it cannot be stripped or substituted after the fact. This prevents "surreptitious forwarding": a recipient cannot re-encrypt the plaintext to a third party while preserving the sender's signature, because re-encryption requires decryption first, which reveals that the sender signed only the original plaintext (not one addressed to a different recipient). Eliminates the need for a separate `.sig` file when the sender identity must be bound to the ciphertext.
 
 - **Key revocation** ✓ _released_
-  A `pqfile revoke -k sign_privkey.pem pubkey.pem` command that produces a signed `pubkey.pem.revoked` PEM file containing the key fingerprint, a UTC revocation timestamp, and a free-text reason. `pqfile encrypt` can check for a `.revoked` sidecar file alongside the public key and refuse to encrypt if one is found, with a clear error message. Revocations are signed with the ML-DSA signing key so they cannot be forged or silently discarded without the signing key. Provides a lightweight revocation mechanism for deployments that cannot yet implement a full PKI.
+  `pqfile revoke --key pubkey.pem --reason "..."` writes a `pubkey.pem.revoked` JSON sidecar file containing the key fingerprint and an optional reason string. `pqfile encrypt` checks for a `.revoked` sidecar alongside each recipient public key and aborts with a clear error if one is found. The sidecar is a plain JSON file (not signed); a future release may add ML-DSA signing to prevent a local attacker with filesystem write access from silently removing or replacing the sidecar.
+
+- **Passphrase-protected signing keys** ✓ _released_
+  `pqfile sign-keygen --passphrase` derives an AES-256-GCM key from the passphrase using Argon2id (m=64 MiB, t=3, p=1) and encrypts the 32-byte ML-DSA-65 seed before writing the PEM file. New PEM label: `ML-DSA-65 ENCRYPTED SIGNING KEY`. Auto-detected on load; `pqfile sign` and `pqfile signcrypt` prompt interactively when the signing key is encrypted.
 
 - **Hardware-backed private keys (TPM / PKCS#11)**
   Store the private key seed inside a hardware security module rather than on disk. Opt in with `pqfile keygen --hardware`. Supported backends: Windows TPM2 via the CNG API, macOS Secure Enclave via the Security framework, Linux TPM2 via tpm2-tools, and YubiKey or other PKCS#11 tokens. The PEM private key file is replaced by a hardware key reference (device attestation + slot identifier). The seed is generated inside the hardware and never exported to process memory. Decapsulation calls are proxied to the hardware, so a physical token or OS-level access control is required for every decrypt. Provides strong protection against disk theft, memory forensics, and cold-boot attacks.
 
-- **Threshold decryption (M-of-N)**
+- **Threshold decryption (M-of-N)** ✓ _released_
   Split a private key seed across N shareholders using Shamir's Secret Sharing (GF(2^8) polynomial interpolation over the 64-byte seed). `pqfile split-key --threshold M --shares N privkey.pem` produces N share PEM files. `pqfile reconstruct-key share1.pem share2.pem ... privkey.pem` reassembles the seed from any M shares. Decryption then proceeds normally. Useful for high-security key escrow, disaster recovery where no single person holds the full key, or organizational workflows requiring M-of-N approval to access protected data.
 
 ### CLI / Library
@@ -137,7 +140,7 @@ This document tracks planned improvements, new features, and security work acros
 - **Async I/O support**
   Add `encrypt_stream_async` and `decrypt_stream_async` that accept `AsyncRead + AsyncWrite + Unpin` from `tokio::io`, plus a feature-flagged `futures::io` variant. The chunk loop becomes an `async` block with `.await` on each read and write. Enables non-blocking encryption in async servers and proxies without spawning a dedicated OS thread per operation. The async API is a direct mirror of the sync streaming API; the same format.rs helpers (chunk_nonce, chunk_aad, fill_chunk) are reused with async equivalents.
 
-- **Encrypted archive (multi-file bundle)**
+- **Encrypted archive (multi-file bundle)** ✓ _released_
   A `pqfile archive -r pubkey.pem -o bundle.pqf [files...]` command that packs multiple files and directory trees into a single encrypted authenticated archive. Each entry stores the original relative path, file size, modification time, and Unix permissions in a per-entry header, all covered by the same AEAD authentication as the payload. `pqfile extract bundle.pqf -k privkey.pem [-o dir]` restores the original layout. Useful for sending a set of related files as a single auditable package. All authentication happens before any file is written to disk on extraction. The format is a v4 stream where the payload is a structured entry sequence rather than raw file bytes.
 
 - **Re-encryption without payload decryption (rekey)** ✓ _released_
@@ -157,7 +160,7 @@ This document tracks planned improvements, new features, and security work acros
 
 ### Performance
 
-- **Parallel chunk processing with rayon**
+- **Parallel chunk processing with rayon** ✓ _released_
   In `encrypt_stream` and `decrypt_stream`, each chunk is processed independently: the per-chunk nonce and AAD are deterministic from the base nonce and the chunk counter, so the order of encryption/decryption does not need to match the order of I/O. A rayon work-stealing thread pool can encrypt or decrypt N chunks concurrently across available cores. A two-phase pipeline reads chunks on the I/O thread while worker threads process previously read chunks, keeping both the disk and CPU busy. Expected throughput improvement is roughly linear with core count up to I/O bandwidth saturation. Gate behind a `--parallel` flag so single-core and memory-constrained environments are unaffected by default.
 
 - **Configurable chunk size** ✓ _released_
@@ -185,6 +188,9 @@ This document tracks planned improvements, new features, and security work acros
 
 - **cargo-vet** ✓ _released_
   `supply-chain/config.toml` records an explicit exemption (safe-to-deploy or safe-to-run) for every dependency in the tree. `cargo vet --locked` runs in `.github/workflows/ci.yml` on every push and PR to main. New dependencies added without a corresponding exemption or audit entry will fail CI.
+
+- **Format specification (`docs/FORMAT.md`)**
+  A standalone byte-level specification of all `.pqf` and `.pqfa` format versions (v2 through v7), covering the exact field layout, sizes, byte order, and invariants for each header and payload structure. Includes reference test vectors for each version and KEM variant combination. Required before the crates.io publish and FFI bindings: external consumers (C FFI callers, auditors, OSS-Fuzz reviewers, alternative implementations) need to understand the format without reading the Rust source.
 
 ---
 

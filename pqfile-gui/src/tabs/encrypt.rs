@@ -21,7 +21,6 @@ impl PqfileApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.start_encrypt_job(ctx, pub_pems);
-            return;
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -263,6 +262,7 @@ fn resolve_out_path(output_dir: &Option<PathBuf>, out_name: &str, path: Option<P
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn encrypt_entry(
     pub_pems: &[String],
     data: &[u8],
