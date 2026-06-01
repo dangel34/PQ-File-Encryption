@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use keyring_core::{Entry, Error as KeyringError, set_default_store};
+use keyring_core::{set_default_store, Entry, Error as KeyringError};
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
@@ -37,27 +37,21 @@ fn ensure_store() -> Result<(), PqfileError> {
 #[cfg(target_os = "windows")]
 fn init_platform_store() -> Result<(), String> {
     use windows_native_keyring_store::Store;
-    set_default_store(
-        Store::new_with_configuration(&HashMap::new()).map_err(|e| e.to_string())?,
-    );
+    set_default_store(Store::new_with_configuration(&HashMap::new()).map_err(|e| e.to_string())?);
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
 fn init_platform_store() -> Result<(), String> {
     use apple_native_keyring_store::keychain::Store;
-    set_default_store(
-        Store::new_with_configuration(&HashMap::new()).map_err(|e| e.to_string())?,
-    );
+    set_default_store(Store::new_with_configuration(&HashMap::new()).map_err(|e| e.to_string())?);
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 fn init_platform_store() -> Result<(), String> {
     use linux_keyutils_keyring_store::Store;
-    set_default_store(
-        Store::new_with_configuration(&HashMap::new()).map_err(|e| e.to_string())?,
-    );
+    set_default_store(Store::new_with_configuration(&HashMap::new()).map_err(|e| e.to_string())?);
     Ok(())
 }
 
