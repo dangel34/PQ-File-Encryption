@@ -1,6 +1,6 @@
 [package]
 name = "pqfile-cli"
-version = "3.2.0"
+version = "3.3.0"
 edition = "2021"
 description = "Command-line interface for the pqfile quantum-resistant encryption library"
 license = "MIT"

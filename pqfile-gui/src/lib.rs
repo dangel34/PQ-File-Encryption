@@ -10,7 +10,7 @@ pub use app::PqfileApp;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-pub(crate) const APP_VERSION: &str = "3.2.0";
+pub(crate) const APP_VERSION: &str = "3.3.0";
 
 // ── WASM entry ────────────────────────────────────────────────────────────
 
