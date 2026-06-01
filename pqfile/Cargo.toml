@@ -29,9 +29,18 @@ rayon = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 zstd = "0.13.3"
-# Credential-store backend for hardware-backed keys: Windows Credential Manager,
-# macOS Keychain, and Linux Secret Service (GNOME Keyring / KDE Wallet).
-keyring = "2"
+# Core types for hardware-backed key credential storage.
+keyring-core = "1"
+
+# Platform-specific credential store backends (no sqlite/tantivy bloat).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-keyutils-keyring-store = "1"
 
 [features]
 # Enable async encrypt/decrypt API backed by Tokio.

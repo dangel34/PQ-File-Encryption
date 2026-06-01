@@ -4,6 +4,23 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [4.0.0] - 2026-06-01
+
+### Breaking changes
+
+- **Argon2id p=4**: All new passphrase-protected keys use `p=4` (up from `p=1`). Keys encrypted with p=1 (pre-4.0) return `PqfileError::LegacyKeyFormat` and must be migrated with `pqfile repassphrase --from-legacy` before use.
+- **v8 anonymous format**: `--anonymous-recipients` now emits v8, which drops the per-slot `kem_variant` field entirely. All slots are a uniform 1616 bytes. v7 files remain readable but v7 write is removed.
+- **`pqfile` library at 4.0.0**: The library crate version now matches the CLI/GUI version sequence. `PqfileError::LegacyKeyFormat` is a new variant introduced in this release.
+
+### New features
+
+- **Hardware-backed private keys**: `pqfile keygen --hardware` and `pqfile sign-keygen --hardware` store the key seed in the OS credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service). The seed never touches disk.
+- **`pqfile repassphrase`**: Change or upgrade the passphrase on any key type. Pass `--from-legacy` to migrate a p=1 key to p=4.
+- **Async I/O** (`pqfile` feature `"async"`): `encrypt_stream_async` and `decrypt_stream_async` backed by Tokio. Ciphertext format is identical to the synchronous API.
+- **STABILITY.md**: Formal 1.0 stability promise for the public API surface.
+
+---
+
 ## [3.3.0] - 2026-06-01
 
 ### Breaking changes

@@ -3,8 +3,20 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'STABILITY.md'
+      - '.gitleaks.toml'
+      - 'supply-chain/imports.lock'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'STABILITY.md'
+      - '.gitleaks.toml'
+      - 'supply-chain/imports.lock'
 
 # Cancel any in-progress run for the same ref so rapid pushes don't pile up.
 concurrency:
