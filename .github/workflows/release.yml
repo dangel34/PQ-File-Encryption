@@ -50,6 +50,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
         with:
           toolchain: stable
+          components: rustfmt
 
       - name: Install system dependencies
         run: |
@@ -247,9 +248,13 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@4c7e9f3bb4ca35f54341be8fc8d3608f71e4d24e # cargo-cyclonedx
+        with:
+          tool: cargo-cyclonedx
+
       - name: Generate SBOM (CycloneDX)
         run: |
-          cargo install cargo-cyclonedx --locked
           cargo cyclonedx --format json --override-filename bom --all
           # cargo-cyclonedx writes bom.json next to each Cargo.toml; collect them all
           mkdir -p artifacts
