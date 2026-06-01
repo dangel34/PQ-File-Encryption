@@ -2,18 +2,22 @@ use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::colors::{c_overlay, c_surface0, c_text};
-use crate::types::OpStatus;
+use crate::types::{OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::reveal_in_explorer;
 use crate::widgets::{
-    card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading,
+    card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading_help,
 };
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::sign;
+#[cfg(not(target_arch = "wasm32"))]
+use pqfile::sign::sign_keygen_hardware;
 
 impl PqfileApp {
     pub(crate) fn show_sign(&mut self, ui: &mut egui::Ui, dark: bool) {
-        tab_heading(ui, "Digital Signatures  (ML-DSA-65)", dark);
+        if tab_heading_help(ui, "Digital Signatures  (ML-DSA-65)", dark) {
+            self.help_modal_open = Some(Tab::Sign);
+        }
         ui.label(
             RichText::new(
                 "Generate ML-DSA-65 signing key pairs, sign any file with a private key, \
@@ -89,14 +93,38 @@ impl PqfileApp {
                 ui.add_space(6.0);
             }
 
-            ui.checkbox(
-                &mut self.sign_keygen_use_passphrase,
-                RichText::new("Protect private signing key with passphrase")
-                    .size(13.0)
-                    .color(c_subtext(dark)),
-            );
+            // Hardware option (native only).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.checkbox(
+                    &mut self.sign_keygen_use_hardware,
+                    RichText::new("Store signing key in OS credential store (hardware-backed)")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
+                );
+                if self.sign_keygen_use_hardware {
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.sign_keygen_hardware_label)
+                            .hint_text("Key label (e.g. my-signing-key)...")
+                            .desired_width(f32::INFINITY),
+                    );
+                    self.sign_keygen_use_passphrase = false;
+                    ui.add_space(4.0);
+                }
+            }
 
-            if self.sign_keygen_use_passphrase {
+            let hw_active = self.sign_keygen_use_hardware;
+            ui.add_enabled_ui(!hw_active, |ui| {
+                ui.checkbox(
+                    &mut self.sign_keygen_use_passphrase,
+                    RichText::new("Protect private signing key with passphrase")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
+                );
+            });
+
+            if !hw_active && self.sign_keygen_use_passphrase {
                 ui.add_space(6.0);
                 passphrase_row(
                     ui,
@@ -164,18 +192,40 @@ impl PqfileApp {
                 std::path::PathBuf::from(&self.settings.output_dir)
             };
             let force = !self.settings.confirm_overwrite;
-            match sign::sign_keygen(&out_dir, force, passphrase.as_deref()) {
-                Ok(r) => {
-                    self.sign_keygen_passphrase.clear();
-                    self.sign_keygen_passphrase_confirm.clear();
-                    self.sign_keygen_status = OpStatus::Ok(format!(
-                        "Saved to {}   Fingerprint: {}",
-                        out_dir.display(),
-                        r.vk_fingerprint,
-                    ));
+
+            if self.sign_keygen_use_hardware {
+                let label = self.sign_keygen_hardware_label.trim().to_owned();
+                if label.is_empty() {
+                    self.sign_keygen_status =
+                        OpStatus::Err("Enter a label for the hardware signing key.".to_owned());
+                    return;
                 }
-                Err(e) => {
-                    self.sign_keygen_status = OpStatus::Err(e.to_string());
+                match sign_keygen_hardware(&out_dir, force, &label) {
+                    Ok(r) => {
+                        self.sign_keygen_status = OpStatus::Ok(format!(
+                            "Hardware-backed signing keys saved to {}   Fingerprint: {}",
+                            out_dir.display(),
+                            r.vk_fingerprint,
+                        ));
+                    }
+                    Err(e) => {
+                        self.sign_keygen_status = OpStatus::Err(e.to_string());
+                    }
+                }
+            } else {
+                match sign::sign_keygen(&out_dir, force, passphrase.as_deref()) {
+                    Ok(r) => {
+                        self.sign_keygen_passphrase.clear();
+                        self.sign_keygen_passphrase_confirm.clear();
+                        self.sign_keygen_status = OpStatus::Ok(format!(
+                            "Saved to {}   Fingerprint: {}",
+                            out_dir.display(),
+                            r.vk_fingerprint,
+                        ));
+                    }
+                    Err(e) => {
+                        self.sign_keygen_status = OpStatus::Err(e.to_string());
+                    }
                 }
             }
         }

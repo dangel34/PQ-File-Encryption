@@ -144,8 +144,11 @@ pub fn extract_to_memory<R: Read>(
     let manifest = read_manifest(&mut pqf)?;
     let mut result = Vec::with_capacity(manifest.len());
     let mut buf = vec![0u8; CHUNK_SIZE];
+    // Cap pre-allocation hint to 64 MiB per entry so a crafted (but AEAD-valid)
+    // archive cannot force an OOM via a large file_size field before any bytes arrive.
+    const MAX_PREALLOC: u64 = 64 * 1024 * 1024;
     for entry in &manifest {
-        let mut data = Vec::with_capacity(entry.file_size as usize);
+        let mut data = Vec::with_capacity(entry.file_size.min(MAX_PREALLOC) as usize);
         let mut remaining = entry.file_size;
         while remaining > 0 {
             let to_read = (remaining as usize).min(buf.len());

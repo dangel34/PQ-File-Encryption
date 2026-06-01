@@ -1,7 +1,7 @@
 use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1, c_text};
-use crate::types::OpStatus;
-use crate::widgets::{card, file_row, section_label, show_status, tab_heading};
+use crate::types::{OpStatus, Tab};
+use crate::widgets::{card, file_row, section_label, show_status, tab_heading_help};
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::format;
 use pqfile::inspect::{inspect_stream, PqfHeaderInfo};
@@ -9,7 +9,9 @@ use std::io::Cursor;
 
 impl PqfileApp {
     pub(crate) fn show_inspect(&mut self, ui: &mut egui::Ui, dark: bool) {
-        tab_heading(ui, "Inspect .pqf File", dark);
+        if tab_heading_help(ui, "Inspect .pqf File", dark) {
+            self.help_modal_open = Some(Tab::Inspect);
+        }
         ui.label(
             RichText::new("View the header metadata of an encrypted file without decrypting it.")
                 .size(13.0)
@@ -133,11 +135,25 @@ fn format_header_info(info: &PqfHeaderInfo) -> String {
             nonce,
             original_size,
         } => format_multi_header(
-            "0x07  (anonymous multi-recipient)",
+            "0x07  (anonymous multi-recipient, legacy)",
             recipients,
             nonce,
             *original_size,
         ),
+        PqfHeaderInfo::AnonMultiV8 {
+            slot_count,
+            nonce,
+            original_size,
+        } => {
+            let nonce_str: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+            format!(
+                "Magic            PQFL\n\
+                 Version          0x08  (variant-blind anonymous multi-recipient)\n\
+                 Slots            {slot_count}  (key types hidden)\n\
+                 Nonce            {nonce_str}\n\
+                 Original size    {original_size} bytes"
+            )
+        }
         _ => "Unsupported format version.".to_owned(),
     }
 }

@@ -91,6 +91,14 @@ pub enum PqfileError {
     #[error("compressed .pqf files (v6) are not supported in this build")]
     CompressionNotSupported,
 
+    /// The private key was encrypted with legacy Argon2id parameters (p=1, pqfile < 4.0).
+    /// Run `pqfile repassphrase --from-legacy` to upgrade it before use.
+    #[error(
+        "private key uses legacy Argon2id parameters (p=1); \
+         run `pqfile repassphrase --from-legacy` to upgrade it to p=4 before use"
+    )]
+    LegacyKeyFormat,
+
     /// Shamir share fingerprints did not agree; shares may be from different keys.
     #[error("key share reconstruction failed: fingerprint mismatch, ensure you have the correct shares for this key")]
     ShareVerificationFailed,

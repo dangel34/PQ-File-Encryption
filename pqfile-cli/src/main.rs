@@ -6,7 +6,9 @@ use clap_complete::Shell;
 
 use pqfile::error::PqfileError;
 use pqfile::inspect::{inspect_stream, PqfHeaderInfo, RecipientInfo};
-use pqfile::{archive, decrypt, encrypt, format, keygen, rekey, revoke, shamir, sign, signcrypt};
+use pqfile::{
+    archive, decrypt, encrypt, format, keygen, rekey, repassphrase, revoke, shamir, sign, signcrypt,
+};
 
 #[derive(Parser)]
 #[command(
@@ -31,6 +33,7 @@ enum Command {
         #[arg(long, default_value_t = false)]
         force: bool,
         /// Protect the private key with a passphrase (prompted interactively).
+        /// Cannot be combined with --hardware.
         #[arg(long, default_value_t = false)]
         passphrase: bool,
         /// KEM security level: 512 (ML-KEM-512), 768 (ML-KEM-768, default), or 1024 (ML-KEM-1024).
@@ -39,6 +42,13 @@ enum Command {
         /// Generate a Hybrid X25519+ML-KEM-768 key pair for combined classical+PQ security.
         #[arg(long, default_value_t = false)]
         hybrid: bool,
+        /// Store the private key in the OS credential store (hardware-backed).
+        /// The seed never touches disk; only a reference stub is written.
+        #[arg(long, default_value_t = false)]
+        hardware: bool,
+        /// Human-readable label for the hardware key (required with --hardware).
+        #[arg(long, value_name = "LABEL")]
+        label: Option<String>,
     },
     Encrypt {
         /// Recipient public key(s). Repeat -r for multiple recipients (v4 format).
@@ -110,8 +120,15 @@ enum Command {
         #[arg(long, default_value_t = false)]
         force: bool,
         /// Protect the signing private key with a passphrase (prompted interactively).
+        /// Cannot be combined with --hardware.
         #[arg(long, default_value_t = false)]
         passphrase: bool,
+        /// Store the signing key in the OS credential store (hardware-backed).
+        #[arg(long, default_value_t = false)]
+        hardware: bool,
+        /// Human-readable label for the hardware key (required with --hardware).
+        #[arg(long, value_name = "LABEL")]
+        label: Option<String>,
     },
     /// Sign a file with an ML-DSA-65 signing key, producing a detached .sig file.
     Sign {
@@ -255,6 +272,24 @@ enum Command {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    /// Change or upgrade the passphrase on any encrypted private key.
+    ///
+    /// Reads the key with the old passphrase and re-encrypts it with the new one
+    /// using the current Argon2id parameters (p=4).
+    ///
+    /// Use --from-legacy when migrating a key created with pqfile < 4.0 (Argon2id p=1).
+    /// Without --from-legacy, passing a legacy key returns an error directing you to add it.
+    #[command(name = "repassphrase")]
+    Repassphrase {
+        /// Path to the encrypted private key file to update.
+        #[arg(short = 'k', value_name = "KEY")]
+        key: PathBuf,
+        /// Read the key using legacy Argon2id p=1 parameters (pqfile < 4.0 keys).
+        /// Required when migrating old keys; causes an error if set on a p=4 key.
+        #[arg(long, default_value_t = false)]
+        from_legacy: bool,
+    },
+
     /// Reconstruct a private key from M-of-N Shamir shares.
     ///
     /// Provide at least `threshold` share files produced by `split-key`.
@@ -307,7 +342,9 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             passphrase,
             level,
             hybrid,
-        } => run_keygen(out, force, level, hybrid, passphrase, json),
+            hardware,
+            label,
+        } => run_keygen(out, force, level, hybrid, passphrase, hardware, label, json),
         Command::Encrypt {
             recipients,
             input,
@@ -347,7 +384,9 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             out,
             force,
             passphrase,
-        } => run_sign_keygen(out, force, passphrase, json),
+            hardware,
+            label,
+        } => run_sign_keygen(out, force, passphrase, hardware, label, json),
         Command::Sign { key, input, output } => run_sign(key, input, output, json),
         Command::Verify { key, sig, input } => run_verify(key, sig, input, json),
         Command::Revoke { key, reason } => run_revoke(key, &reason, json),
@@ -391,29 +430,49 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
         Command::ReconstructKey { shares, out, force } => {
             run_reconstruct_key(shares, out, force, json)
         }
+        Command::Repassphrase { key, from_legacy } => run_repassphrase(key, from_legacy, json),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_keygen(
     out: PathBuf,
     force: bool,
     level: u16,
     hybrid: bool,
     passphrase: bool,
+    hardware: bool,
+    label: Option<String>,
     json: bool,
 ) -> Result<(), PqfileError> {
-    let pp = if passphrase {
-        Some(prompt_new_passphrase()?)
+    if hardware && passphrase {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "--hardware and --passphrase are mutually exclusive",
+        )));
+    }
+    let fp = if hardware {
+        let lbl = label.ok_or_else(|| {
+            PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--hardware requires --label <LABEL>",
+            ))
+        })?;
+        keygen::keygen_hardware(&out, force, level, hybrid, &lbl)?
     } else {
-        None
+        let pp = if passphrase {
+            Some(prompt_new_passphrase()?)
+        } else {
+            None
+        };
+        keygen::keygen(
+            &out,
+            force,
+            level,
+            pp.as_deref().map(|z| z.as_str()),
+            hybrid,
+        )?
     };
-    let fp = keygen::keygen(
-        &out,
-        force,
-        level,
-        pp.as_deref().map(|z| z.as_str()),
-        hybrid,
-    )?;
     if json {
         println!(
             "{}",
@@ -422,10 +481,16 @@ fn run_keygen(
                 kv_str("pubkey_path", &out.join("pubkey.pem").to_string_lossy()),
                 kv_str("privkey_path", &out.join("privkey.pem").to_string_lossy()),
                 kv_str("fingerprint", &fp),
+                kv_str("storage", if hardware { "hardware" } else { "disk" }),
             ])
         );
     } else {
-        println!("Keys written to {}", out.display());
+        if hardware {
+            println!("Hardware-backed keys written to {}", out.display());
+            println!("(Seed stored in OS credential store — no seed bytes on disk)");
+        } else {
+            println!("Keys written to {}", out.display());
+        }
         println!("Public key fingerprint: {fp}");
     }
     Ok(())
@@ -709,11 +774,7 @@ fn run_decrypt(
     json: bool,
 ) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
-    let pp = if keygen::is_encrypted_key(&privkey_pem) {
-        Some(prompt_passphrase("Enter passphrase for private key: ")?)
-    } else {
-        None
-    };
+    let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
 
     let out = output.as_deref().unwrap_or("");
@@ -774,6 +835,26 @@ fn open_writer(to_stdout: bool, path: &Path) -> Result<Box<dyn io::Write>, Pqfil
         Ok(Box::new(io::stdout()))
     } else {
         Ok(Box::new(BufWriter::new(std::fs::File::create(path)?)))
+    }
+}
+
+/// Prompts for a passphrase if `pem_str` is an encrypted (non-hardware) private key.
+/// Returns `None` for plaintext keys and hardware stubs; hardware backends
+/// handle their own authentication inside the OS credential store.
+fn maybe_prompt_passphrase(
+    pem_str: &str,
+    prompt: &str,
+) -> Result<Option<zeroize::Zeroizing<String>>, PqfileError> {
+    if keygen::is_hardware_key(pem_str) {
+        Ok(None)
+    } else if keygen::is_encrypted_key(pem_str)
+        || pqfile::keys::PqfSigningKey::from_pem(pem_str)
+            .map(|k| k.is_encrypted())
+            .unwrap_or(false)
+    {
+        Ok(Some(prompt_passphrase(prompt)?))
+    } else {
+        Ok(None)
     }
 }
 
@@ -879,7 +960,7 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
             original_size,
         } => print_multi_header(
             "0x07",
-            "0x07 (anonymous multi-recipient)",
+            "0x07 (anonymous multi-recipient, legacy)",
             nonce,
             *original_size,
             recipients,
@@ -888,6 +969,33 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
             &|i, v, name| println!("  Slot {i}:           {v} ({name})"),
             json,
         ),
+        PqfHeaderInfo::AnonMultiV8 {
+            slot_count,
+            nonce,
+            original_size,
+        } => {
+            let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+            if json {
+                println!(
+                    "{}",
+                    json_object(&[
+                        kv_str("status", "ok"),
+                        kv_str("magic", "PQFL"),
+                        kv_str("version", "0x08"),
+                        kv_str("mode", "anonymous-recipients-v8"),
+                        kv_raw("slot_count", &slot_count.to_string()),
+                        kv_str("nonce", &nonce_hex),
+                        kv_raw("original_size", &original_size.to_string()),
+                    ])
+                );
+            } else {
+                println!("Magic:              PQFL");
+                println!("Version:            0x08 (variant-blind anonymous multi-recipient)");
+                println!("Slots:              {slot_count} (key types hidden)");
+                println!("Nonce:              {nonce_hex}");
+                println!("Original file size: {original_size} bytes");
+            }
+        }
         _ => return Err(PqfileError::UnsupportedVersion(0)),
     }
     Ok(())
@@ -949,15 +1057,32 @@ fn run_sign_keygen(
     out: PathBuf,
     force: bool,
     use_passphrase: bool,
+    hardware: bool,
+    label: Option<String>,
     json: bool,
 ) -> Result<(), PqfileError> {
-    let pp = if use_passphrase {
-        Some(prompt_new_passphrase()?)
+    if hardware && use_passphrase {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "--hardware and --passphrase are mutually exclusive",
+        )));
+    }
+    let r = if hardware {
+        let lbl = label.ok_or_else(|| {
+            PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--hardware requires --label <LABEL>",
+            ))
+        })?;
+        sign::sign_keygen_hardware(&out, force, &lbl)?
     } else {
-        None
+        let pp = if use_passphrase {
+            Some(prompt_new_passphrase()?)
+        } else {
+            None
+        };
+        sign::sign_keygen(&out, force, pp.as_deref().map(|z| z.as_str()))?
     };
-    let pp_str = pp.as_deref().map(|z| z.as_str());
-    let r = sign::sign_keygen(&out, force, pp_str)?;
     if json {
         println!(
             "{}",
@@ -966,10 +1091,15 @@ fn run_sign_keygen(
                 kv_str("vk_path", &out.join("sign_pubkey.pem").to_string_lossy()),
                 kv_str("sk_path", &out.join("sign_privkey.pem").to_string_lossy()),
                 kv_str("fingerprint", &r.vk_fingerprint),
+                kv_str("storage", if hardware { "hardware" } else { "disk" }),
             ])
         );
     } else {
-        println!("Signing keys written to {}", out.display());
+        if hardware {
+            println!("Hardware-backed signing keys written to {}", out.display());
+        } else {
+            println!("Signing keys written to {}", out.display());
+        }
         println!("Verifying key fingerprint: {}", r.vk_fingerprint);
     }
     Ok(())
@@ -982,14 +1112,7 @@ fn run_sign(
     json: bool,
 ) -> Result<(), PqfileError> {
     let sk_pem = std::fs::read_to_string(&key)?;
-    let pp = if pqfile::keys::PqfSigningKey::from_pem(&sk_pem)
-        .map(|k| k.is_encrypted())
-        .unwrap_or(false)
-    {
-        Some(prompt_passphrase("Enter passphrase for signing key: ")?)
-    } else {
-        None
-    };
+    let pp = maybe_prompt_passphrase(&sk_pem, "Enter passphrase for signing key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let sig_path = output.unwrap_or_else(|| sign::default_sig_path(&input));
     sign::sign_file(&sk_pem, &input, &sig_path, pp_str)?;
@@ -1059,11 +1182,7 @@ fn run_rekey(
     json: bool,
 ) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
-    let pp = if keygen::is_encrypted_key(&privkey_pem) {
-        Some(prompt_passphrase("Enter passphrase for private key: ")?)
-    } else {
-        None
-    };
+    let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
 
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
@@ -1170,11 +1289,7 @@ fn run_extract(
     json: bool,
 ) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
-    let pp = if keygen::is_encrypted_key(&privkey_pem) {
-        Some(prompt_passphrase("Enter passphrase for private key: ")?)
-    } else {
-        None
-    };
+    let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let reader = open_reader(&input)?;
 
@@ -1237,14 +1352,7 @@ fn run_signcrypt(
     json: bool,
 ) -> Result<(), PqfileError> {
     let sk_pem = std::fs::read_to_string(&key)?;
-    let pp = if pqfile::keys::PqfSigningKey::from_pem(&sk_pem)
-        .map(|k| k.is_encrypted())
-        .unwrap_or(false)
-    {
-        Some(prompt_passphrase("Enter passphrase for signing key: ")?)
-    } else {
-        None
-    };
+    let pp = maybe_prompt_passphrase(&sk_pem, "Enter passphrase for signing key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
     revoke::check_not_revoked(&recipient, &pubkey_pem)?;
@@ -1291,11 +1399,7 @@ fn run_signdecrypt(
     json: bool,
 ) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
-    let pp = if keygen::is_encrypted_key(&privkey_pem) {
-        Some(prompt_passphrase("Enter passphrase for private key: ")?)
-    } else {
-        None
-    };
+    let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let vk_pem = std::fs::read_to_string(&verifying_key)?;
 
@@ -1355,11 +1459,7 @@ fn run_split_key(
     json: bool,
 ) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
-    let pp = if keygen::is_encrypted_key(&privkey_pem) {
-        Some(prompt_passphrase("Enter passphrase for private key: ")?)
-    } else {
-        None
-    };
+    let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let result = shamir::split_key(&privkey_pem, threshold, shares, pp_str)?;
     let out_dir = out.unwrap_or_else(|| {
@@ -1435,6 +1535,34 @@ fn run_reconstruct_key(
         println!("Public key fingerprint: {fp}");
         println!("  Written: {}", priv_path.display());
         println!("  Written: {}", pub_path.display());
+    }
+    Ok(())
+}
+
+fn run_repassphrase(key: PathBuf, from_legacy: bool, json: bool) -> Result<(), PqfileError> {
+    let old_pp = prompt_passphrase("Enter current passphrase: ")?;
+    let new_pp = prompt_new_passphrase()?;
+    repassphrase::repassphrase_file(&key, old_pp.as_str(), new_pp.as_str(), from_legacy)?;
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("key", &key.to_string_lossy()),
+                kv_str(
+                    "note",
+                    if from_legacy {
+                        "migrated from legacy p=1 to p=4"
+                    } else {
+                        "passphrase updated (p=4)"
+                    }
+                ),
+            ])
+        );
+    } else if from_legacy {
+        println!("Key migrated to Argon2id p=4: {}", key.display());
+    } else {
+        println!("Passphrase updated: {}", key.display());
     }
     Ok(())
 }

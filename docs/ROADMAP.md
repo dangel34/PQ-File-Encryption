@@ -120,9 +120,6 @@ This document tracks planned improvements, new features, and security work acros
 - **Passphrase-protected signing keys** ✓ _released_
   `pqfile sign-keygen --passphrase` encrypts the 32-byte ML-DSA-65 seed using Argon2id + AES-256-GCM. PEM label: `ML-DSA-65 ENCRYPTED SIGNING KEY`. Auto-detected on load.
 
-- **Hardware-backed private keys (TPM / PKCS#11)**
-  Store the private key seed inside a hardware security module rather than on disk. Opt in with `pqfile keygen --hardware`. Supported backends: Windows TPM2 via the CNG API, macOS Secure Enclave via the Security framework, Linux TPM2 via tpm2-tools, and YubiKey or other PKCS#11 tokens. The seed is generated inside the hardware and never exported to process memory. Provides strong protection against disk theft, memory forensics, and cold-boot attacks.
-
 - **Threshold decryption (M-of-N)** ✓ _released_
   Split a private key seed across N shareholders using Shamir's Secret Sharing (GF(2^8) polynomial interpolation over the 64-byte seed). `pqfile split-key --threshold M --shares N privkey.pem` produces N share PEM files. `pqfile reconstruct-key` reassembles the seed from any M shares.
 
@@ -146,9 +143,6 @@ This document tracks planned improvements, new features, and security work acros
 - **Streaming decryptor type implementing Read** ✓ _released_
   `PqfReader<R: Read>` wraps a source reader and implements `Read`, yielding decrypted plaintext bytes incrementally. Each 64 KiB chunk is yielded only after its AEAD tag passes verification.
 
-- **Async I/O support**
-  Add `encrypt_stream_async` and `decrypt_stream_async` that accept `AsyncRead + AsyncWrite + Unpin` from `tokio::io`. Enables non-blocking encryption in async servers and proxies without spawning a dedicated OS thread per operation.
-
 - **Encrypted archive (multi-file bundle)** ✓ _released_
   `pqfile archive -r pubkey.pem -o bundle.pqf [files...]` packs multiple files into a single encrypted authenticated archive (PQFA format). `pqfile extract bundle.pqf -k privkey.pem` restores the original layout. All authentication happens before any file is written to disk on extraction.
 
@@ -157,21 +151,6 @@ This document tracks planned improvements, new features, and security work acros
 
 - **Compress-then-encrypt (zstd)** ✓ _released_
   `--compress` flag on `pqfile encrypt`. Plaintext is compressed with zstd before encryption. Decompression happens automatically after AEAD verification on decrypt.
-
-- **C FFI bindings**
-  Expose a `pqfile.h` C header via `cbindgen` so the crypto core can be used from C, Python (via `ctypes` / `cffi`), Go (`cgo`), or any language with C interop.
-
-- **Python bindings (PyO3)**
-  A thin `pqfile-py` crate wrapping the core with `#[pymodule]`. Publish to PyPI.
-
-- **npm / WASM package**
-  Package the WASM build as an npm module so browser and Node.js applications can call `encrypt`, `decrypt`, and `keygen` directly as JavaScript functions without loading the full egui app.
-
-- **Right-click / context-menu integration**
-  Add "Encrypt with pqfile" and "Decrypt with pqfile" to the OS file manager without needing a terminal. On Windows a lightweight shell extension or a simple registry entry pointing at the CLI covers Explorer. On macOS a Quick Action in Automator. On Linux a Nautilus script and a KDE Dolphin service menu entry. All crypto stays in the existing CLI process -- purely a discoverability and convenience layer.
-
-- **Browser-native encrypted file vault (OPFS)**
-  Extend the web GUI with a persistent encrypted file vault backed by the Web Origin Private File System API. Files are stored as `.pqf` blobs in OPFS and browsable through a file-manager panel. The session key lives in memory only while the vault is unlocked; an idle timeout or tab close locks it automatically. Turns the one-shot encrypt/decrypt page into a self-contained encrypted file manager with no backend or server involvement.
 
 - **Format specification (docs/FORMAT.md)** ✓ _released_
   Byte-level specification of all `.pqf` and `.pqfa` format versions (v2 through v7), covering the exact field layout, sizes, byte order, and invariants for each header and payload structure. Includes reference test vectors for each version and KEM variant combination.
@@ -203,21 +182,77 @@ This document tracks planned improvements, new features, and security work acros
 
 ---
 
-## v4.0 - API stability release (breaking API changes)
+## v4.0 - Format, hardware, and API stability release ✓ _released_
 
-The v4.0 release formalizes the stability commitment started in the v3.x audit. All items listed here are breaking changes relative to v3.x and require a major version bump.
+The v4.0 release is a major version increment covering three areas of breaking change: a passphrase key format upgrade, a new anonymous-recipient wire format, and the first stable crates.io publish.
 
-- **Formal 1.0 stability promise**
-  Publish STABILITY.md documenting the guaranteed stable surface: `pqfile::encrypt`, `pqfile::decrypt`, `pqfile::sign`, `pqfile::keygen`, `pqfile::keys`, `pqfile::inspect`, and `PqfileError`. Any future change to these modules that removes or renames a public item will require a new major version.
+### Breaking format changes
 
-- **Argon2id p=4 for passphrase-protected keys**
-  Increase the Argon2id parallelism parameter from p=1 to p=4 for passphrase-protected keys. OWASP recommends p=4 with the same m/t values (64 MiB, 3 iterations) to force brute-force attempts to occupy 4x the memory bandwidth. Migration path: a `pqfile repassphrase` command reads with old params and re-encrypts with new. A version byte in the encrypted body distinguishes the two parameter sets.
+- **Argon2id p=4 — hard break** ✓ _released_
+  Change `ARGON2_P_COST` from 1 to 4. All new passphrase-protected keys (ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, ML-DSA-65) are encrypted with p=4. Attempting to load a p=1 key through any normal path (`decrypt`, `sign`, `signdecrypt`, etc.) returns the new `PqfileError::LegacyKeyFormat` variant with a message directing the user to run `repassphrase --from-legacy`. The `--from-legacy` flag must be passed explicitly; there is no silent fallback. Motivated by OWASP 2023 guidance: p=4 forces each brute-force attempt to occupy 4× the memory bandwidth, hampering parallel GPU attacks.
+
+- **v8 anonymous format — variant-blind recipient entries** ✓ _released_
+  The v7 anonymous format still wrote `kem_variant: u16` per slot in the clear, leaking which KEM family each recipient uses. v8 drops the per-slot variant field entirely. All slots are a uniform 1616-byte entry (`PADDED_CT(1568) | WRAPPED_KEY(48)`). The decryptor uses its own key's CT length to extract the relevant prefix and attempt decapsulation. An observer learns only the recipient count, nothing about key types. 4.0 reads v7 for backward compatibility but drops v7 write entirely — `--anonymous-recipients` always emits v8. There is no flag to request v7 output; anyone needing to send to a 3.x receiver uses the 3.x CLI.
+
+- **Hardware-backed private keys (OS credential store + PKCS#11 stub)** ✓ _released_
+  `pqfile keygen --hardware [--label <name>]` and `pqfile sign-keygen --hardware [--label <name>]` generate key material inside a hardware security module; the seed never enters process memory. Supported backends:
+
+  | Platform | Backend |
+  |----------|---------|
+  | Windows | CNG with TPM Key Storage Provider |
+  | macOS | Secure Enclave (SecKeyCreateRandomKey) |
+  | Linux | TPM2 via tpm2-tss or p11-kit |
+  | Any platform | YubiKey or any PKCS#11 token via the `pkcs11` crate |
+
+  Hardware encryption keys are stored as a PEM stub (`ML-KEM-768 HARDWARE KEY REFERENCE`); hardware signing keys as `ML-DSA-65 HARDWARE SIGNING KEY REFERENCE`. Both stubs contain a platform-specific handle/URI rather than raw seed bytes. `decrypt`, `sign`, `signdecrypt`, and `signcrypt` auto-detect hardware stubs and route to the correct backend. Hardware keys cannot be passphrase-protected (the hardware provides that protection).
+
+### New commands
+
+- **`pqfile repassphrase`** ✓ _released_
+  Change or upgrade the passphrase on any key type. `--from-legacy` must be passed explicitly when migrating a p=1 key; omitting it on a p=1 key returns `LegacyKeyFormat` rather than silently retrying. Without `--from-legacy`, reads with p=4 and re-encrypts with p=4 (ordinary passphrase change on an already-upgraded key). Covers all five key types: ML-KEM-512, ML-KEM-768, ML-KEM-1024, hybrid X25519+ML-KEM-768, and ML-DSA-65.
+
+### API stability
+
+- **Async I/O** ✓ _released_
+  `pqfile::async_io::encrypt_stream_async` and `decrypt_stream_async` accept
+  `tokio::io::AsyncRead + AsyncWrite + Unpin`. Enabled via `pqfile = { features = ["async"] }`.
+  The ciphertext format is identical to the synchronous API; files are interoperable
+  between async and sync callers.
+
+- **Formal 1.0 stability promise** ✓ _released_
+  Publish `STABILITY.md` documenting the guaranteed stable surface: `pqfile::encrypt`, `pqfile::decrypt`, `pqfile::sign`, `pqfile::keygen`, `pqfile::keys`, `pqfile::inspect`, and `PqfileError`. `PqfileError` gains a new `LegacyKeyFormat` variant in 4.0 (returned when a p=1 encrypted key is loaded outside of `repassphrase --from-legacy`). Any future change that removes or renames a public item in these modules requires a new major version. Published to crates.io as `pqfile = "4.0.0"`, sharing the same version sequence as the CLI and GUI binaries.
 
 - **Passphrase parameter position standardized** ✓ _shipped in v3.3.x_
   The `passphrase: Option<&str>` parameter has been moved to the last position across all signing and rekeying functions (`sign_bytes`, `sign_file`, `rekey_stream`, `add_recipient_stream`, `signcrypt`, `signcrypt_bytes`). This is the primary breaking API change from the v3.x surface audit.
 
 - **Remove file-path wrapper functions** ✓ _shipped in v3.3.x_
   The `encrypt::encrypt(pubkey_path, input_path, output_path)` and `decrypt::decrypt(privkey_path, input_path, output_path, passphrase)` convenience wrappers have been removed. Callers open files themselves and pass `Read`/`Write` impls to the streaming API.
+
+---
+
+## Deferred / Under Consideration
+
+These features are understood well enough to implement but are not tied to a specific release milestone. They will be revisited once the v4.0 stability baseline is established.
+
+### C FFI bindings
+
+Expose a `pqfile.h` C header via `cbindgen` so the crypto core can be used from C, Python (via `ctypes` / `cffi`), Go (`cgo`), or any language with C interop. Deferred pending a concrete consumer driving the stable ABI shape.
+
+### Python bindings (PyO3)
+
+A thin `pqfile-py` crate wrapping the core with `#[pymodule]`, published to PyPI. Deferred until the C FFI vs direct PyO3 approach is decided.
+
+### npm / WASM package
+
+Package the WASM build as an npm module so browser and Node.js applications can call `encrypt`, `decrypt`, and `keygen` directly as JavaScript functions without loading the full egui app. Deferred until there is a clear downstream consumer defining the API shape.
+
+### Right-click / context-menu OS integration
+
+Add "Encrypt with pqfile" and "Decrypt with pqfile" to the OS file manager without needing a terminal. On Windows a lightweight shell extension or registry entry pointing at the CLI covers Explorer. On macOS a Quick Action in Automator. On Linux a Nautilus script and KDE Dolphin service menu entry. All crypto stays in the existing CLI process — purely a discoverability layer. Deferred as it adds no cryptographic value and varies significantly per platform.
+
+### Browser-native encrypted file vault (OPFS)
+
+Extend the web GUI with a persistent encrypted file vault backed by the Web Origin Private File System API. Files are stored as `.pqf` blobs in OPFS and browsable through a file-manager panel. The session key lives in memory only while the vault is unlocked; an idle timeout or tab close locks it automatically. Deferred pending OPFS API stabilization across browsers and a clear UX model for key management in that context.
 
 ---
 

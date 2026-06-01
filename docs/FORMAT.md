@@ -267,6 +267,57 @@ Decoders MUST reject files with COUNT greater than 1000 (same limit as v4).
 
 ---
 
+### 5.7 v8 - Variant-blind anonymous multi-recipient
+
+Supersedes v7 for `--anonymous-recipients` in pqfile 4.0+. v7 files remain
+readable; new anonymous files are always v8.
+
+The key difference from v7: the per-slot `KEM_VARIANT` field is **removed entirely**.
+Every slot is a uniform 1616 bytes. An observer learns only the recipient count;
+no information about key types is exposed.
+
+```
+Offset  Len         Field
+0       4           MAGIC
+4       1           VERSION (0x08)
+5       2           COUNT (u16 LE)
+7       var         RECIPIENT ENTRIES (COUNT x 1616 bytes each)
+7+N*E   12          BASE_NONCE
+19+N*E  8           ORIGINAL_SIZE
+27+N*E  var         STREAM chunks (chunk_size = 65536)
+```
+
+Each recipient entry (fixed 1616 bytes):
+
+```
+Len   Field
+1568  PADDED_CT (actual KEM CT zero-padded on the right to 1568 bytes)
+48    WRAPPED_KEY
+```
+
+Note: the `KEM_VARIANT` field present in v7 is absent in v8. The decryptor
+determines which prefix of the padded CT to use based on its own private
+key's variant (e.g. 1088 bytes for ML-KEM-768).
+
+**Decryption algorithm:**
+
+For each slot in the header:
+1. Extract the first `ct_len[dk.variant()]` bytes from PADDED_CT as the
+   candidate ciphertext.
+2. Attempt ML-KEM decapsulation. ML-KEM always produces a shared secret
+   value; on a wrong slot the resulting shared secret is pseudorandom
+   (implicit rejection per FIPS 203).
+3. Attempt AES-256-GCM unwrap of WRAPPED_KEY using the derived shared secret.
+4. If the AEAD tag verifies: the session key is recovered and decryption
+   proceeds. A false positive is computationally infeasible (probability
+   approximately 1 over 2^128).
+5. Otherwise: continue to the next slot.
+6. If no slot matches: return `NoMatchingRecipient`.
+
+Decoders MUST reject files with COUNT greater than 1000 (same limit as v4/v7).
+
+---
+
 ## 6. Key File Formats (PEM)
 
 Private and public keys are stored as PEM (RFC 7468) files. The PEM label determines the key type and protection status.

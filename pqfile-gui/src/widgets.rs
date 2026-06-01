@@ -46,9 +46,37 @@ pub(crate) fn tab_btn(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn tab_heading(ui: &mut egui::Ui, text: &str, dark: bool) {
     ui.label(RichText::new(text).size(18.0).strong().color(c_text(dark)));
     ui.add_space(4.0);
+}
+
+/// Renders a tab heading with a "Learn more..." button on the right.
+/// Returns `true` if the button was clicked this frame.
+pub(crate) fn tab_heading_help(ui: &mut egui::Ui, text: &str, dark: bool) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(text).size(18.0).strong().color(c_text(dark)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add(
+                    egui::Button::new(
+                        RichText::new("Learn more...")
+                            .size(12.0)
+                            .color(c_subtext(dark)),
+                    )
+                    .fill(c_surface0(dark))
+                    .min_size(egui::vec2(0.0, 22.0)),
+                )
+                .clicked()
+            {
+                clicked = true;
+            }
+        });
+    });
+    ui.add_space(4.0);
+    clicked
 }
 
 pub(crate) fn section_label(ui: &mut egui::Ui, text: &str, dark: bool) {

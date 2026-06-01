@@ -7,19 +7,17 @@ use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 
-// Argon2id parameters: m=64 MiB, t=3 iterations, p=1 lane.
+// Current Argon2id parameters (pqfile >= 4.0): m=64 MiB, t=3, p=4.
 //
-// p=1 (single lane) was chosen for single-threaded interactive use (~0.2 s on
-// modest hardware). The trade-off: a GPU attacker can run many independent
-// 64 MiB instances in parallel, each using p=1. OWASP 2023 recommends p=4
-// (four lanes) for the same m/t values — that forces each attempt to occupy
-// 4× as much memory bandwidth, hampering parallel hardware attacks.
-//
-// Increasing p_cost would break backward compatibility with existing encrypted
-// keys, so it is tracked as a planned v4.0 format change.
+// p=4 (four lanes) forces each brute-force attempt to occupy 4× the memory
+// bandwidth compared to p=1, hampering parallel GPU attacks. OWASP 2023
+// recommends p=4 for the same m/t values.
 const ARGON2_M_COST: u32 = 65536; // 64 MiB
 const ARGON2_T_COST: u32 = 3;
-const ARGON2_P_COST: u32 = 1;
+const ARGON2_P_COST: u32 = 4;
+
+// Legacy Argon2id p-cost (pqfile < 4.0). Used only to detect and migrate old keys.
+const ARGON2_P_COST_LEGACY: u32 = 1;
 
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
@@ -64,8 +62,12 @@ pub fn encrypt_seed(seed: &[u8; SEED_LEN], passphrase: &str) -> Result<Vec<u8>, 
     Ok(out)
 }
 
-/// Decrypts the 108-byte payload from an encrypted private key PEM body.
-/// Returns the 64-byte seed on success, or `WrongPassphrase` on failure.
+/// Decrypts the 108-byte payload from an encrypted private key PEM body using
+/// current (p=4) Argon2id parameters.
+///
+/// Returns `LegacyKeyFormat` if the body decrypts correctly only with the old
+/// p=1 parameters (pqfile < 4.0 key). Use `pqfile repassphrase --from-legacy`
+/// to upgrade such keys before use.
 pub fn decrypt_seed(
     body: &[u8],
     passphrase: &str,
@@ -76,12 +78,43 @@ pub fn decrypt_seed(
             got: body.len(),
         });
     }
+    // Try current params first.
+    if let Ok(seed) = try_decrypt_seed(body, passphrase, ARGON2_P_COST) {
+        return Ok(seed);
+    }
+    // If p=1 succeeds, the key is valid but needs migration.
+    if try_decrypt_seed(body, passphrase, ARGON2_P_COST_LEGACY).is_ok() {
+        return Err(PqfileError::LegacyKeyFormat);
+    }
+    Err(PqfileError::WrongPassphrase)
+}
 
+/// Decrypts a 108-byte body using the legacy p=1 Argon2id parameters.
+/// Only called by the `repassphrase --from-legacy` migration path.
+pub(crate) fn decrypt_seed_legacy(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
+    if body.len() != ENCRYPTED_BODY_LEN {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: ENCRYPTED_BODY_LEN,
+            got: body.len(),
+        });
+    }
+    try_decrypt_seed(body, passphrase, ARGON2_P_COST_LEGACY)
+        .map_err(|_| PqfileError::WrongPassphrase)
+}
+
+fn try_decrypt_seed(
+    body: &[u8],
+    passphrase: &str,
+    p_cost: u32,
+) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
     let salt = &body[..SALT_LEN];
     let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
     let ciphertext = &body[SALT_LEN + NONCE_LEN..];
 
-    let key = derive_key(passphrase, salt)?;
+    let key = derive_key_with_pcost(passphrase, salt, p_cost)?;
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
     let nonce = Nonce::from_slice(nonce_bytes);
 
@@ -127,6 +160,8 @@ pub fn encrypt_hybrid_seed(
 }
 
 /// Decrypts the 140-byte payload from an encrypted hybrid private key PEM body.
+///
+/// Returns `LegacyKeyFormat` if the body was encrypted with legacy p=1 parameters.
 pub fn decrypt_hybrid_seed(
     body: &[u8],
     passphrase: &str,
@@ -137,12 +172,41 @@ pub fn decrypt_hybrid_seed(
             got: body.len(),
         });
     }
+    if let Ok(seed) = try_decrypt_hybrid_seed(body, passphrase, ARGON2_P_COST) {
+        return Ok(seed);
+    }
+    if try_decrypt_hybrid_seed(body, passphrase, ARGON2_P_COST_LEGACY).is_ok() {
+        return Err(PqfileError::LegacyKeyFormat);
+    }
+    Err(PqfileError::WrongPassphrase)
+}
 
+/// Decrypts a 140-byte hybrid body using legacy p=1 parameters.
+/// Only called by the `repassphrase --from-legacy` migration path.
+pub(crate) fn decrypt_hybrid_seed_legacy(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
+    if body.len() != ENCRYPTED_HYBRID_BODY_LEN {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: ENCRYPTED_HYBRID_BODY_LEN,
+            got: body.len(),
+        });
+    }
+    try_decrypt_hybrid_seed(body, passphrase, ARGON2_P_COST_LEGACY)
+        .map_err(|_| PqfileError::WrongPassphrase)
+}
+
+fn try_decrypt_hybrid_seed(
+    body: &[u8],
+    passphrase: &str,
+    p_cost: u32,
+) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
     let salt = &body[..SALT_LEN];
     let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
     let ciphertext = &body[SALT_LEN + NONCE_LEN..];
 
-    let key = derive_key(passphrase, salt)?;
+    let key = derive_key_with_pcost(passphrase, salt, p_cost)?;
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
     let nonce = Nonce::from_slice(nonce_bytes);
 
@@ -197,7 +261,8 @@ pub fn encrypt_signing_seed(
 }
 
 /// Decrypts the 76-byte payload from an encrypted ML-DSA-65 signing key PEM body.
-/// Returns the 32-byte signing seed on success, or `WrongPassphrase` on failure.
+///
+/// Returns `LegacyKeyFormat` if the body was encrypted with legacy p=1 parameters.
 pub fn decrypt_signing_seed(
     body: &[u8],
     passphrase: &str,
@@ -208,12 +273,41 @@ pub fn decrypt_signing_seed(
             got: body.len(),
         });
     }
+    if let Ok(seed) = try_decrypt_signing_seed(body, passphrase, ARGON2_P_COST) {
+        return Ok(seed);
+    }
+    if try_decrypt_signing_seed(body, passphrase, ARGON2_P_COST_LEGACY).is_ok() {
+        return Err(PqfileError::LegacyKeyFormat);
+    }
+    Err(PqfileError::WrongPassphrase)
+}
 
+/// Decrypts a 76-byte signing body using legacy p=1 parameters.
+/// Only called by the `repassphrase --from-legacy` migration path.
+pub(crate) fn decrypt_signing_seed_legacy(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; SIGNING_SEED_LEN]>, PqfileError> {
+    if body.len() != ENCRYPTED_SIGNING_BODY_LEN {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: ENCRYPTED_SIGNING_BODY_LEN,
+            got: body.len(),
+        });
+    }
+    try_decrypt_signing_seed(body, passphrase, ARGON2_P_COST_LEGACY)
+        .map_err(|_| PqfileError::WrongPassphrase)
+}
+
+fn try_decrypt_signing_seed(
+    body: &[u8],
+    passphrase: &str,
+    p_cost: u32,
+) -> Result<Zeroizing<[u8; SIGNING_SEED_LEN]>, PqfileError> {
     let salt = &body[..SALT_LEN];
     let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
     let ciphertext = &body[SALT_LEN + NONCE_LEN..];
 
-    let key = derive_key(passphrase, salt)?;
+    let key = derive_key_with_pcost(passphrase, salt, p_cost)?;
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
     let nonce = Nonce::from_slice(nonce_bytes);
 
@@ -233,7 +327,15 @@ pub fn decrypt_signing_seed(
 }
 
 fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
-    let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, Some(32))
+    derive_key_with_pcost(passphrase, salt, ARGON2_P_COST)
+}
+
+fn derive_key_with_pcost(
+    passphrase: &str,
+    salt: &[u8],
+    p_cost: u32,
+) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, p_cost, Some(32))
         .map_err(|_| PqfileError::EncryptionFailure)?;
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut key = Zeroizing::new([0u8; 32]);
@@ -246,6 +348,61 @@ fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, Pqfi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Helpers that produce legacy (p=1) bodies for migration tests ──────────
+
+    fn encrypt_seed_legacy(seed: &[u8; SEED_LEN], passphrase: &str) -> Vec<u8> {
+        let mut salt = [0u8; SALT_LEN];
+        getrandom::fill(&mut salt).unwrap();
+        let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce_bytes).unwrap();
+        let ct = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), seed.as_slice())
+            .unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(&salt);
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ct);
+        out
+    }
+
+    fn encrypt_signing_seed_legacy(seed: &[u8; SIGNING_SEED_LEN], passphrase: &str) -> Vec<u8> {
+        let mut salt = [0u8; SALT_LEN];
+        getrandom::fill(&mut salt).unwrap();
+        let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce_bytes).unwrap();
+        let ct = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), seed.as_slice())
+            .unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(&salt);
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ct);
+        out
+    }
+
+    fn encrypt_hybrid_seed_legacy(seed: &[u8; HYBRID_SEED_LEN], passphrase: &str) -> Vec<u8> {
+        let mut salt = [0u8; SALT_LEN];
+        getrandom::fill(&mut salt).unwrap();
+        let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce_bytes).unwrap();
+        let ct = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), seed.as_slice())
+            .unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(&salt);
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ct);
+        out
+    }
+
+    // ── Current (p=4) round-trips ─────────────────────────────────────────────
 
     #[test]
     fn roundtrip_correct_passphrase() {
@@ -271,7 +428,6 @@ mod tests {
         let seed = [0x01u8; SEED_LEN];
         let a = encrypt_seed(&seed, "pass").unwrap();
         let b = encrypt_seed(&seed, "pass").unwrap();
-        // Different random salt and nonce each time.
         assert_ne!(a, b);
     }
 
@@ -282,6 +438,48 @@ mod tests {
             Err(PqfileError::InvalidKeyLength { .. })
         ));
     }
+
+    // ── Legacy detection ──────────────────────────────────────────────────────
+
+    #[test]
+    fn legacy_key_returns_legacy_key_format_error() {
+        let seed = [0x11u8; SEED_LEN];
+        let legacy_body = encrypt_seed_legacy(&seed, "correct");
+        assert!(matches!(
+            decrypt_seed(&legacy_body, "correct"),
+            Err(PqfileError::LegacyKeyFormat)
+        ));
+    }
+
+    #[test]
+    fn legacy_key_wrong_passphrase_returns_wrong_passphrase() {
+        let seed = [0x22u8; SEED_LEN];
+        let legacy_body = encrypt_seed_legacy(&seed, "correct");
+        assert!(matches!(
+            decrypt_seed(&legacy_body, "wrong"),
+            Err(PqfileError::WrongPassphrase)
+        ));
+    }
+
+    #[test]
+    fn decrypt_seed_legacy_roundtrip() {
+        let seed = [0x33u8; SEED_LEN];
+        let legacy_body = encrypt_seed_legacy(&seed, "migrate-me");
+        let recovered = decrypt_seed_legacy(&legacy_body, "migrate-me").unwrap();
+        assert_eq!(*recovered, seed);
+    }
+
+    #[test]
+    fn decrypt_seed_legacy_wrong_passphrase() {
+        let seed = [0x44u8; SEED_LEN];
+        let legacy_body = encrypt_seed_legacy(&seed, "correct");
+        assert!(matches!(
+            decrypt_seed_legacy(&legacy_body, "wrong"),
+            Err(PqfileError::WrongPassphrase)
+        ));
+    }
+
+    // ── Hybrid (p=4) ──────────────────────────────────────────────────────────
 
     #[test]
     fn hybrid_roundtrip_correct_passphrase() {
@@ -319,6 +517,26 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_legacy_key_returns_legacy_key_format_error() {
+        let seed = [0xCCu8; HYBRID_SEED_LEN];
+        let legacy_body = encrypt_hybrid_seed_legacy(&seed, "correct");
+        assert!(matches!(
+            decrypt_hybrid_seed(&legacy_body, "correct"),
+            Err(PqfileError::LegacyKeyFormat)
+        ));
+    }
+
+    #[test]
+    fn decrypt_hybrid_seed_legacy_roundtrip() {
+        let seed = [0xDDu8; HYBRID_SEED_LEN];
+        let legacy_body = encrypt_hybrid_seed_legacy(&seed, "migrate-me");
+        let recovered = decrypt_hybrid_seed_legacy(&legacy_body, "migrate-me").unwrap();
+        assert_eq!(*recovered, seed);
+    }
+
+    // ── Signing (p=4) ─────────────────────────────────────────────────────────
+
+    #[test]
     fn signing_roundtrip_correct_passphrase() {
         let seed = [0x11u8; SIGNING_SEED_LEN];
         let body = encrypt_signing_seed(&seed, "signpass").unwrap();
@@ -351,5 +569,23 @@ mod tests {
         let a = encrypt_signing_seed(&seed, "pass").unwrap();
         let b = encrypt_signing_seed(&seed, "pass").unwrap();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn signing_legacy_key_returns_legacy_key_format_error() {
+        let seed = [0x55u8; SIGNING_SEED_LEN];
+        let legacy_body = encrypt_signing_seed_legacy(&seed, "correct");
+        assert!(matches!(
+            decrypt_signing_seed(&legacy_body, "correct"),
+            Err(PqfileError::LegacyKeyFormat)
+        ));
+    }
+
+    #[test]
+    fn decrypt_signing_seed_legacy_roundtrip() {
+        let seed = [0x66u8; SIGNING_SEED_LEN];
+        let legacy_body = encrypt_signing_seed_legacy(&seed, "migrate-me");
+        let recovered = decrypt_signing_seed_legacy(&legacy_body, "migrate-me").unwrap();
+        assert_eq!(*recovered, seed);
     }
 }

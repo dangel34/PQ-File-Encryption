@@ -2,14 +2,18 @@ use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::colors::{c_overlay, c_text};
-use crate::types::{KeygenAlgorithm, OpStatus};
-use crate::widgets::{card, section_label, show_status, tab_heading};
+use crate::types::{KeygenAlgorithm, OpStatus, Tab};
+use crate::widgets::{card, section_label, show_status, tab_heading_help};
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::keygen;
+#[cfg(not(target_arch = "wasm32"))]
+use pqfile::keygen::keygen_hardware;
 
 impl PqfileApp {
     pub(crate) fn show_keygen(&mut self, ui: &mut egui::Ui, dark: bool) {
-        tab_heading(ui, "Generate Key Pair", dark);
+        if tab_heading_help(ui, "Generate Key Pair", dark) {
+            self.help_modal_open = Some(Tab::Keygen);
+        }
         ui.label(
             RichText::new("Creates a new post-quantum key pair for encryption.")
                 .size(13.0)
@@ -103,17 +107,60 @@ impl PqfileApp {
         });
         ui.add_space(14.0);
 
-        section_label(ui, "PASSPHRASE (OPTIONAL)", dark);
-        card(ui, c_card(dark), c_surface1(dark), |ui| {
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.keygen_use_passphrase, "");
-                ui.label(
-                    RichText::new("Protect private key with a passphrase")
+        // Hardware keys are only available in the native build.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            section_label(ui, "HARDWARE KEY (OPTIONAL)", dark);
+            card(ui, c_card(dark), c_surface1(dark), |ui| {
+                ui.checkbox(
+                    &mut self.keygen_use_hardware,
+                    RichText::new("Store private key in OS credential store (hardware-backed)")
                         .size(13.0)
                         .color(c_subtext(dark)),
                 );
+                if self.keygen_use_hardware {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(
+                            "The seed is stored in Windows Credential Manager / macOS Keychain \
+                             / Linux Secret Service. No seed bytes are written to disk.",
+                        )
+                        .size(12.0)
+                        .color(c_subtext(dark)),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.keygen_hardware_label)
+                            .hint_text("Key label (e.g. my-pqfile-key)...")
+                            .desired_width(f32::INFINITY),
+                    );
+                    // Disable passphrase when hardware is active.
+                    self.keygen_use_passphrase = false;
+                }
             });
-            if self.keygen_use_passphrase {
+            ui.add_space(14.0);
+        }
+
+        section_label(ui, "PASSPHRASE (OPTIONAL)", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            let hw_active = self.keygen_use_hardware;
+            ui.add_enabled_ui(!hw_active, |ui| {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.keygen_use_passphrase, "");
+                    ui.label(
+                        RichText::new("Protect private key with a passphrase")
+                            .size(13.0)
+                            .color(c_subtext(dark)),
+                    );
+                });
+            });
+            if hw_active {
+                ui.label(
+                    RichText::new("Passphrase protection is not used with hardware-backed keys.")
+                        .size(12.0)
+                        .color(c_subtext(dark)),
+                );
+            } else if self.keygen_use_passphrase {
                 ui.add_space(6.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut *self.keygen_passphrase)
@@ -178,16 +225,32 @@ impl PqfileApp {
                 return;
             }
             let dir = std::path::Path::new(&self.settings.output_dir);
-            // force=true when confirm_overwrite is off (the default): overwrite freely.
-            // force=false when confirm_overwrite is on: refuse if either key file exists.
             let force = !self.settings.confirm_overwrite;
-            self.keygen_status = match keygen::keygen(dir, force, level, passphrase, hybrid) {
-                Ok(fp) => OpStatus::Ok(format!(
-                    "Keys saved to {}\nFingerprint: {fp}",
-                    dir.display()
-                )),
-                Err(e) => OpStatus::Err(e.to_string()),
-            };
+
+            if self.keygen_use_hardware {
+                let label = self.keygen_hardware_label.trim().to_owned();
+                if label.is_empty() {
+                    self.keygen_status =
+                        OpStatus::Err("Enter a label for the hardware key.".to_owned());
+                    return;
+                }
+                self.keygen_status = match keygen_hardware(dir, force, level, hybrid, &label) {
+                    Ok(fp) => OpStatus::Ok(format!(
+                        "Hardware-backed keys saved to {}\n\
+                             Seed stored in OS credential store.\nFingerprint: {fp}",
+                        dir.display()
+                    )),
+                    Err(e) => OpStatus::Err(e.to_string()),
+                };
+            } else {
+                self.keygen_status = match keygen::keygen(dir, force, level, passphrase, hybrid) {
+                    Ok(fp) => OpStatus::Ok(format!(
+                        "Keys saved to {}\nFingerprint: {fp}",
+                        dir.display()
+                    )),
+                    Err(e) => OpStatus::Err(e.to_string()),
+                };
+            }
         }
 
         #[cfg(target_arch = "wasm32")]

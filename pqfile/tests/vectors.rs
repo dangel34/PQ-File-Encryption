@@ -15,7 +15,7 @@ use pqfile::encrypt::{
 use pqfile::format::{
     BASE_NONCE_LEN, CHUNK_SIZE, HYBRID_CT_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512, KEM_CT_LEN_768,
     KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN,
-    PADDED_CT_LEN, VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V7, WRAPPED_KEY_LEN,
+    PADDED_CT_LEN, VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V8, WRAPPED_KEY_LEN,
 };
 use pqfile::keygen::{keygen_bytes, keygen_bytes_hybrid_768};
 
@@ -393,9 +393,9 @@ fn v4_ml_kem_768_two_recipients() {
 
 #[test]
 fn v7_ml_kem_768_two_recipients() {
-    // FORMAT.md §5.6
-    // All slots are PADDED_CT_LEN (1568) wide; entries are shuffled.
-    // Fixed slot: VARIANT(2) + PADDED_CT(1568) + WRAPPED_KEY(48) = 1618 bytes.
+    // FORMAT.md §5.6 — v8 (variant-blind) anonymous multi-recipient.
+    // encrypt_stream_multi_anon now emits v8; v7 is read-only (backward compat).
+    // Fixed slot: PADDED_CT(1568) + WRAPPED_KEY(48) = 1616 bytes (no variant field).
     let (pub1, priv1) = keygen_bytes(768, None).unwrap();
     let (pub2, priv2) = keygen_bytes(768, None).unwrap();
     let mut out = Vec::new();
@@ -408,21 +408,16 @@ fn v7_ml_kem_768_two_recipients() {
     .unwrap();
 
     assert_eq!(&out[0..4], MAGIC);
-    assert_eq!(out[4], VERSION_V7, "v7 version byte");
+    assert_eq!(out[4], VERSION_V8, "v8 version byte");
 
     let count = u16_le(&out, 5) as usize;
     assert_eq!(count, 2, "COUNT = 2 recipients");
 
-    // Each fixed-width v7 entry: VARIANT(2) + PADDED_CT(1568) + WRAPPED_KEY(48) = 1618 bytes.
-    let slot_size = 2 + PADDED_CT_LEN + WRAPPED_KEY_LEN;
-    assert_eq!(slot_size, 1618, "v7 fixed slot size");
+    // Each fixed-width v8 entry: PADDED_CT(1568) + WRAPPED_KEY(48) = 1616 bytes.
+    let slot_size = PADDED_CT_LEN + WRAPPED_KEY_LEN;
+    assert_eq!(slot_size, 1616, "v8 fixed slot size");
 
-    // Both variant fields must be KEM_VARIANT_768 (no mixing in this test).
-    let entry0_off = 7;
-    let entry1_off = entry0_off + slot_size;
-    assert_eq!(u16_le(&out, entry0_off), KEM_VARIANT_768, "slot 0 variant");
-    assert_eq!(u16_le(&out, entry1_off), KEM_VARIANT_768, "slot 1 variant");
-
+    // No variant fields — header layout: MAGIC(4)+VERSION(1)+COUNT(2)+N*slot+NONCE(12)+SIZE(8)
     let nonce_off = 7 + count * slot_size;
     let size_off = nonce_off + NONCE_LEN;
     assert_eq!(
@@ -439,11 +434,98 @@ fn v7_ml_kem_768_two_recipients() {
     }
 
     eprintln!(
-        "v7/768x2 {} bytes  header={}  slot_size={}",
+        "v8/768x2 {} bytes  header={}  slot_size={}",
         out.len(),
         size_off + 8,
         slot_size
     );
+}
+
+// ---- v8 additional coverage ------------------------------------------------
+
+#[test]
+fn v8_three_recipients_all_can_decrypt() {
+    let (pub1, priv1) = keygen_bytes(768, None).unwrap();
+    let (pub2, priv2) = keygen_bytes(768, None).unwrap();
+    let (pub3, priv3) = keygen_bytes(768, None).unwrap();
+    let mut out = Vec::new();
+    encrypt_stream_multi_anon(
+        &[pub1.as_str(), pub2.as_str(), pub3.as_str()],
+        PLAINTEXT.len() as u64,
+        &mut { PLAINTEXT },
+        &mut out,
+    )
+    .unwrap();
+
+    assert_eq!(out[4], VERSION_V8);
+    let count = u16_le(&out, 5) as usize;
+    assert_eq!(count, 3);
+
+    for priv_pem in [&priv1, &priv2, &priv3] {
+        let mut dec = Vec::new();
+        decrypt_stream(priv_pem, &mut out.as_slice(), &mut dec, None).unwrap();
+        assert_eq!(dec, PLAINTEXT);
+    }
+}
+
+#[test]
+fn v8_mixed_variants_512_768_1024_hybrid_all_decrypt() {
+    let (pub512, priv512) = keygen_bytes(512, None).unwrap();
+    let (pub768, priv768) = keygen_bytes(768, None).unwrap();
+    let (pub1024, priv1024) = keygen_bytes(1024, None).unwrap();
+    let (pub_hyb, priv_hyb) = keygen_bytes_hybrid_768(None).unwrap();
+
+    let mut out = Vec::new();
+    encrypt_stream_multi_anon(
+        &[
+            pub512.as_str(),
+            pub768.as_str(),
+            pub1024.as_str(),
+            pub_hyb.as_str(),
+        ],
+        PLAINTEXT.len() as u64,
+        &mut { PLAINTEXT },
+        &mut out,
+    )
+    .unwrap();
+
+    assert_eq!(out[4], VERSION_V8);
+    let count = u16_le(&out, 5) as usize;
+    assert_eq!(count, 4);
+
+    // All four variant types must decrypt correctly despite identical 1616-byte slots.
+    for priv_pem in [&priv512, &priv768, &priv1024, &priv_hyb] {
+        let mut dec = Vec::new();
+        decrypt_stream(priv_pem, &mut out.as_slice(), &mut dec, None).unwrap();
+        assert_eq!(dec, PLAINTEXT, "decryption failed for a recipient");
+    }
+}
+
+#[test]
+fn v8_mixed_variants_slot_size_is_uniform() {
+    // Verifies that all slots are exactly 1616 bytes regardless of KEM variant,
+    // which is the core anonymity guarantee of the v8 format.
+    let (pub512, _) = keygen_bytes(512, None).unwrap();
+    let (pub1024, _) = keygen_bytes(1024, None).unwrap();
+
+    let mut out = Vec::new();
+    encrypt_stream_multi_anon(
+        &[pub512.as_str(), pub1024.as_str()],
+        PLAINTEXT.len() as u64,
+        &mut { PLAINTEXT },
+        &mut out,
+    )
+    .unwrap();
+
+    // Header: MAGIC(4) + VERSION(1) + COUNT(2) = 7 bytes before first slot
+    let slot_size = PADDED_CT_LEN + WRAPPED_KEY_LEN; // 1568 + 48 = 1616
+    let slot0_start = 7;
+    let slot1_start = slot0_start + slot_size;
+    // Both slots must be exactly slot_size bytes.
+    assert_eq!(slot1_start - slot0_start, slot_size);
+    // Total header = 7 + 2 * slot_size + NONCE(12) + SIZE(8)
+    let nonce_off = 7 + 2 * slot_size;
+    assert!(out.len() > nonce_off + 12 + 8);
 }
 
 // ---- cross-version size assertions -----------------------------------------

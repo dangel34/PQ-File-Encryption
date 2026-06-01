@@ -10,6 +10,7 @@ use crate::error::PqfileError;
 use crate::format::{
     HYBRID_SEED_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
 };
+use crate::hardware;
 use crate::keygen::{
     PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_512, PRIV_ENC_TAG_HYBRID_768, PRIV_TAG,
     PRIV_TAG_1024, PRIV_TAG_512, PRIV_TAG_HYBRID_768, PUB_TAG, PUB_TAG_1024, PUB_TAG_512,
@@ -178,6 +179,24 @@ fn extract_seed(
     passphrase: Option<&str>,
 ) -> Result<(u16, Zeroizing<Vec<u8>>), PqfileError> {
     let parsed = pem::parse(privkey_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+
+    // Hardware key stubs: load the seed from the OS credential store.
+    if hardware::is_hardware_tag(parsed.tag()) {
+        let seed = hardware::load_seed(parsed.contents())?;
+        let variant = match parsed.tag() {
+            t if t == hardware::HW_TAG_512 => KEM_VARIANT_512,
+            t if t == hardware::HW_TAG_768 => KEM_VARIANT_768,
+            t if t == hardware::HW_TAG_1024 => KEM_VARIANT_1024,
+            t if t == hardware::HW_TAG_HYBRID_768 => KEM_VARIANT_HYBRID_768,
+            tag => {
+                return Err(PqfileError::InvalidPem(format!(
+                    "hardware signing keys cannot be split; unexpected tag: {tag}"
+                )))
+            }
+        };
+        return Ok((variant, seed));
+    }
+
     let (variant, seed) = match parsed.tag() {
         t @ (PRIV_TAG | PRIV_ENC_TAG) => {
             let seed = load_64byte_seed(t, parsed.contents(), passphrase)?;

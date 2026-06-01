@@ -6,8 +6,8 @@ use std::io::Read;
 
 use crate::error::PqfileError;
 use crate::format::{
-    PqfHeader, PqfHeaderV4, PqfHeaderV7, NONCE_LEN, VERSION, VERSION_V3, VERSION_V4, VERSION_V5,
-    VERSION_V6, VERSION_V7,
+    PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, NONCE_LEN, VERSION, VERSION_V3, VERSION_V4,
+    VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8,
 };
 
 /// KEM variant information for a single recipient slot.
@@ -23,10 +23,9 @@ pub struct RecipientInfo {
 /// Returned by [`inspect_stream`]. The enum is `#[non_exhaustive]` — new format
 /// versions may add variants in future releases.
 ///
-/// The named fields of the existing variants (`Single`, `Multi`, `AnonMulti`) are
-/// considered **stable**: new format versions will always introduce new enum variants
-/// rather than new fields on existing variants. Code that matches these fields with
-/// `..` remains forward-compatible.
+/// The named fields of the existing variants (`Single`, `Multi`, `AnonMulti`,
+/// `AnonMultiV8`) are considered **stable**: new format versions will always
+/// introduce new enum variants rather than new fields on existing variants.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum PqfHeaderInfo {
@@ -59,11 +58,21 @@ pub enum PqfHeaderInfo {
         original_size: u64,
     },
     /// Anonymous multi-recipient format (v7): all KEM ciphertexts are padded to a uniform
-    /// size and entries are written in a randomised order so no observer can determine
-    /// which slot belongs to which recipient.
+    /// size and entries are written in a randomised order. KEM variant is still visible
+    /// per slot (read-only; pqfile 4.0+ always writes v8 for new anonymous files).
     AnonMulti {
         /// Recipient slots in the (shuffled) order they appear on disk.
         recipients: Vec<RecipientInfo>,
+        /// Base nonce for the STREAM payload.
+        nonce: [u8; NONCE_LEN],
+        /// Uncompressed plaintext size in bytes.
+        original_size: u64,
+    },
+    /// Variant-blind anonymous multi-recipient format (v8): all slots are a uniform
+    /// 1616-byte entry with no KEM variant field. Only the slot count is observable.
+    AnonMultiV8 {
+        /// Number of recipient slots.
+        slot_count: usize,
         /// Base nonce for the STREAM payload.
         nonce: [u8; NONCE_LEN],
         /// Uncompressed plaintext size in bytes.
@@ -118,6 +127,14 @@ pub fn inspect_stream<R: Read>(reader: &mut R) -> Result<PqfHeaderInfo, PqfileEr
                         kem_variant: r.kem_variant,
                     })
                     .collect(),
+                nonce: h.nonce,
+                original_size: h.original_size,
+            })
+        }
+        VERSION_V8 => {
+            let h = PqfHeaderV8::read_body(reader)?;
+            Ok(PqfHeaderInfo::AnonMultiV8 {
+                slot_count: h.recipients.len(),
                 nonce: h.nonce,
                 original_size: h.original_size,
             })

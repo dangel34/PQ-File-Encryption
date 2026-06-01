@@ -17,6 +17,7 @@ use zeroize::Zeroizing;
 pub struct PqfileApp {
     pub(crate) tab: Tab,
     pub(crate) show_about: bool,
+    pub(crate) help_modal_open: Option<Tab>,
     pub(crate) settings: Settings,
     pub(crate) app_icon: Option<egui::TextureHandle>,
 
@@ -118,7 +119,24 @@ pub struct PqfileApp {
     pub(crate) shamir_shares_pending: BatchPending,
     pub(crate) shamir_reconstruct_status: OpStatus,
 
-    // ── Tools tab (Revoke + Rekey) ────────────────────────────────────────
+    // ── Keygen — hardware key fields ──────────────────────────────────────
+    pub(crate) keygen_use_hardware: bool,
+    pub(crate) keygen_hardware_label: String,
+
+    // ── Sign — hardware signing key fields ────────────────────────────────
+    pub(crate) sign_keygen_use_hardware: bool,
+    pub(crate) sign_keygen_hardware_label: String,
+
+    // ── Tools tab (Revoke + Rekey + Repassphrase) ─────────────────────────
+    pub(crate) repassphrase_key: FileInput,
+    pub(crate) repassphrase_old_passphrase: Zeroizing<String>,
+    pub(crate) repassphrase_old_passphrase_visible: bool,
+    pub(crate) repassphrase_new_passphrase: Zeroizing<String>,
+    pub(crate) repassphrase_new_passphrase_confirm: Zeroizing<String>,
+    pub(crate) repassphrase_new_passphrase_visible: bool,
+    pub(crate) repassphrase_from_legacy: bool,
+    pub(crate) repassphrase_status: OpStatus,
+
     pub(crate) revoke_pubkey: FileInput,
     pub(crate) revoke_reason: String,
     pub(crate) revoke_status: OpStatus,
@@ -138,6 +156,7 @@ impl Default for PqfileApp {
         Self {
             tab: Tab::Keygen,
             show_about: false,
+            help_modal_open: None,
             settings: Settings::default(),
             app_icon: None,
             keygen_passphrase: Zeroizing::new(String::new()),
@@ -213,6 +232,18 @@ impl Default for PqfileApp {
             shamir_shares: Vec::new(),
             shamir_shares_pending: Arc::new(Mutex::new(None)),
             shamir_reconstruct_status: OpStatus::None,
+            keygen_use_hardware: false,
+            keygen_hardware_label: String::new(),
+            sign_keygen_use_hardware: false,
+            sign_keygen_hardware_label: String::new(),
+            repassphrase_key: FileInput::default(),
+            repassphrase_old_passphrase: Zeroizing::new(String::new()),
+            repassphrase_old_passphrase_visible: false,
+            repassphrase_new_passphrase: Zeroizing::new(String::new()),
+            repassphrase_new_passphrase_confirm: Zeroizing::new(String::new()),
+            repassphrase_new_passphrase_visible: false,
+            repassphrase_from_legacy: bool::default(),
+            repassphrase_status: OpStatus::None,
             revoke_pubkey: FileInput::default(),
             revoke_reason: String::new(),
             revoke_status: OpStatus::None,
@@ -389,6 +420,11 @@ impl eframe::App for PqfileApp {
         // ── About modal ────────────────────────────────────────────────────
         if self.show_about {
             self.show_about_window(&ctx, dark);
+        }
+
+        // ── Tab help modal ─────────────────────────────────────────────────
+        if self.help_modal_open.is_some() {
+            self.show_tab_help_window(&ctx, dark);
         }
 
         // ── Central panel ──────────────────────────────────────────────────
@@ -902,6 +938,283 @@ impl PqfileApp {
         if close {
             self.show_about = false;
         }
+    }
+
+    // ── Tab help modal ────────────────────────────────────────────────────────
+
+    pub(crate) fn show_tab_help_window(&mut self, ctx: &egui::Context, dark: bool) {
+        let tab = match self.help_modal_open {
+            Some(t) => t,
+            None => return,
+        };
+
+        let (title, body) = tab_help_content(tab);
+        let mut close = false;
+
+        egui::Window::new(RichText::new(title).size(14.0).strong().color(c_text(dark)))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .fixed_size([460.0, 460.0])
+            .frame(
+                egui::Frame::window(&ctx.global_style())
+                    .fill(c_bg(dark))
+                    .stroke(Stroke::new(2.0, c_subtext(dark)))
+                    .corner_radius(CornerRadius::same(10)),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(390.0)
+                    .auto_shrink([true, true])
+                    .show(ui, |ui| {
+                        ui.add_space(6.0);
+                        for paragraph in body {
+                            if paragraph.starts_with("##") {
+                                let heading = paragraph.trim_start_matches('#').trim();
+                                ui.add_space(6.0);
+                                section_label(ui, heading, dark);
+                                ui.add_space(2.0);
+                            } else {
+                                ui.label(
+                                    RichText::new(*paragraph).size(13.0).color(c_subtext(dark)),
+                                );
+                                ui.add_space(4.0);
+                            }
+                        }
+                        ui.add_space(8.0);
+                    });
+
+                ui.separator();
+                ui.add_space(6.0);
+                ui.vertical_centered(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Close").size(13.0).color(c_text(dark)),
+                            )
+                            .fill(c_surface0(dark))
+                            .min_size(Vec2::new(88.0, 30.0)),
+                        )
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+                ui.add_space(4.0);
+            });
+
+        if close {
+            self.help_modal_open = None;
+        }
+    }
+}
+
+fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
+    match tab {
+        Tab::Keygen => ("Key Pair Generation", &[
+            "This tab generates the cryptographic key pair that makes everything in pqfile work. \
+             You create a public key that anyone can use to encrypt files for you, and a private \
+             key that only you can use to decrypt them.",
+            "## WHY POST-QUANTUM?",
+            "Traditional encryption algorithms such as RSA and ECDSA rely on mathematical \
+             problems that quantum computers will be able to solve efficiently. pqfile uses \
+             ML-KEM (NIST FIPS 203), a Key Encapsulation Mechanism standardized specifically \
+             to resist quantum attacks. Your keys will remain secure even as quantum hardware \
+             matures.",
+            "## SECURITY LEVELS",
+            "ML-KEM-512 offers a good balance of security and performance for most uses. \
+             ML-KEM-768 is the recommended default and matches the security of AES-192. \
+             ML-KEM-1024 provides the highest level of assurance. Hybrid X25519 + ML-KEM-768 \
+             combines a classical algorithm with the post-quantum one for defense in depth.",
+            "## PROTECTING YOUR PRIVATE KEY",
+            "Your private key is the crown jewel. If you lose it, files encrypted to your \
+             public key cannot be recovered. If someone obtains it, they can read your files. \
+             Using a passphrase encrypts the private key at rest using Argon2id with \
+             memory-hard parameters. Hardware-backed keys store the seed in your OS credential \
+             store for an additional layer of protection.",
+        ]),
+        Tab::Encrypt => ("Encrypt Files", &[
+            "Encryption transforms a file into ciphertext that only the intended recipient \
+             can read. pqfile uses authenticated encryption, so the recipient can verify \
+             the file has not been tampered with during transit or storage.",
+            "## HOW IT WORKS",
+            "You load the recipient's public key (.pem file), choose the file you want to \
+             protect, and pqfile produces a .pqf file. The contents are split into chunks, \
+             each independently authenticated with ChaCha20-Poly1305, so even a partial file \
+             transfer can be verified up to the point of truncation.",
+            "## MULTIPLE RECIPIENTS",
+            "You can add several public keys to encrypt one file for multiple people at once. \
+             A single random session key encrypts the payload. Each recipient's key wraps a \
+             copy of that session key. Any one of them can decrypt independently.",
+            "## ANONYMOUS MODE",
+            "When you use multiple recipients, pqfile automatically uses the v8 anonymous \
+             format. This hides which key type each recipient uses and randomizes the order \
+             of recipient entries, so an observer cannot tell how many or what kind of keys \
+             were used.",
+        ]),
+        Tab::Decrypt => ("Decrypt Files", &[
+            "Decryption recovers the original file from a .pqf ciphertext using your private \
+             key. Each chunk is authenticated before any plaintext is written, so you can trust \
+             that what you receive is exactly what was encrypted.",
+            "## WHAT HAPPENS STEP BY STEP",
+            "pqfile reads the file header to find the KEM ciphertext for your key, runs \
+             ML-KEM decapsulation to recover the session key, then streams through the payload \
+             verifying and decrypting each 64-kilobyte chunk. No plaintext is written until \
+             every chunk in the batch passes its authentication check.",
+            "## PASSPHRASE-PROTECTED KEYS",
+            "If your private key was created with a passphrase, you will be prompted for it. \
+             The passphrase is used locally to unlock your private key and is never transmitted \
+             anywhere. Hardware-backed keys retrieve the seed from your OS credential store \
+             automatically without a passphrase prompt.",
+            "## IF DECRYPTION FAILS",
+            "A decryption failure almost always means the file was modified or corrupted after \
+             encryption, the wrong private key was used, or the file was not a valid .pqf file. \
+             pqfile reports the failure immediately rather than producing potentially \
+             compromised output.",
+        ]),
+        Tab::Inspect => ("Inspect File Header", &[
+            "Inspection lets you examine the header of a .pqf file without decrypting its \
+             contents. This is useful for verifying format details, checking which key was \
+             used, and diagnosing compatibility issues before attempting decryption.",
+            "## WHAT YOU CAN SEE",
+            "The format version byte tells you which pqfile feature set was used. For \
+             single-recipient files, you see the KEM variant, base nonce, and the original \
+             file size recorded at encryption time. For multi-recipient files you see the \
+             number of recipient slots and their key types.",
+            "## ANONYMOUS FILES",
+            "Files encrypted with the anonymous multi-recipient format (v8) show only a slot \
+             count. The key type for each slot is intentionally hidden, so inspection cannot \
+             reveal who the recipients are.",
+            "## WHAT YOU CANNOT SEE",
+            "The encrypted payload is not touched during inspection, so no private key is \
+             required. You will not see the plaintext content, the filename, or any metadata \
+             about the encrypted data itself.",
+        ]),
+        Tab::Sign => ("Digital Signatures", &[
+            "Signing lets you prove that a file came from you and has not been modified. \
+             pqfile uses ML-DSA-65 (NIST FIPS 204), a post-quantum digital signature \
+             algorithm that remains secure against quantum computers.",
+            "## KEY GENERATION",
+            "A signing key pair consists of a private signing key and a public verifying key. \
+             Share your verifying key with anyone who needs to confirm your signatures. Keep \
+             your signing key private and optionally protect it with a passphrase.",
+            "## SIGNING A FILE",
+            "Signing produces a small detached .sig file alongside the original. The signature \
+             covers the entire file content. If even one byte changes after signing, \
+             verification will fail.",
+            "## VERIFYING A SIGNATURE",
+            "To verify, you need the original file, the .sig file, and the sender's verifying \
+             key. Successful verification means the file is exactly as the signer created it \
+             and the signature was produced by the holder of the corresponding private key.",
+            "## SIGNATURES VS ENCRYPTION",
+            "Signing proves authenticity and integrity but does not hide the contents. \
+             Encryption hides the contents but by itself does not prove who created them. \
+             Use the Signcrypt tab if you need both properties at once.",
+        ]),
+        Tab::Signcrypt => ("Signcrypt", &[
+            "Signcrypt combines signing and encryption into a single operation. The sender's \
+             signature is placed inside the encrypted payload, so it is protected by the same \
+             authentication as the file contents.",
+            "## WHY NOT SIGN THEN ENCRYPT SEPARATELY?",
+            "If you sign a file and then encrypt it, a recipient could theoretically strip the \
+             outer signature and re-encrypt with a different key, making it appear the content \
+             came from someone else. With signcrypt, the signature lives inside the AEAD \
+             ciphertext and cannot be removed or substituted without breaking authentication.",
+            "## HOW TO SIGNDECRYPT",
+            "The recipient uses their private decryption key and your verifying key together. \
+             pqfile decrypts the file and then confirms the signature before reporting success. \
+             If the signature does not match, the operation fails even if decryption succeeds.",
+            "## A NOTE ON OUTPUT",
+            "During signdecrypt, plaintext is written to the output as it is decrypted, before \
+             the final signature check completes. If you are writing to a file or socket, \
+             please be aware that the output should be treated as unverified until the \
+             operation returns successfully.",
+        ]),
+        Tab::Archive => ("Encrypted Archive", &[
+            "The archive format packs multiple files into a single .pqf container. All files \
+             are authenticated together, so the recipient can be confident that the entire \
+             collection is intact and unmodified.",
+            "## CREATING AN ARCHIVE",
+            "Select the recipient's public key, add the files you want to include, and pqfile \
+             bundles them into a single encrypted stream. The archive preserves file names, \
+             sizes, and modification times.",
+            "## EXTRACTING AN ARCHIVE",
+            "Use the private key matching the public key that was used to encrypt. pqfile \
+             authenticates every chunk before writing any file to disk, so an extraction will \
+             either succeed completely or fail before producing output.",
+            "## PATH SAFETY",
+            "The extractor checks every file path in the archive against the output directory. \
+             Paths containing traversal components such as .. are rejected before any files are \
+             written, preventing a crafted archive from writing outside the intended location.",
+        ]),
+        Tab::Keys => ("Key Management", &[
+            "The Keys panel gives you a quick overview of the key pairs you work with \
+             regularly. You can store references to key files so you do not have to locate \
+             them each time you encrypt or decrypt.",
+            "## KEY FINGERPRINTS",
+            "Each public key has a SHA3-256 fingerprint displayed in a short colon-separated \
+             hex format. Fingerprints are a convenient way to confirm you are using the right \
+             key without reading the full PEM data. Share your fingerprint alongside your \
+             public key so recipients can verify they have the authentic version.",
+            "## ORGANIZING KEYS",
+            "You can label and store key pairs in the panel for easy recall. Clicking a stored \
+             key pre-loads it into the Encrypt or Decrypt tab, saving time when working with \
+             the same key frequently.",
+        ]),
+        Tab::Shamir => ("Shamir Key Splitting", &[
+            "Shamir's Secret Sharing lets you split a private key into N shares such that \
+             any M of them can reconstruct the original key, but fewer than M reveal \
+             nothing. This is useful for secure key backup, team key custody, and \
+             organizational access controls.",
+            "## A PRACTICAL EXAMPLE",
+            "A team of five people might split a key with a threshold of three. Three members \
+             must cooperate to reconstruct the key and perform a decryption. No single person \
+             or pair can act alone. Shares can be stored in separate locations for resilience \
+             against physical loss.",
+            "## SECURITY PROPERTIES",
+            "The splitting uses GF(256) polynomial interpolation over each byte of the seed. \
+             Any set of shares smaller than the threshold is computationally equivalent to \
+             having no information about the original key. Shares include a fingerprint to \
+             detect mixing of shares from different keys.",
+            "## RECONSTRUCTION",
+            "Provide at least the threshold number of share files. pqfile verifies that all \
+             shares belong to the same key before reconstructing, and checks the derived public \
+             key fingerprint against the stored value. The result is an unencrypted private key \
+             that you can then protect with a passphrase if needed.",
+        ]),
+        Tab::Tools => ("Tools", &[
+            "The Tools tab collects utilities for managing your keys and encrypted files over \
+             time. These operations are less frequent than everyday encryption and decryption \
+             but are important for maintaining a healthy key lifecycle.",
+            "## CHANGE OR UPGRADE PASSPHRASE",
+            "Use the Repassphrase section to change the passphrase protecting a private key, \
+             or to upgrade a key created with pqfile 3.x (Argon2id p=1) to the stronger \
+             p=4 parameters used by pqfile 4.0. Enable the legacy option if the key was \
+             created before version 4.0.",
+            "## REVOKE A KEY",
+            "If your private key is lost or compromised, revocation creates a sidecar file \
+             alongside the public key that prevents future encryption to that key. Anyone who \
+             holds the public key file path will see the revocation when they attempt to \
+             encrypt. Revocation requires the native desktop app.",
+            "## REKEY A FILE",
+            "Rekeying transfers an encrypted file to a new recipient without decrypting the \
+             payload. The session key is decapsulated using the old private key and then \
+             re-encapsulated for the new recipient. The encrypted content is untouched.",
+        ]),
+        Tab::Settings => ("Settings", &[
+            "Settings let you configure how pqfile behaves across sessions. Preferences are \
+             saved automatically and restored the next time you open the application.",
+            "## OUTPUT DIRECTORY",
+            "The default output directory is where generated keys, encrypted files, and \
+             signatures are saved. Setting this once avoids having to navigate to the same \
+             folder repeatedly.",
+            "## CONFIRM BEFORE OVERWRITING",
+            "When enabled, pqfile will not overwrite existing key files during key generation. \
+             This prevents accidental replacement of keys that are already in use.",
+            "## THEME",
+            "Choose between light and dark themes. The theme preference is stored locally and \
+             applies immediately.",
+        ]),
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "pqfile"
-version = "3.3.0"
+version = "4.0.0"
 edition = "2021"
 description = "Quantum-resistant file encryption: ML-KEM (512/768/1024), hybrid X25519+ML-KEM-768, ML-DSA-65 signing, multi-recipient, Shamir sharing"
 license = "MIT"
@@ -29,11 +29,24 @@ rayon = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 zstd = "0.13.3"
+# Credential-store backend for hardware-backed keys: Windows Credential Manager,
+# macOS Keychain, and Linux Secret Service (GNOME Keyring / KDE Wallet).
+keyring = "2"
+
+[features]
+# Enable async encrypt/decrypt API backed by Tokio.
+async = ["tokio"]
+
+[dependencies.tokio]
+version = "1"
+features = ["io-util"]
+optional = true
 
 [dev-dependencies]
 tempfile = { workspace = true }
 serde_json = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [[bench]]
 name = "crypto"

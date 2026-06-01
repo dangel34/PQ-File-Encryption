@@ -3,11 +3,11 @@ use crate::colors::{
     c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1,
     c_text,
 };
-use crate::types::OpStatus;
+use crate::types::{OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_files;
 use crate::widgets::{
-    card, pick_file, pick_files, save_result, section_label, show_status, tab_heading,
+    card, pick_file, pick_files, save_result, section_label, show_status, tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::{encrypt, format};
@@ -155,7 +155,9 @@ impl PqfileApp {
     }
 
     pub(crate) fn show_encrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
-        tab_heading(ui, "Encrypt File", dark);
+        if tab_heading_help(ui, "Encrypt File", dark) {
+            self.help_modal_open = Some(Tab::Encrypt);
+        }
         ui.label(
             RichText::new("Encrypt one or more files to one or more recipients.")
                 .size(13.0)
@@ -486,10 +488,12 @@ fn encrypt_entry(
             Err(e) => OpStatus::Err(e.to_string()),
         }
     } else {
+        // Always use v8 anonymous format for multi-recipient: variant-blind slots,
+        // shuffled order, and padded CTs hide which key type each recipient uses.
         let pem_refs: Vec<&str> = pub_pems.iter().map(|s| s.as_str()).collect();
         let mut reader = Cursor::new(data);
         let mut out = Vec::new();
-        match encrypt::encrypt_stream_multi(&pem_refs, original_size, &mut reader, &mut out) {
+        match encrypt::encrypt_stream_multi_anon(&pem_refs, original_size, &mut reader, &mut out) {
             Ok(()) => save_result(out_name, &out, effective_path, effective_confirm),
             Err(e) => OpStatus::Err(e.to_string()),
         }

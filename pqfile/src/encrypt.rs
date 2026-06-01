@@ -15,11 +15,11 @@ use crate::error::PqfileError;
 use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
 
 use crate::format::{
-    chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf, PqfHeader, PqfHeaderV4, PqfHeaderV7,
-    RecipientEntryV4, RecipientEntryV7, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, EK_LEN_1024,
+    chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf, PqfHeader, PqfHeaderV4, PqfHeaderV8,
+    RecipientEntryV4, RecipientEntryV8, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, EK_LEN_1024,
     EK_LEN_512, EK_LEN_768, HEADER_LEN_768, HYBRID_CT_LEN_768, HYBRID_EK_LEN_768, KEM_VARIANT_1024,
-    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V3,
-    VERSION_V5, WRAPPED_KEY_LEN,
+    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, PADDED_CT_LEN, VERSION,
+    VERSION_V3, VERSION_V5, WRAPPED_KEY_LEN,
 };
 // Used only in the native compressed-encrypt path and its tests.
 #[cfg(not(target_arch = "wasm32"))]
@@ -279,11 +279,12 @@ pub fn encrypt_stream_multi(
     encrypt_chunks(&cipher, base_nonce, CHUNK_SIZE, reader, writer)
 }
 
-/// Encrypts a stream to multiple recipients in anonymous (v7) format.
+/// Encrypts a stream to multiple recipients in anonymous (v8) format.
 ///
-/// Identical to [`encrypt_stream_multi`] except that all KEM ciphertexts are zero-padded
-/// to the maximum variant size and recipient entries are written in a randomly shuffled
-/// order, preventing an observer from correlating entry position with a specific recipient.
+/// All KEM ciphertexts are zero-padded to `PADDED_CT_LEN` (1568 bytes) and the
+/// per-slot KEM variant field is omitted entirely. Entries are written in a randomly
+/// shuffled order. An observer learns only the recipient count — no key-type
+/// information is exposed. Supersedes v7 anonymous mode.
 #[must_use = "encryption result must be used"]
 pub fn encrypt_stream_multi_anon(
     pubkey_pems: &[&str],
@@ -294,14 +295,16 @@ pub fn encrypt_stream_multi_anon(
     let mut session_key = Zeroizing::new([0u8; 32]);
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let mut recipients: Vec<RecipientEntryV7> = Vec::with_capacity(pubkey_pems.len());
+    let mut recipients: Vec<RecipientEntryV8> = Vec::with_capacity(pubkey_pems.len());
     for pubkey_pem in pubkey_pems {
-        let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
+        let (ek, _kem_variant) = parse_encapsulation_key(pubkey_pem)?;
         let (kem_ct, ss) = encapsulate(ek)?;
         let wrapped_key = wrap_session_key(&session_key, &ss)?;
-        recipients.push(RecipientEntryV7 {
-            kem_variant,
-            kem_ciphertext: kem_ct,
+        // Pad actual CT to PADDED_CT_LEN; trailing bytes are zeros.
+        let mut padded_ct = [0u8; PADDED_CT_LEN];
+        padded_ct[..kem_ct.len()].copy_from_slice(&kem_ct);
+        recipients.push(RecipientEntryV8 {
+            padded_ct,
             wrapped_key,
         });
     }
@@ -310,7 +313,6 @@ pub fn encrypt_stream_multi_anon(
     // For recipient counts up to 1000 the expected number of retries is < 1.001.
     for i in (1..recipients.len()).rev() {
         let range = (i + 1) as u64;
-        // Largest multiple of `range` that fits in u32 (2^32 values: 0..=u32::MAX).
         let threshold = (1u64 << 32) - ((1u64 << 32) % range);
         let j = loop {
             let mut r = [0u8; 4];
@@ -327,7 +329,7 @@ pub fn encrypt_stream_multi_anon(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let header = PqfHeaderV7 {
+    let header = PqfHeaderV8 {
         recipients,
         nonce: nonce_bytes,
         original_size,

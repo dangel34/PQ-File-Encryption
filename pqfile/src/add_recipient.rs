@@ -1,26 +1,28 @@
-/// Add a recipient to an existing v4 or v7 multi-recipient file.
+/// Add a recipient to an existing v4, v7, or v8 multi-recipient file.
 ///
 /// Strategy: decapsulate the session key using an existing recipient's private
 /// key, re-encapsulate it under the new public key, and append a new recipient
 /// entry to the header without touching the payload ciphertext.  The payload
 /// bytes are streamed through unchanged (zero-copy).
 ///
-/// Supported input formats: v4 (multi-recipient) and v7 (anonymous multi-recipient).
+/// Supported input formats: v4 (multi-recipient), v7 (anonymous multi-recipient),
+/// and v8 (variant-blind anonymous multi-recipient).
 /// For v3/v5 single-recipient files, use `rekey` to change the recipient or
 /// `encrypt_stream_multi` to produce a new multi-recipient file.
 ///
-/// **Anonymity note for v7 files:** the new recipient entry is appended without
+/// **Anonymity note for v7/v8 files:** the new recipient entry is appended without
 /// re-shuffling the existing entries.  An observer who can compare the file before
 /// and after the operation will see the new entry at the end.  To restore full
 /// entry-order anonymity, re-encrypt all recipients with `--anonymous-recipients`.
 use std::io::{Read, Write};
 
-use crate::decrypt::recover_session_key_multi;
+use crate::decrypt::{recover_session_key_multi, recover_session_key_v8};
 use crate::encrypt::encapsulate_for_rekey;
 use crate::error::PqfileError;
 use crate::format::{
-    fill_chunk, PqfHeader, PqfHeaderV4, PqfHeaderV7, RecipientEntryV4, RecipientEntryV7,
-    CHUNK_SIZE, PADDED_CT_LEN, VERSION_V4, VERSION_V7,
+    fill_chunk, PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, RecipientEntryV4,
+    RecipientEntryV7, RecipientEntryV8, CHUNK_SIZE, PADDED_CT_LEN, VERSION_V4, VERSION_V7,
+    VERSION_V8,
 };
 
 /// Adds `new_pubkey_pem` as a recipient to an existing v4 or v7 file.
@@ -48,6 +50,13 @@ pub fn add_recipient_stream(
             writer,
         ),
         VERSION_V7 => add_to_v7(
+            existing_privkey_pem,
+            new_pubkey_pem,
+            passphrase,
+            reader,
+            writer,
+        ),
+        VERSION_V8 => add_to_v8(
             existing_privkey_pem,
             new_pubkey_pem,
             passphrase,
@@ -180,8 +189,43 @@ fn stream_payload_v7(
     stream_payload(reader, writer)
 }
 
-// Keep the import used (PADDED_CT_LEN is needed indirectly through format types)
-const _: usize = PADDED_CT_LEN;
+fn add_to_v8(
+    existing_privkey_pem: &str,
+    new_pubkey_pem: &str,
+    passphrase: Option<&str>,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<AddRecipientInfo, PqfileError> {
+    let header = PqfHeaderV8::read_body(reader)?;
+
+    let session_key = recover_session_key_v8(existing_privkey_pem, passphrase, &header.recipients)?;
+
+    let (new_kem_ct, new_kem_variant, new_wrapped_key) =
+        encapsulate_for_rekey(new_pubkey_pem, &session_key)?;
+
+    let mut padded_ct = [0u8; PADDED_CT_LEN];
+    padded_ct[..new_kem_ct.len()].copy_from_slice(&new_kem_ct);
+
+    let mut recipients = header.recipients;
+    recipients.push(RecipientEntryV8 {
+        padded_ct,
+        wrapped_key: new_wrapped_key,
+    });
+    let recipient_count = recipients.len();
+
+    let new_header = PqfHeaderV8 {
+        recipients,
+        nonce: header.nonce,
+        original_size: header.original_size,
+    };
+    new_header.write(writer)?;
+    stream_payload(reader, writer)?;
+
+    Ok(AddRecipientInfo {
+        recipient_count,
+        new_recipient_variant: new_kem_variant,
+    })
+}
 
 #[cfg(test)]
 mod tests {

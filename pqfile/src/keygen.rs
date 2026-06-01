@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::Path;
 
-use ml_kem::{Kem, KeyExport, MlKem1024, MlKem512, MlKem768};
+use ml_kem::{
+    DecapsulationKey1024, DecapsulationKey512, DecapsulationKey768, Kem, KeyExport, MlKem1024,
+    MlKem512, MlKem768, Seed,
+};
 use pem::Pem;
 use sha3::{Digest, Sha3_256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -11,6 +14,7 @@ use crate::error::PqfileError;
 use crate::format::{
     HYBRID_EK_LEN_768, HYBRID_SEED_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768,
 };
+use crate::hardware;
 use crate::passphrase;
 
 pub(crate) const PUB_TAG_512: &str = "ML-KEM-512 PUBLIC KEY";
@@ -104,7 +108,7 @@ fn keygen_bytes_1024(passphrase: Option<&str>) -> Result<(String, String), Pqfil
     Ok((pub_pem, priv_pem))
 }
 
-/// Generates a Hybrid X25519+ML-KEM-768 key pair and returns PEM strings.
+/// Generates a Hybrid X25519+ML-KEM-768 key pair and returns `(pub_pem, priv_pem)`.
 /// Public key body: X25519 pubkey (32) || ML-KEM-768 EK (1184) = 1216 bytes.
 /// Private key body: X25519 scalar (32) || ML-KEM-768 seed (64) = 96 bytes.
 #[must_use = "keygen result must be used"]
@@ -185,6 +189,133 @@ pub fn is_encrypted_key(pem_str: &str) -> bool {
                 || p.tag() == PRIV_ENC_TAG_HYBRID_768
         })
         .unwrap_or(false)
+}
+
+/// Returns true if `pem_str` is a hardware key reference stub (any key type).
+#[must_use]
+pub fn is_hardware_key(pem_str: &str) -> bool {
+    pem::parse(pem_str)
+        .map(|p| hardware::is_hardware_tag(p.tag()))
+        .unwrap_or(false)
+}
+
+// ── Hardware keygen ───────────────────────────────────────────────────────
+
+/// Generates a hardware-backed key pair and writes `pubkey.pem` and
+/// `privkey.pem` (a stub with no seed bytes) to `out_dir`.
+///
+/// The private key seed is stored in the OS credential store under `label`.
+/// It can only be recovered on the same machine/user account where it was
+/// generated.
+#[must_use = "hardware keygen result must be saved or the keys are lost"]
+pub fn keygen_hardware(
+    out_dir: &Path,
+    force: bool,
+    level: u16,
+    hybrid: bool,
+    label: &str,
+) -> Result<String, PqfileError> {
+    if !force {
+        for name in ["pubkey.pem", "privkey.pem"] {
+            let p = out_dir.join(name);
+            if p.exists() {
+                return Err(PqfileError::OutputExists(p));
+            }
+        }
+    }
+    let (pub_pem, hw_pem) = if hybrid {
+        keygen_bytes_hardware_hybrid(label)?
+    } else {
+        keygen_bytes_hardware(level, label)?
+    };
+    let raw_pub = pem::parse(&pub_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+    let fp = fingerprint(raw_pub.contents());
+    let pub_path = out_dir.join("pubkey.pem");
+    let priv_path = out_dir.join("privkey.pem");
+    fs::write(&pub_path, pub_pem.as_bytes())?;
+    if let Err(e) = fs::write(&priv_path, hw_pem.as_bytes()) {
+        let _ = fs::remove_file(&pub_path);
+        return Err(e.into());
+    }
+    Ok(fp)
+}
+
+/// Generates a hardware-backed key pair and returns `(pub_pem, stub_pem)`.
+#[must_use = "hardware keygen result must be used"]
+pub fn keygen_bytes_hardware(level: u16, label: &str) -> Result<(String, String), PqfileError> {
+    match level {
+        KEM_VARIANT_512 => hw_keygen_inner(label, 64, hardware::HW_TAG_512, PUB_TAG_512, |seed| {
+            let arr = Seed::try_from(seed).map_err(|_| PqfileError::EncryptionFailure)?;
+            Ok(DecapsulationKey512::from_seed(arr)
+                .encapsulation_key()
+                .to_bytes()
+                .as_slice()
+                .to_vec())
+        }),
+        KEM_VARIANT_768 => hw_keygen_inner(label, 64, hardware::HW_TAG_768, PUB_TAG, |seed| {
+            let arr = Seed::try_from(seed).map_err(|_| PqfileError::EncryptionFailure)?;
+            Ok(DecapsulationKey768::from_seed(arr)
+                .encapsulation_key()
+                .to_bytes()
+                .as_slice()
+                .to_vec())
+        }),
+        KEM_VARIANT_1024 => {
+            hw_keygen_inner(label, 64, hardware::HW_TAG_1024, PUB_TAG_1024, |seed| {
+                let arr = Seed::try_from(seed).map_err(|_| PqfileError::EncryptionFailure)?;
+                Ok(DecapsulationKey1024::from_seed(arr)
+                    .encapsulation_key()
+                    .to_bytes()
+                    .as_slice()
+                    .to_vec())
+            })
+        }
+        _ => Err(PqfileError::UnsupportedKem(level)),
+    }
+}
+
+/// Generates a hardware-backed hybrid X25519+ML-KEM-768 key pair and returns
+/// `(pub_pem, stub_pem)`.
+#[must_use = "hardware keygen result must be used"]
+pub fn keygen_bytes_hardware_hybrid(label: &str) -> Result<(String, String), PqfileError> {
+    hw_keygen_inner(
+        label,
+        HYBRID_SEED_LEN_768,
+        hardware::HW_TAG_HYBRID_768,
+        PUB_TAG_HYBRID_768,
+        |seed| {
+            if seed.len() != HYBRID_SEED_LEN_768 {
+                return Err(PqfileError::EncryptionFailure);
+            }
+            let x25519_sk = X25519StaticSecret::from(<[u8; 32]>::try_from(&seed[..32]).unwrap());
+            let x25519_pk = X25519PublicKey::from(&x25519_sk);
+            let ml_arr = Seed::try_from(&seed[32..]).map_err(|_| PqfileError::EncryptionFailure)?;
+            let ml_ek = DecapsulationKey768::from_seed(ml_arr)
+                .encapsulation_key()
+                .to_bytes();
+            let mut out = Vec::with_capacity(HYBRID_EK_LEN_768);
+            out.extend_from_slice(x25519_pk.as_bytes());
+            out.extend_from_slice(ml_ek.as_slice());
+            Ok(out)
+        },
+    )
+}
+
+/// Shared hardware keygen body: generates + stores the seed, derives the
+/// public key bytes via `derive_pub`, and returns `(pub_pem, stub_pem)`.
+fn hw_keygen_inner(
+    label: &str,
+    seed_len: usize,
+    hw_tag: &str,
+    pub_tag: &str,
+    derive_pub: impl FnOnce(&[u8]) -> Result<Vec<u8>, PqfileError>,
+) -> Result<(String, String), PqfileError> {
+    let backend_id = hardware::default_backend_id();
+    let (stub_body, seed) = hardware::generate_and_store(label, seed_len, backend_id)?;
+    let pub_bytes = derive_pub(&seed)?;
+    let pub_pem = pem::encode(&pem::Pem::new(pub_tag, pub_bytes));
+    let hw_pem = pem::encode(&pem::Pem::new(hw_tag, stub_body));
+    Ok((pub_pem, hw_pem))
 }
 
 /// Convenience wrapper: parses a PEM string and returns its fingerprint.

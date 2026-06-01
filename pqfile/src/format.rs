@@ -22,6 +22,11 @@ pub const VERSION_V6: u8 = 0x06;
 /// variant size (1568 bytes) and recipient entries are written in shuffled order.
 /// Format: MAGIC | 0x07 | COUNT(2) | [VARIANT(2) | PADDED_CT(1568) | WRAPPED_KEY(48)]... | NONCE(12) | ORIGINAL_SIZE(8)
 pub const VERSION_V7: u8 = 0x07;
+/// Variant-blind anonymous multi-recipient: like v7 but the per-slot KEM variant field is
+/// dropped entirely. An observer learns only the recipient count; no key-type information
+/// is exposed. Supersedes v7 for `--anonymous-recipients` in pqfile 4.0+.
+/// Format: MAGIC | 0x08 | COUNT(2) | [PADDED_CT(1568) | WRAPPED_KEY(48)]... | NONCE(12) | ORIGINAL_SIZE(8)
+pub const VERSION_V8: u8 = 0x08;
 
 /// Maximum KEM ciphertext length across all supported variants (ML-KEM-1024).
 /// All v7 recipient entries use this fixed CT slot size.
@@ -383,6 +388,75 @@ impl PqfHeaderV7 {
 
         let (nonce, original_size) = read_nonce_and_size(r)?;
         Ok(PqfHeaderV7 {
+            recipients,
+            nonce,
+            original_size,
+        })
+    }
+}
+
+// ── Variant-blind anonymous multi-recipient header (v8) ──────────────────
+
+/// One recipient entry in a v8 header.
+///
+/// The full `PADDED_CT_LEN` bytes are stored. The decryptor takes the first
+/// `ct_len_for_variant(dk.kem_variant())` bytes as the actual KEM ciphertext;
+/// the remainder is padding. No variant field is present on the wire.
+pub(crate) struct RecipientEntryV8 {
+    /// Raw bytes read from the wire (always `PADDED_CT_LEN` = 1568 bytes).
+    pub padded_ct: [u8; PADDED_CT_LEN],
+    /// AES-256-GCM encrypted session key (32-byte key + 16-byte tag = 48 bytes).
+    pub wrapped_key: [u8; WRAPPED_KEY_LEN],
+}
+
+/// Parsed header for v8 (variant-blind anonymous multi-recipient) format.
+pub(crate) struct PqfHeaderV8 {
+    /// Shuffled recipient slots.
+    pub recipients: Vec<RecipientEntryV8>,
+    /// Base nonce for the STREAM payload.
+    pub nonce: [u8; NONCE_LEN],
+    /// Uncompressed plaintext size in bytes.
+    pub original_size: u64,
+}
+
+impl PqfHeaderV8 {
+    /// Serializes the v8 header to `w`.
+    pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
+        write_multi_header_prefix(w, VERSION_V8, self.recipients.len())?;
+        for r in &self.recipients {
+            w.write_all(&r.padded_ct)?;
+            w.write_all(&r.wrapped_key)?;
+        }
+        write_nonce_and_size(w, &self.nonce, self.original_size)
+    }
+
+    /// Reads the v8 header body (everything after MAGIC + VERSION byte).
+    pub fn read_body<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
+        let mut count_bytes = [0u8; 2];
+        r.read_exact(&mut count_bytes)?;
+        let count = u16::from_le_bytes(count_bytes) as usize;
+        const MAX_RECIPIENTS: usize = 1000;
+        if count > MAX_RECIPIENTS {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("recipient count {count} exceeds maximum ({MAX_RECIPIENTS})"),
+            )));
+        }
+
+        let mut recipients = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut padded_ct = [0u8; PADDED_CT_LEN];
+            r.read_exact(&mut padded_ct)?;
+            let mut wrapped_key = [0u8; WRAPPED_KEY_LEN];
+            r.read_exact(&mut wrapped_key)?;
+            recipients.push(RecipientEntryV8 {
+                padded_ct,
+                wrapped_key,
+            });
+        }
+
+        let (nonce, original_size) = read_nonce_and_size(r)?;
+        Ok(PqfHeaderV8 {
             recipients,
             nonce,
             original_size,

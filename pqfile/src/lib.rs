@@ -10,7 +10,7 @@
 //! - **Symmetric cipher**: ChaCha20-Poly1305 (RFC 8439)
 //! - **Session key wrapping**: AES-256-GCM (multi-recipient modes)
 //! - **Signatures**: ML-DSA-65 (NIST FIPS 204)
-//! - **Passphrase protection**: Argon2id (m=64 MiB, t=3, p=1) + AES-256-GCM
+//! - **Passphrase protection**: Argon2id (m=64 MiB, t=3, p=4) + AES-256-GCM
 //!
 //! # Quick start
 //!
@@ -65,8 +65,10 @@
 //!
 //! # Stability
 //!
-//! The public API is not yet stabilised for 1.0. Breaking changes between minor versions
-//! are possible until a stable 1.0 release is announced. See the roadmap.
+//! The public API is **stable at 1.0**. Items in the modules listed in `STABILITY.md`
+//! will not be removed or renamed before a 2.0 release. New items and new
+//! `#[non_exhaustive]` variants may be added in minor (1.x) releases without
+//! a major version bump. See `STABILITY.md` for the full policy.
 
 #![warn(missing_docs)]
 
@@ -121,6 +123,16 @@ pub mod keys;
 
 /// Secure file shredding: overwrite then delete.
 pub mod shred;
+
+/// Passphrase upgrade: change or migrate the passphrase on any encrypted private key.
+pub mod repassphrase;
+
+/// Hardware-backed private key support: OS credential store, future PKCS#11.
+pub mod hardware;
+
+/// Async encrypt / decrypt streaming via `tokio::io` (requires the `async` feature).
+#[cfg(feature = "async")]
+pub mod async_io;
 
 // ── Crate-root re-exports ──────────────────────────────────────────────────
 

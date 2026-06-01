@@ -14,12 +14,14 @@ use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 use crate::format::{
-    chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf, PqfHeader, PqfHeaderV4, PqfHeaderV7,
-    BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD, HYBRID_CT_LEN_768,
-    HYBRID_SEED_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512, KEM_CT_LEN_768, KEM_VARIANT_1024,
-    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V3,
-    VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7, WRAPPED_KEY_LEN,
+    chunk_aad, chunk_nonce, ct_len_for_variant, fill_chunk, hybrid_hkdf, PqfHeader, PqfHeaderV4,
+    PqfHeaderV7, PqfHeaderV8, RecipientEntryV8, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE,
+    COMPRESSION_ZSTD, HYBRID_CT_LEN_768, HYBRID_SEED_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512,
+    KEM_CT_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
+    NONCE_LEN, VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8,
+    WRAPPED_KEY_LEN,
 };
+use crate::hardware;
 use crate::keygen::{
     PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_512, PRIV_ENC_TAG_HYBRID_768, PRIV_TAG,
     PRIV_TAG_1024, PRIV_TAG_512, PRIV_TAG_HYBRID_768,
@@ -135,6 +137,10 @@ pub fn decrypt_stream(
             let header = PqfHeaderV7::read_body(reader)?;
             decrypt_v7(&dk, header, reader, writer)
         }
+        VERSION_V8 => {
+            let header = PqfHeaderV8::read_body(reader)?;
+            decrypt_v8(&dk, header, reader, writer)
+        }
         VERSION_V6 => {
             let header = PqfHeader::read_body(reader, VERSION_V6)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
@@ -198,6 +204,40 @@ fn decrypt_v7(
     decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
 }
 
+/// Searches v8 entries for one whose wrapped session key is recoverable with `dk`.
+///
+/// Since v8 entries carry no `kem_variant` field, every slot is tried: the
+/// decryptor takes the first `ct_len_for_variant(dk.kem_variant())` bytes of
+/// each padded CT, attempts ML-KEM decapsulation (which always produces a value —
+/// implicit rejection returns a pseudorandom key), then verifies the AES-GCM tag.
+/// A matching tag identifies the correct slot with probability ≈ 1 − 2^{−128}.
+fn find_session_key_v8(
+    dk: &DkVariant,
+    entries: &[RecipientEntryV8],
+) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    let ct_len = ct_len_for_variant(dk.kem_variant())?;
+    for entry in entries {
+        let kem_ct = &entry.padded_ct[..ct_len];
+        let ss = decapsulate_shared_secret(dk, kem_ct)?;
+        if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
+            return Ok(k);
+        }
+    }
+    Err(PqfileError::NoMatchingRecipient)
+}
+
+fn decrypt_v8(
+    dk: &DkVariant,
+    header: PqfHeaderV8,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let session_key = find_session_key_v8(dk, &header.recipients)?;
+    let key = Key::from_slice(session_key.as_ref());
+    let cipher = ChaCha20Poly1305::new(key);
+    decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
+}
+
 fn unwrap_session_key(
     wrapped: &[u8; WRAPPED_KEY_LEN],
     ss: &[u8; 32],
@@ -206,9 +246,11 @@ fn unwrap_session_key(
     use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
     let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(ss));
     let nonce = AesNonce::from([0u8; 12]);
-    let plaintext = cipher
-        .decrypt(&nonce, wrapped.as_slice())
-        .map_err(|_| PqfileError::DecryptionFailure)?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(&nonce, wrapped.as_slice())
+            .map_err(|_| PqfileError::DecryptionFailure)?,
+    );
     if plaintext.len() != 32 {
         return Err(PqfileError::DecryptionFailure);
     }
@@ -275,7 +317,7 @@ pub(crate) fn decapsulate_stream_init(
         usize,
         ChaCha20Poly1305,
         [u8; NONCE_LEN],
-        Option<Vec<u8>>,
+        Option<Zeroizing<Vec<u8>>>,
     ),
     PqfileError,
 > {
@@ -300,15 +342,17 @@ pub(crate) fn decapsulate_stream_init(
                     return Err(PqfileError::DecryptionFailure);
                 }
                 let nonce = Nonce::from_slice(&header.nonce);
-                let plaintext = cipher
-                    .decrypt(
-                        nonce,
-                        Payload {
-                            msg: &payload,
-                            aad: &header_bytes,
-                        },
-                    )
-                    .map_err(|_| PqfileError::DecryptionFailure)?;
+                let plaintext = Zeroizing::new(
+                    cipher
+                        .decrypt(
+                            nonce,
+                            Payload {
+                                msg: &payload,
+                                aad: &header_bytes,
+                            },
+                        )
+                        .map_err(|_| PqfileError::DecryptionFailure)?,
+                );
                 Ok((
                     version,
                     header.kem_variant,
@@ -370,6 +414,21 @@ pub(crate) fn decapsulate_stream_init(
                 None,
             ))
         }
+        VERSION_V8 => {
+            let header = PqfHeaderV8::read_body(reader)?;
+            let session_key = find_session_key_v8(&dk, &header.recipients)?;
+            let key = Key::from_slice(session_key.as_ref());
+            let cipher = ChaCha20Poly1305::new(key);
+            Ok((
+                VERSION_V8,
+                dk.kem_variant(),
+                header.original_size,
+                CHUNK_SIZE,
+                cipher,
+                header.nonce,
+                None,
+            ))
+        }
         VERSION_V6 => Err(PqfileError::CompressionNotSupported),
         v => Err(PqfileError::UnsupportedVersion(v)),
     }
@@ -399,6 +458,16 @@ pub(crate) fn recover_session_key_multi(
     find_session_key(&dk, entries)
 }
 
+/// Recover the 32-byte session key from a v8 (variant-blind) recipient entry list.
+pub(crate) fn recover_session_key_v8(
+    privkey_pem: &str,
+    passphrase: Option<&str>,
+    entries: &[RecipientEntryV8],
+) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    let dk = derive_dk(privkey_pem, passphrase)?;
+    find_session_key_v8(&dk, entries)
+}
+
 fn check_kem_variant_match(key_variant: u16, file_variant: u16) -> Result<(), PqfileError> {
     if key_variant != file_variant {
         return Err(PqfileError::KemVariantMismatch {
@@ -422,15 +491,17 @@ fn decrypt_v2_payload(
         return Err(PqfileError::DecryptionFailure);
     }
     let nonce = Nonce::from_slice(nonce_bytes);
-    let plaintext = cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: &payload,
-                aad: header_bytes,
-            },
-        )
-        .map_err(|_| PqfileError::DecryptionFailure)?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: &payload,
+                    aad: header_bytes,
+                },
+            )
+            .map_err(|_| PqfileError::DecryptionFailure)?,
+    );
     writer.write_all(&plaintext)?;
     Ok(())
 }
@@ -493,6 +564,47 @@ fn derive_dk(privkey_pem: &str, passphrase: Option<&str>) -> Result<DkVariant, P
     let raw = pem.contents();
 
     match pem.tag() {
+        // ── Hardware key stubs: load seed from OS credential store ────────────
+        t if t == hardware::HW_TAG_512 => {
+            let seed = hardware::load_seed(raw)?;
+            let arr =
+                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
+                    expected: 64,
+                    got: seed.len(),
+                })?;
+            Ok(DkVariant::Kem512(DecapsulationKey512::from_seed(arr)))
+        }
+        t if t == hardware::HW_TAG_768 => {
+            let seed = hardware::load_seed(raw)?;
+            let arr =
+                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
+                    expected: 64,
+                    got: seed.len(),
+                })?;
+            Ok(DkVariant::Kem768(DecapsulationKey768::from_seed(arr)))
+        }
+        t if t == hardware::HW_TAG_1024 => {
+            let seed = hardware::load_seed(raw)?;
+            let arr =
+                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
+                    expected: 64,
+                    got: seed.len(),
+                })?;
+            Ok(DkVariant::Kem1024(DecapsulationKey1024::from_seed(arr)))
+        }
+        t if t == hardware::HW_TAG_HYBRID_768 => {
+            let seed = hardware::load_seed(raw)?;
+            if seed.len() != HYBRID_SEED_LEN_768 {
+                return Err(PqfileError::InvalidKeyLength {
+                    expected: HYBRID_SEED_LEN_768,
+                    got: seed.len(),
+                });
+            }
+            let mut seed_arr = Zeroizing::new([0u8; HYBRID_SEED_LEN_768]);
+            seed_arr.copy_from_slice(&seed);
+            derive_hybrid_dk_from_seed(&seed_arr)
+        }
+        // ── Passphrase-encrypted keys ─────────────────────────────────────────
         t if t == PRIV_ENC_TAG_512 => {
             let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
             let seed = passphrase::decrypt_seed(raw, pp)?;

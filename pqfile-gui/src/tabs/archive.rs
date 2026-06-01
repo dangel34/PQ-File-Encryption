@@ -2,17 +2,19 @@ use crate::app::PqfileApp;
 use crate::colors::{
     c_accent, c_card, c_chrome, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text,
 };
-use crate::types::OpStatus;
+use crate::types::{OpStatus, Tab};
 use crate::widgets::{
     card, file_row, passphrase_row, pick_files, save_result, section_label, show_status,
-    tab_heading,
+    tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::archive;
 
 impl PqfileApp {
     pub(crate) fn show_archive(&mut self, ui: &mut egui::Ui, dark: bool) {
-        tab_heading(ui, "Encrypted Archive  (PQFA)", dark);
+        if tab_heading_help(ui, "Encrypted Archive  (PQFA)", dark) {
+            self.help_modal_open = Some(Tab::Archive);
+        }
         ui.label(
             RichText::new(
                 "Pack multiple files into a single authenticated .pqf archive, \

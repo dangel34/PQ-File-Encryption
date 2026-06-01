@@ -1,28 +1,190 @@
 use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
-use crate::types::OpStatus;
+use crate::types::{OpStatus, Tab};
 use crate::widgets::{
-    card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading,
+    card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading_help,
 };
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::rekey;
+use pqfile::repassphrase;
 #[cfg(not(target_arch = "wasm32"))]
 use pqfile::revoke;
 use std::io::Cursor;
+use zeroize::Zeroize;
 
 impl PqfileApp {
     pub(crate) fn show_tools(&mut self, ui: &mut egui::Ui, dark: bool) {
-        tab_heading(ui, "Tools", dark);
+        if tab_heading_help(ui, "Tools", dark) {
+            self.help_modal_open = Some(Tab::Tools);
+        }
         ui.label(
-            RichText::new("Key revocation and file rekeying utilities.")
+            RichText::new("Key revocation, file rekeying, and passphrase management.")
                 .size(13.0)
                 .color(c_subtext(dark)),
         );
         ui.add_space(14.0);
 
+        self.show_repassphrase_section(ui, dark);
+        ui.add_space(20.0);
         self.show_revoke_section(ui, dark);
         ui.add_space(20.0);
         self.show_rekey_section(ui, dark);
+    }
+
+    // ── Repassphrase ──────────────────────────────────────────────────────
+
+    fn show_repassphrase_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        section_label(ui, "CHANGE / UPGRADE PASSPHRASE", dark);
+        ui.label(
+            RichText::new(
+                "Change the passphrase on any encrypted private key, or upgrade a \
+                 pqfile <4.0 key (Argon2id p=1) to the current p=4 parameters.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(6.0);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            file_row(
+                ui,
+                "Encrypted private key (.pem)",
+                &mut self.repassphrase_key,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            passphrase_row(
+                ui,
+                "Current passphrase:",
+                &mut self.repassphrase_old_passphrase,
+                &mut self.repassphrase_old_passphrase_visible,
+                "Current passphrase",
+                dark,
+            );
+            ui.add_space(4.0);
+            passphrase_row(
+                ui,
+                "New passphrase:",
+                &mut self.repassphrase_new_passphrase,
+                &mut self.repassphrase_new_passphrase_visible,
+                "New passphrase",
+                dark,
+            );
+            ui.add_space(2.0);
+            passphrase_row(
+                ui,
+                "Confirm new:",
+                &mut self.repassphrase_new_passphrase_confirm,
+                &mut self.repassphrase_new_passphrase_visible,
+                "Confirm new passphrase",
+                dark,
+            );
+            ui.add_space(6.0);
+            ui.checkbox(
+                &mut self.repassphrase_from_legacy,
+                RichText::new("--from-legacy: key was created with pqfile < 4.0 (Argon2id p=1)")
+                    .size(12.0)
+                    .color(c_subtext(dark)),
+            );
+        });
+        ui.add_space(8.0);
+
+        let ready = self.repassphrase_key.loaded()
+            && !self.repassphrase_old_passphrase.is_empty()
+            && !self.repassphrase_new_passphrase.is_empty();
+
+        if ui
+            .add_enabled(
+                ready,
+                egui::Button::new(
+                    RichText::new("🔑  Change Passphrase")
+                        .size(14.0)
+                        .color(c_chrome(dark))
+                        .strong(),
+                )
+                .fill(c_accent(dark))
+                .min_size(Vec2::new(180.0, 32.0)),
+            )
+            .on_disabled_hover_text("Load an encrypted key and fill in both passphrase fields.")
+            .clicked()
+        {
+            self.do_repassphrase();
+        }
+
+        show_status(ui, &self.repassphrase_status, dark);
+    }
+
+    fn do_repassphrase(&mut self) {
+        if *self.repassphrase_new_passphrase != *self.repassphrase_new_passphrase_confirm {
+            self.repassphrase_status = OpStatus::Err("New passphrases do not match.".to_owned());
+            return;
+        }
+
+        let key_pem = match self.repassphrase_key.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.repassphrase_status =
+                    OpStatus::Err("Load an encrypted private key file first.".to_owned());
+                return;
+            }
+        };
+        let old_pp = zeroize::Zeroizing::new((*self.repassphrase_old_passphrase).clone());
+        let new_pp = zeroize::Zeroizing::new((*self.repassphrase_new_passphrase).clone());
+        let from_legacy = self.repassphrase_from_legacy;
+
+        match repassphrase::repassphrase(&key_pem, old_pp.as_str(), new_pp.as_str(), from_legacy) {
+            Ok(result) => {
+                // Attempt to write back in-place on native; download on WASM.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if let Some(path) = self.repassphrase_key.path.as_ref() {
+                        match std::fs::write(path, result.privkey_pem.as_bytes()) {
+                            Ok(()) => {
+                                let note = if from_legacy {
+                                    " (upgraded to Argon2id p=4)"
+                                } else {
+                                    ""
+                                };
+                                self.repassphrase_status =
+                                    OpStatus::Ok(format!("Passphrase updated{note}."));
+                                self.repassphrase_old_passphrase.zeroize();
+                                self.repassphrase_new_passphrase.zeroize();
+                                self.repassphrase_new_passphrase_confirm.zeroize();
+                            }
+                            Err(e) => {
+                                self.repassphrase_status = OpStatus::Err(e.to_string());
+                            }
+                        }
+                        return;
+                    }
+                }
+                // WASM or no path: download the re-encrypted key.
+                let name = self
+                    .repassphrase_key
+                    .name
+                    .strip_suffix(".pem")
+                    .map(|s| format!("{s}.new.pem"))
+                    .unwrap_or_else(|| "privkey.new.pem".to_owned());
+                #[cfg(target_arch = "wasm32")]
+                crate::widgets::download_bytes(&name, result.privkey_pem.as_bytes());
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = name;
+                let note = if from_legacy {
+                    " (upgraded from p=1 to p=4)"
+                } else {
+                    ""
+                };
+                self.repassphrase_status =
+                    OpStatus::Ok(format!("Re-encrypted key downloaded{note}."));
+                self.repassphrase_old_passphrase.zeroize();
+                self.repassphrase_new_passphrase.zeroize();
+                self.repassphrase_new_passphrase_confirm.zeroize();
+            }
+            Err(e) => {
+                self.repassphrase_status = OpStatus::Err(e.to_string());
+            }
+        }
     }
 
     // ── Revoke ────────────────────────────────────────────────────────────

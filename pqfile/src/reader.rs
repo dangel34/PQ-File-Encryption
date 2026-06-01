@@ -8,6 +8,7 @@ use chacha20poly1305::{
     aead::{AeadInPlace, Tag},
     ChaCha20Poly1305, Nonce,
 };
+use zeroize::Zeroizing;
 
 use crate::decrypt::decapsulate_stream_init;
 use crate::error::PqfileError;
@@ -43,7 +44,7 @@ enum ReaderState<R: Read> {
         done: bool,
     },
     WholeFile {
-        data: Vec<u8>,
+        data: Zeroizing<Vec<u8>>,
         pos: usize,
     },
 }

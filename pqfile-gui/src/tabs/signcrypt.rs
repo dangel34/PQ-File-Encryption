@@ -2,11 +2,11 @@ use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::colors::{c_surface0, c_text};
-use crate::types::OpStatus;
+use crate::types::{OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::reveal_in_explorer;
 use crate::widgets::{
-    card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading,
+    card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading_help,
 };
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::signcrypt;
@@ -14,7 +14,9 @@ use std::io::Cursor;
 
 impl PqfileApp {
     pub(crate) fn show_signcrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
-        tab_heading(ui, "Signcrypt  (ML-DSA-65 + Encryption)", dark);
+        if tab_heading_help(ui, "Signcrypt  (ML-DSA-65 + Encryption)", dark) {
+            self.help_modal_open = Some(Tab::Signcrypt);
+        }
         ui.label(
             RichText::new(
                 "Sign and encrypt a file in one step. The ML-DSA-65 signature is \

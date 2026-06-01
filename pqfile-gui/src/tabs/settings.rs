@@ -3,13 +3,15 @@ use crate::app::PqfileApp;
 use crate::colors::c_overlay;
 use crate::colors::{c_card, c_red, c_subtext, c_surface0, c_surface1, c_text};
 use crate::theme::apply_theme;
-use crate::types::OpStatus;
-use crate::widgets::{card, section_label, setting_toggle, tab_heading};
+use crate::types::{OpStatus, Tab};
+use crate::widgets::{card, section_label, setting_toggle, tab_heading_help};
 use eframe::egui::{self, RichText, Stroke};
 
 impl PqfileApp {
     pub(crate) fn show_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, dark: bool) {
-        tab_heading(ui, "Settings", dark);
+        if tab_heading_help(ui, "Settings", dark) {
+            self.help_modal_open = Some(Tab::Settings);
+        }
         ui.label(
             RichText::new("Configure appearance and behavior.")
                 .size(13.0)

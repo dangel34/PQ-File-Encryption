@@ -9,6 +9,7 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    environment: release
     # Guard: only run when the Release workflow succeeded AND the trigger came
     # from this repository itself (not a fork). This prevents untrusted code
     # from a forked PR from accessing CARGO_REGISTRY_TOKEN.

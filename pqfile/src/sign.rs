@@ -9,6 +9,7 @@ use pem::Pem;
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
+use crate::hardware;
 use crate::passphrase;
 
 pub(crate) const VK_TAG: &str = "ML-DSA-65 VERIFYING KEY";
@@ -95,6 +96,68 @@ pub fn sign_keygen(
     Ok(result)
 }
 
+/// Generates a hardware-backed ML-DSA-65 signing key pair and writes it to `out_dir`.
+///
+/// The signing key seed is stored in the OS credential store under `label`;
+/// only a PEM stub is written to disk. Returns `OutputExists` if key files
+/// already exist and `force` is false.
+#[must_use = "hardware sign keygen result must be saved"]
+pub fn sign_keygen_hardware(
+    out_dir: &Path,
+    force: bool,
+    label: &str,
+) -> Result<SignKeygenResult, PqfileError> {
+    let vk_path = out_dir.join("sign_pubkey.pem");
+    let sk_path = out_dir.join("sign_privkey.pem");
+
+    if !force {
+        if vk_path.exists() {
+            return Err(PqfileError::OutputExists(vk_path));
+        }
+        if sk_path.exists() {
+            return Err(PqfileError::OutputExists(sk_path));
+        }
+    }
+
+    let result = sign_keygen_hardware_bytes(label)?;
+    fs::write(&vk_path, &result.vk_pem)?;
+    fs::write(&sk_path, &result.sk_pem)?;
+    Ok(result)
+}
+
+/// Generates a hardware-backed ML-DSA-65 signing key pair in memory.
+///
+/// The seed (32 bytes) is stored in the OS credential store under `label`.
+/// Returns `(vk_pem, hw_stub_pem)` via `SignKeygenResult`.
+#[must_use = "hardware sign keygen result must be saved"]
+pub fn sign_keygen_hardware_bytes(label: &str) -> Result<SignKeygenResult, PqfileError> {
+    let backend_id = hardware::default_backend_id();
+    let (stub_body, seed) = hardware::generate_and_store(label, SK_SEED_LEN, backend_id)?;
+
+    if seed.len() != SK_SEED_LEN {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: SK_SEED_LEN,
+            got: seed.len(),
+        });
+    }
+    let mut seed_arr = [0u8; SK_SEED_LEN];
+    seed_arr.copy_from_slice(&seed);
+    let sk = SigningKey::<MlDsa65>::from_seed(&seed_arr.into());
+    let vk = sk.verifying_key();
+
+    let vk_encoded: EncodedVerifyingKey<MlDsa65> = vk.encode();
+    let vk_bytes: &[u8] = vk_encoded.as_ref();
+    let vk_pem = pem::encode(&Pem::new(VK_TAG, vk_bytes.to_vec()));
+    let sk_pem = pem::encode(&Pem::new(hardware::HW_TAG_SIGNING, stub_body));
+    let vk_fingerprint = crate::keygen::fingerprint(vk_bytes);
+
+    Ok(SignKeygenResult {
+        vk_pem,
+        sk_pem,
+        vk_fingerprint,
+    })
+}
+
 /// Signs `data` with the ML-DSA-65 signing key in `sk_pem` and returns the raw signature bytes.
 #[must_use = "sign result must be used"]
 pub fn sign_bytes(
@@ -166,6 +229,20 @@ fn parse_signing_key(
 ) -> Result<SigningKey<MlDsa65>, PqfileError> {
     let p = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
 
+    // Hardware stub: load seed from OS credential store.
+    if p.tag() == hardware::HW_TAG_SIGNING {
+        let seed_bytes = hardware::load_seed(p.contents())?;
+        if seed_bytes.len() != SK_SEED_LEN {
+            return Err(PqfileError::InvalidKeyLength {
+                expected: SK_SEED_LEN,
+                got: seed_bytes.len(),
+            });
+        }
+        let mut seed_arr = [0u8; SK_SEED_LEN];
+        seed_arr.copy_from_slice(&seed_bytes);
+        return Ok(SigningKey::<MlDsa65>::from_seed(&seed_arr.into()));
+    }
+
     let seed_bytes: Zeroizing<Vec<u8>> = if p.tag() == SK_ENC_TAG {
         let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
         let seed = passphrase::decrypt_signing_seed(p.contents(), pp)?;
@@ -174,9 +251,10 @@ fn parse_signing_key(
         Zeroizing::new(p.contents().to_vec())
     } else {
         return Err(PqfileError::InvalidPem(format!(
-            "expected tag '{}' or '{}', got '{}'",
+            "expected tag '{}', '{}', or '{}', got '{}'",
             SK_TAG,
             SK_ENC_TAG,
+            hardware::HW_TAG_SIGNING,
             p.tag()
         )));
     };
