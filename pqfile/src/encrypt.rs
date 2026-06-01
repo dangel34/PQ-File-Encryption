@@ -16,10 +16,10 @@ use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
 
 use crate::format::{
     chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf, PqfHeader, PqfHeaderV4, PqfHeaderV7,
-    RecipientEntryV4, RecipientEntryV7, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE,
-    EK_LEN_1024, EK_LEN_512, EK_LEN_768, HEADER_LEN_768, HYBRID_CT_LEN_768,
-    HYBRID_EK_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
-    NONCE_LEN, VERSION, VERSION_V3, VERSION_V5, WRAPPED_KEY_LEN,
+    RecipientEntryV4, RecipientEntryV7, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, EK_LEN_1024,
+    EK_LEN_512, EK_LEN_768, HEADER_LEN_768, HYBRID_CT_LEN_768, HYBRID_EK_LEN_768, KEM_VARIANT_1024,
+    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V3,
+    VERSION_V5, WRAPPED_KEY_LEN,
 };
 // Used only in the native compressed-encrypt path and its tests.
 #[cfg(not(target_arch = "wasm32"))]

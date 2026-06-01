@@ -23,6 +23,14 @@ regexes = [
 ]
 
 [[allowlists]]
+description = "Static test-vector PEM keys and ciphertexts are intentional test fixtures, not real secrets"
+paths = [
+    '''tests/static_vectors\.rs''',
+    '''tests/vectors\.rs''',
+    '''examples/gen_vectors\.rs''',
+]
+
+[[allowlists]]
 description = "Cargo package metadata"
 regexTarget = "line"
 regexes = [
