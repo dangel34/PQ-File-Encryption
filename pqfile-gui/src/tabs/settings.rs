@@ -1,9 +1,11 @@
-use eframe::egui::{self, RichText, Stroke};
 use crate::app::PqfileApp;
-use crate::colors::{c_card, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
+use crate::colors::{c_card, c_red, c_subtext, c_surface0, c_surface1, c_text};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::colors::c_overlay;
 use crate::theme::apply_theme;
 use crate::types::OpStatus;
 use crate::widgets::{card, section_label, setting_toggle, tab_heading};
+use eframe::egui::{self, RichText, Stroke};
 
 impl PqfileApp {
     pub(crate) fn show_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, dark: bool) {
@@ -34,7 +36,11 @@ impl PqfileApp {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.label(RichText::new("Theme").size(13.0).color(c_text(dark)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let label = if self.settings.dark_mode { "🌙  Dark" } else { "☀  Light" };
+                        let label = if self.settings.dark_mode {
+                            "🌙  Dark"
+                        } else {
+                            "☀  Light"
+                        };
                         if ui
                             .add(
                                 egui::Button::new(
@@ -63,7 +69,7 @@ impl PqfileApp {
             ui.label(
                 RichText::new(
                     "Where encrypted, decrypted, and generated key files are saved. \
-                     Leave blank to save next to the source file."
+                     Leave blank to save next to the source file.",
                 )
                 .size(12.0)
                 .color(c_subtext(dark)),
@@ -91,10 +97,8 @@ impl PqfileApp {
                 ui.add_space(4.0);
                 if ui
                     .add(
-                        egui::Button::new(
-                            RichText::new("Clear").size(12.0).color(c_overlay(dark)),
-                        )
-                        .fill(c_surface0(dark)),
+                        egui::Button::new(RichText::new("Clear").size(12.0).color(c_overlay(dark)))
+                            .fill(c_surface0(dark)),
                     )
                     .clicked()
                 {
@@ -158,7 +162,9 @@ impl PqfileApp {
             if ui
                 .add(
                     egui::Button::new(
-                        RichText::new("Clear All Inputs").size(13.0).color(c_red(dark)),
+                        RichText::new("Clear All Inputs")
+                            .size(13.0)
+                            .color(c_red(dark)),
                     )
                     .fill(c_surface0(dark))
                     .stroke(Stroke::new(1.0, c_red(dark))),
@@ -174,10 +180,14 @@ impl PqfileApp {
         self.encrypt_pubkey.clear();
         self.encrypt_recipients.clear();
         self.encrypt_files.clear();
-        if let Ok(mut g) = self.encrypt_batch_pending.try_lock() { g.take(); }
+        if let Ok(mut g) = self.encrypt_batch_pending.try_lock() {
+            g.take();
+        }
         self.decrypt_privkey.clear();
         self.decrypt_files.clear();
-        if let Ok(mut g) = self.decrypt_batch_pending.try_lock() { g.take(); }
+        if let Ok(mut g) = self.decrypt_batch_pending.try_lock() {
+            g.take();
+        }
         self.decrypt_status = OpStatus::None;
         self.inspect_pqf.clear();
         self.inspect_result.clear();

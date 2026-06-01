@@ -23,24 +23,27 @@ const SIG_LEN: usize = 3309;
 ///
 /// Because the signature is prepended inside the AEAD-authenticated ciphertext
 /// it cannot be stripped after the fact.
+#[must_use = "signcrypt result must be checked"]
 pub fn signcrypt<R: Read + io::Seek>(
     sk_pem: &str,
-    sign_passphrase: Option<&str>,
     pubkey_pem: &str,
     input: &mut R,
     input_len: u64,
     writer: &mut dyn Write,
     chunk_size: usize,
+    sign_passphrase: Option<&str>,
 ) -> Result<(), PqfileError> {
     // Pass 1: hash the plaintext
     let hash = hash_stream(input)?;
 
     // Sign the 32-byte hash
-    let sig_bytes = sign::sign_bytes(sk_pem, sign_passphrase, &hash)?;
+    let sig_bytes = sign::sign_bytes(sk_pem, &hash, sign_passphrase)?;
     debug_assert_eq!(sig_bytes.len(), SIG_LEN);
 
     // Rewind for pass 2
-    input.seek(io::SeekFrom::Start(0)).map_err(PqfileError::Io)?;
+    input
+        .seek(io::SeekFrom::Start(0))
+        .map_err(PqfileError::Io)?;
 
     // Build a combined reader: [sig || plaintext]
     let sig_cursor = Cursor::new(sig_bytes);
@@ -52,6 +55,14 @@ pub fn signcrypt<R: Read + io::Seek>(
 
 /// Decrypt a signcrypted file, verify the sender's signature, and write plaintext.
 ///
+/// # Format limitation
+///
+/// This function uses `PqfReader` internally and therefore does not support v6
+/// (compress-then-encrypt) files. Since `signcrypt` never produces v6 output this
+/// is not a problem in practice. If a v6 file is passed, `PqfileError::CompressionNotSupported`
+/// is returned. Use `decrypt::decrypt_stream` followed by manual signature verification
+/// if you need to handle an unusual case.
+///
 /// # Streaming write-before-verify hazard
 ///
 /// Plaintext is written to `writer` **while streaming**, before the ML-DSA sender
@@ -62,6 +73,7 @@ pub fn signcrypt<R: Read + io::Seek>(
 /// `writer` and only use the output after the function returns `Ok(())`.**
 /// Do NOT pass a `File`, a socket, or any writer whose output you cannot retract,
 /// unless you are prepared to discard everything written on a subsequent error.
+#[must_use = "signdecrypt result must be checked; signature is verified only on Ok(())"]
 pub fn signdecrypt<R: Read>(
     privkey_pem: &str,
     vk_pem: &str,
@@ -98,6 +110,27 @@ pub fn signdecrypt<R: Read>(
     sign::verify_bytes(vk_pem, &hash, &sig_buf)
 }
 
+/// Sign `data` (in a single pass) with `sk_pem`, then encrypt the combined payload to `pubkey_pem`.
+///
+/// Unlike [`signcrypt`], this variant does not require `Seek` and can accept any byte slice.
+#[must_use = "signcrypt_bytes result must be checked"]
+pub fn signcrypt_bytes(
+    sk_pem: &str,
+    pubkey_pem: &str,
+    data: &[u8],
+    writer: &mut dyn Write,
+    chunk_size: usize,
+    sign_passphrase: Option<&str>,
+) -> Result<(), PqfileError> {
+    let hash = Sha3_256::digest(data).to_vec();
+    let sig_bytes = sign::sign_bytes(sk_pem, &hash, sign_passphrase)?;
+    debug_assert_eq!(sig_bytes.len(), SIG_LEN);
+    let sig_cursor = std::io::Cursor::new(sig_bytes);
+    let mut combined = sig_cursor.chain(data);
+    let combined_size = SIG_LEN as u64 + data.len() as u64;
+    encrypt::encrypt_stream(pubkey_pem, combined_size, chunk_size, &mut combined, writer)
+}
+
 fn hash_stream<R: Read>(reader: &mut R) -> Result<Vec<u8>, PqfileError> {
     let mut hasher = Sha3_256::new();
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -123,7 +156,16 @@ mod tests {
         let sk_result = sign_keygen_bytes(None).unwrap();
         let mut input = Cursor::new(plaintext);
         let mut output = Vec::new();
-        signcrypt(&sk_result.sk_pem, None, &pub_pem, &mut input, plaintext.len() as u64, &mut output, CHUNK_SIZE).unwrap();
+        signcrypt(
+            &sk_result.sk_pem,
+            &pub_pem,
+            &mut input,
+            plaintext.len() as u64,
+            &mut output,
+            CHUNK_SIZE,
+            None,
+        )
+        .unwrap();
         (output, priv_pem, sk_result.vk_pem, pub_pem)
     }
 
@@ -151,8 +193,17 @@ mod tests {
         let (ciphertext, priv_pem, _, _) = do_signcrypt(plaintext);
         let other_sk = sign_keygen_bytes(None).unwrap();
         let mut output = Vec::new();
-        let result = signdecrypt(&priv_pem, &other_sk.vk_pem, ciphertext.as_slice(), &mut output, None);
-        assert!(matches!(result, Err(PqfileError::SignatureVerificationFailed)));
+        let result = signdecrypt(
+            &priv_pem,
+            &other_sk.vk_pem,
+            ciphertext.as_slice(),
+            &mut output,
+            None,
+        );
+        assert!(matches!(
+            result,
+            Err(PqfileError::SignatureVerificationFailed)
+        ));
     }
 
     #[test]
@@ -161,7 +212,13 @@ mod tests {
         let (ciphertext, _, vk_pem, _) = do_signcrypt(plaintext);
         let (_, wrong_priv) = keygen_bytes(768, None).unwrap();
         let mut output = Vec::new();
-        let result = signdecrypt(&wrong_priv, &vk_pem, ciphertext.as_slice(), &mut output, None);
+        let result = signdecrypt(
+            &wrong_priv,
+            &vk_pem,
+            ciphertext.as_slice(),
+            &mut output,
+            None,
+        );
         assert!(result.is_err());
     }
 

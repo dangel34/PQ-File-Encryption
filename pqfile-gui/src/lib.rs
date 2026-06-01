@@ -51,9 +51,9 @@ pub fn start() -> Result<(), JsValue> {
 mod tests {
     use crate::app::PqfileApp;
     use crate::types::{FileInput, MultiFileEntry, OpStatus, Settings, Tab};
+    use eframe::egui;
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use eframe::egui;
 
     fn test_ctx() -> egui::Context {
         egui::Context::default()
@@ -68,22 +68,41 @@ mod tests {
             app.poll_files();
             let done = {
                 #[cfg(not(target_arch = "wasm32"))]
-                { app.encrypt_job.is_none() && app.decrypt_batch_job.is_none() }
+                {
+                    app.encrypt_job.is_none() && app.decrypt_batch_job.is_none()
+                }
                 #[cfg(target_arch = "wasm32")]
-                { true }
+                {
+                    true
+                }
             };
-            if done { break; }
-            assert!(Instant::now() < deadline, "background job timed out in test");
+            if done {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "background job timed out in test"
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
     }
 
     fn loaded_input(name: &str, data: Vec<u8>, path: Option<PathBuf>) -> FileInput {
-        FileInput { name: name.to_owned(), data: Some(data), path, pending: Default::default() }
+        FileInput {
+            name: name.to_owned(),
+            data: Some(data),
+            path,
+            pending: Default::default(),
+        }
     }
 
     fn file_entry(name: &str, data: Vec<u8>, path: Option<PathBuf>) -> MultiFileEntry {
-        MultiFileEntry { name: name.to_owned(), data, path, status: OpStatus::None }
+        MultiFileEntry {
+            name: name.to_owned(),
+            data,
+            path,
+            status: OpStatus::None,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -113,11 +132,17 @@ mod tests {
         let mut app = PqfileApp::default();
         app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
         app.handle_keygen();
-        assert!(matches!(app.keygen_status, OpStatus::Ok(_)), "first keygen should succeed");
+        assert!(
+            matches!(app.keygen_status, OpStatus::Ok(_)),
+            "first keygen should succeed"
+        );
 
         app.settings.confirm_overwrite = true;
         app.handle_keygen();
-        assert!(matches!(app.keygen_status, OpStatus::Err(_)), "second keygen should fail when confirm_overwrite is set");
+        assert!(
+            matches!(app.keygen_status, OpStatus::Err(_)),
+            "second keygen should fail when confirm_overwrite is set"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -127,18 +152,28 @@ mod tests {
         let mut app = PqfileApp::default();
         app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
         app.handle_keygen();
-        assert!(matches!(app.keygen_status, OpStatus::Ok(_)), "first keygen should succeed");
+        assert!(
+            matches!(app.keygen_status, OpStatus::Ok(_)),
+            "first keygen should succeed"
+        );
 
         app.handle_keygen();
-        assert!(matches!(app.keygen_status, OpStatus::Ok(_)), "second keygen should succeed when confirm_overwrite is off");
+        assert!(
+            matches!(app.keygen_status, OpStatus::Ok(_)),
+            "second keygen should succeed when confirm_overwrite is off"
+        );
     }
 
     #[test]
     fn encrypt_all_no_pubkey_is_noop() {
         let mut app = PqfileApp::default();
-        app.encrypt_files.push(file_entry("test.txt", b"hello".to_vec(), None));
+        app.encrypt_files
+            .push(file_entry("test.txt", b"hello".to_vec(), None));
         app.handle_encrypt_all(&test_ctx()); // no pubkey loaded — should return early without panicking
-        assert!(matches!(app.encrypt_files[0].status, OpStatus::None), "status should remain None");
+        assert!(
+            matches!(app.encrypt_files[0].status, OpStatus::None),
+            "status should remain None"
+        );
     }
 
     #[test]
@@ -152,7 +187,8 @@ mod tests {
     fn encrypt_bad_key_sets_error() {
         let mut app = PqfileApp::default();
         app.encrypt_pubkey = loaded_input("bad.pem", b"not a valid key".to_vec(), None);
-        app.encrypt_files.push(file_entry("test.txt", b"hello".to_vec(), None));
+        app.encrypt_files
+            .push(file_entry("test.txt", b"hello".to_vec(), None));
         app.poll_files(); // promote staging slot to recipients list
         app.handle_encrypt_all(&test_ctx());
         flush_jobs(&mut app);
@@ -163,7 +199,8 @@ mod tests {
     fn decrypt_bad_key_sets_error() {
         let mut app = PqfileApp::default();
         app.decrypt_privkey = loaded_input("bad.pem", b"not a valid key".to_vec(), None);
-        app.decrypt_files.push(file_entry("test.pqf", b"garbage".to_vec(), None));
+        app.decrypt_files
+            .push(file_entry("test.pqf", b"garbage".to_vec(), None));
         app.handle_decrypt_batch(&test_ctx());
         flush_jobs(&mut app);
         assert!(matches!(app.decrypt_files[0].status, OpStatus::Err(_)));
@@ -181,21 +218,29 @@ mod tests {
 
         let mut app = PqfileApp::default();
         app.encrypt_pubkey = loaded_input("pubkey.pem", pub_pem.as_bytes().to_vec(), None);
-        app.encrypt_files.push(file_entry("input.txt", plaintext.clone(), Some(plain_path)));
+        app.encrypt_files
+            .push(file_entry("input.txt", plaintext.clone(), Some(plain_path)));
         app.poll_files(); // promote staging slot to recipients list
         app.handle_encrypt_all(&test_ctx());
         flush_jobs(&mut app);
-        assert!(matches!(app.encrypt_files[0].status, OpStatus::Ok(_)), "encryption failed");
+        assert!(
+            matches!(app.encrypt_files[0].status, OpStatus::Ok(_)),
+            "encryption failed"
+        );
 
         // Decrypt
         let pqf_path = tmp.path().join("input.txt.pqf");
         let pqf_data = std::fs::read(&pqf_path).unwrap();
 
         app.decrypt_privkey = loaded_input("privkey.pem", priv_pem.as_bytes().to_vec(), None);
-        app.decrypt_files.push(file_entry("input.txt.pqf", pqf_data, Some(pqf_path)));
+        app.decrypt_files
+            .push(file_entry("input.txt.pqf", pqf_data, Some(pqf_path)));
         app.handle_decrypt_batch(&test_ctx());
         flush_jobs(&mut app);
-        assert!(matches!(app.decrypt_files[0].status, OpStatus::Ok(_)), "decryption failed");
+        assert!(
+            matches!(app.decrypt_files[0].status, OpStatus::Ok(_)),
+            "decryption failed"
+        );
 
         let decrypted = std::fs::read(tmp.path().join("input.txt")).unwrap();
         assert_eq!(decrypted, plaintext);
@@ -212,7 +257,8 @@ mod tests {
         for name in ["a.txt", "b.txt", "c.txt"] {
             let path = tmp.path().join(name);
             std::fs::write(&path, name.as_bytes()).unwrap();
-            app.encrypt_files.push(file_entry(name, name.as_bytes().to_vec(), Some(path)));
+            app.encrypt_files
+                .push(file_entry(name, name.as_bytes().to_vec(), Some(path)));
         }
 
         app.poll_files(); // promote staging slot to recipients list
@@ -222,8 +268,13 @@ mod tests {
         for entry in &app.encrypt_files {
             assert!(
                 matches!(entry.status, OpStatus::Ok(_)),
-                "{} failed: {:?}", entry.name,
-                if let OpStatus::Err(e) = &entry.status { e.as_str() } else { "" }
+                "{} failed: {:?}",
+                entry.name,
+                if let OpStatus::Err(e) = &entry.status {
+                    e.as_str()
+                } else {
+                    ""
+                }
             );
             assert!(tmp.path().join(format!("{}.pqf", entry.name)).exists());
         }
@@ -250,7 +301,10 @@ mod tests {
         assert!(s.dark_mode, "dark_mode default should be true");
         assert!(!s.auto_clear, "auto_clear default should be false");
         #[cfg(not(target_arch = "wasm32"))]
-        assert!(!s.confirm_overwrite, "confirm_overwrite default should be false");
+        assert!(
+            !s.confirm_overwrite,
+            "confirm_overwrite default should be false"
+        );
     }
 
     #[test]
@@ -275,7 +329,7 @@ mod tests {
         map.insert("auto_clear".to_owned(), "1".to_owned()); // not valid bool::from_str
         let storage = MockStorage(map);
         let s = Settings::load(&storage);
-        assert!(s.dark_mode);   // falls back to default true
+        assert!(s.dark_mode); // falls back to default true
         assert!(!s.auto_clear); // falls back to default false
     }
 
@@ -308,7 +362,10 @@ mod tests {
         app.tab = Tab::Encrypt;
         app.route_drop("pubkey.pem".to_owned(), b"key-data".to_vec(), None);
         app.encrypt_pubkey.poll();
-        assert!(app.encrypt_pubkey.loaded(), "pem should land in pubkey slot");
+        assert!(
+            app.encrypt_pubkey.loaded(),
+            "pem should land in pubkey slot"
+        );
         assert!(app.encrypt_files.is_empty(), "file list should be empty");
     }
 
@@ -337,7 +394,10 @@ mod tests {
         app.tab = Tab::Decrypt;
         app.route_drop("privkey.pem".to_owned(), b"key-data".to_vec(), None);
         app.decrypt_privkey.poll();
-        assert!(app.decrypt_privkey.loaded(), "pem should land in privkey slot");
+        assert!(
+            app.decrypt_privkey.loaded(),
+            "pem should land in privkey slot"
+        );
         assert!(app.decrypt_files.is_empty(), "file list should be empty");
     }
 
@@ -348,7 +408,10 @@ mod tests {
         app.route_drop("secret.txt.pqf".to_owned(), b"ciphertext".to_vec(), None);
         assert_eq!(app.decrypt_files.len(), 1, "pqf should land in file list");
         assert_eq!(app.decrypt_files[0].name, "secret.txt.pqf");
-        assert!(!app.decrypt_privkey.loaded(), "privkey slot should be empty");
+        assert!(
+            !app.decrypt_privkey.loaded(),
+            "privkey slot should be empty"
+        );
     }
 
     #[test]
@@ -368,9 +431,15 @@ mod tests {
         app.decrypt_privkey.poll();
         app.inspect_pqf.poll();
         assert!(!app.encrypt_pubkey.loaded());
-        assert!(app.encrypt_files.is_empty(), "encrypt file list should be empty");
+        assert!(
+            app.encrypt_files.is_empty(),
+            "encrypt file list should be empty"
+        );
         assert!(!app.decrypt_privkey.loaded());
-        assert!(app.decrypt_files.is_empty(), "decrypt file list should be empty");
+        assert!(
+            app.decrypt_files.is_empty(),
+            "decrypt file list should be empty"
+        );
         assert!(!app.inspect_pqf.loaded());
     }
 
@@ -380,6 +449,9 @@ mod tests {
         app.tab = Tab::Encrypt;
         app.route_drop("PUBKEY.PEM".to_owned(), b"key-data".to_vec(), None);
         app.encrypt_pubkey.poll();
-        assert!(app.encrypt_pubkey.loaded(), "uppercase .PEM should route to pubkey slot");
+        assert!(
+            app.encrypt_pubkey.loaded(),
+            "uppercase .PEM should route to pubkey slot"
+        );
     }
 }

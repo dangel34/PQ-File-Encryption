@@ -1,11 +1,11 @@
-use eframe::egui::{self, RichText, Vec2};
-use pqfile::keygen;
 use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::colors::{c_overlay, c_text};
 use crate::types::{KeygenAlgorithm, OpStatus};
 use crate::widgets::{card, section_label, show_status, tab_heading};
+use eframe::egui::{self, RichText, Vec2};
+use pqfile::keygen;
 
 impl PqfileApp {
     pub(crate) fn show_keygen(&mut self, ui: &mut egui::Ui, dark: bool) {
@@ -27,7 +27,11 @@ impl PqfileApp {
             section_label(ui, "OUTPUT DIRECTORY", dark);
             card(ui, c_card(dark), c_surface1(dark), |ui| {
                 ui.label(RichText::new(dir_display).size(13.0).color(
-                    if self.settings.output_dir.is_empty() { c_overlay(dark) } else { c_text(dark) },
+                    if self.settings.output_dir.is_empty() {
+                        c_overlay(dark)
+                    } else {
+                        c_text(dark)
+                    },
                 ));
                 ui.add_space(4.0);
                 ui.label(
@@ -59,25 +63,33 @@ impl PqfileApp {
                 ui.radio_value(
                     &mut self.keygen_algorithm,
                     KeygenAlgorithm::MlKem512,
-                    RichText::new("ML-KEM-512").size(13.0).color(c_subtext(dark)),
+                    RichText::new("ML-KEM-512")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
                 );
                 ui.add_space(8.0);
                 ui.radio_value(
                     &mut self.keygen_algorithm,
                     KeygenAlgorithm::MlKem768,
-                    RichText::new("ML-KEM-768").size(13.0).color(c_subtext(dark)),
+                    RichText::new("ML-KEM-768")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
                 );
                 ui.add_space(8.0);
                 ui.radio_value(
                     &mut self.keygen_algorithm,
                     KeygenAlgorithm::MlKem1024,
-                    RichText::new("ML-KEM-1024").size(13.0).color(c_subtext(dark)),
+                    RichText::new("ML-KEM-1024")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
                 );
                 ui.add_space(8.0);
                 ui.radio_value(
                     &mut self.keygen_algorithm,
                     KeygenAlgorithm::HybridX25519MlKem768,
-                    RichText::new("Hybrid X25519+ML-KEM-768").size(13.0).color(c_subtext(dark)),
+                    RichText::new("Hybrid X25519+ML-KEM-768")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
                 );
             });
             let desc = match self.keygen_algorithm {
@@ -142,7 +154,8 @@ impl PqfileApp {
     pub(crate) fn handle_keygen(&mut self) {
         let passphrase: Option<&str> = if self.keygen_use_passphrase {
             if self.keygen_passphrase.is_empty() {
-                self.keygen_status = OpStatus::Err("Enter a passphrase or uncheck the option.".to_owned());
+                self.keygen_status =
+                    OpStatus::Err("Enter a passphrase or uncheck the option.".to_owned());
                 return;
             }
             if self.keygen_passphrase != self.keygen_passphrase_confirm {
@@ -160,9 +173,8 @@ impl PqfileApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.settings.output_dir.trim().is_empty() {
-                self.keygen_status = OpStatus::Err(
-                    "Set a default output directory in Settings first.".to_owned()
-                );
+                self.keygen_status =
+                    OpStatus::Err("Set a default output directory in Settings first.".to_owned());
                 return;
             }
             let dir = std::path::Path::new(&self.settings.output_dir);

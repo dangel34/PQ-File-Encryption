@@ -1,16 +1,21 @@
+use crate::app::PqfileApp;
+use crate::colors::{
+    c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1,
+    c_text,
+};
+use crate::types::OpStatus;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::widgets::pick_folder_pqf;
+use crate::widgets::{
+    card, file_row, pick_pqf_files, save_result, section_label, show_status, tab_heading,
+};
+use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
+use pqfile::{decrypt, keygen};
 use std::io::Cursor;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
-use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-use pqfile::{decrypt, keygen};
-use crate::app::PqfileApp;
-use crate::colors::{c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
-use crate::types::OpStatus;
-use crate::widgets::{card, file_row, pick_pqf_files, save_result, section_label, show_status, tab_heading};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::widgets::pick_folder_pqf;
 
 impl PqfileApp {
     pub(crate) fn handle_decrypt_batch(&mut self, ctx: &egui::Context) {
@@ -120,7 +125,10 @@ impl PqfileApp {
                 };
             }
             if self.settings.auto_clear
-                && self.decrypt_files.iter().all(|e| matches!(e.status, OpStatus::Ok(_)))
+                && self
+                    .decrypt_files
+                    .iter()
+                    .all(|e| matches!(e.status, OpStatus::Ok(_)))
             {
                 self.decrypt_privkey.clear();
                 self.decrypt_files.clear();
@@ -146,12 +154,21 @@ impl PqfileApp {
         // ── Private key ───────────────────────────────────────────────────────
         section_label(ui, "PRIVATE KEY", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
-            file_row(ui, "Private key (.pem)", &mut self.decrypt_privkey, "PEM", &["pem"], dark);
+            file_row(
+                ui,
+                "Private key (.pem)",
+                &mut self.decrypt_privkey,
+                "PEM",
+                &["pem"],
+                dark,
+            );
         });
         ui.add_space(14.0);
 
         // Show passphrase field only when the loaded key is encrypted.
-        let key_is_encrypted = self.decrypt_privkey.as_str()
+        let key_is_encrypted = self
+            .decrypt_privkey
+            .as_str()
             .map(keygen::is_encrypted_key)
             .unwrap_or(false);
         if key_is_encrypted {
@@ -206,7 +223,9 @@ impl PqfileApp {
                         && ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new("+ Add Folder…").size(13.0).color(c_text(dark)),
+                                    RichText::new("+ Add Folder…")
+                                        .size(13.0)
+                                        .color(c_text(dark)),
                                 )
                                 .fill(c_surface0(dark)),
                             )
@@ -246,9 +265,7 @@ impl PqfileApp {
                                         OpStatus::None => {}
                                         OpStatus::Ok(_) => {
                                             ui.label(
-                                                RichText::new("OK")
-                                                    .size(12.0)
-                                                    .color(c_green(dark)),
+                                                RichText::new("OK").size(12.0).color(c_green(dark)),
                                             );
                                         }
                                         OpStatus::Err(m) => {
@@ -288,7 +305,10 @@ impl PqfileApp {
             .add_enabled(
                 ready,
                 egui::Button::new(
-                    RichText::new(btn_label).size(14.0).color(c_chrome(dark)).strong(),
+                    RichText::new(btn_label)
+                        .size(14.0)
+                        .color(c_chrome(dark))
+                        .strong(),
                 )
                 .fill(c_accent(dark))
                 .min_size(Vec2::new(170.0, 32.0)),

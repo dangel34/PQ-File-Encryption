@@ -305,7 +305,7 @@ Private and public keys are stored as PEM (RFC 7468) files. The PEM label determ
 | `ML-KEM-1024 KEY SHARE` | Shamir GF(256) share of a 64-byte ML-KEM-1024 seed |
 | `X25519+ML-KEM-768 KEY SHARE` | Shamir GF(256) share of a 96-byte hybrid seed |
 
-Share body layout (inside each PEM block):
+Share body layout (inside each PEM block, current format introduced in v3.2.x):
 
 ```
 Offset  Len  Field
@@ -314,9 +314,11 @@ Offset  Len  Field
 3       1    THRESHOLD (minimum shares required)
 4       1    TOTAL (total shares produced)
 5       1    X (1-indexed share index)
-6       8    PUBKEY_FP (first 8 bytes of SHA3-256 of the derived public key)
-14      var  Y (GF(256) share bytes; length equals seed length for the variant)
+6       16   PUBKEY_FP (first 16 bytes of SHA3-256 of the derived public key)
+22      var  Y (GF(256) share bytes; length equals seed length for the variant)
 ```
+
+**Format version break (v3.2.x):** Prior to v3.2.x, PUBKEY_FP was 8 bytes and Y started at offset 14 (SHARE_HEADER_LEN = 14). Shares from v3.1.x and earlier are rejected with a clear error when decoded by v3.2.x or later. Implementors supporting old shares must handle both layouts by checking body length against the variant's expected seed length.
 
 ---
 

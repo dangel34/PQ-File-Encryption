@@ -1,8 +1,8 @@
 use std::io::Cursor;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use pqfile::{encrypt, decrypt, keygen};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use pqfile::format::CHUNK_SIZE;
+use pqfile::{decrypt, encrypt, keygen};
 
 fn bench_encrypt_bytes(c: &mut Criterion) {
     let (pub_pem, _) = keygen::keygen_bytes(768, None).unwrap();
@@ -44,8 +44,14 @@ fn bench_encrypt_stream(c: &mut Criterion) {
             b.iter(|| {
                 let mut reader = Cursor::new(pt);
                 let mut writer = Vec::with_capacity(pt.len() + 4096);
-                encrypt::encrypt_stream(&pub_pem, pt.len() as u64, CHUNK_SIZE, &mut reader, &mut writer)
-                    .unwrap();
+                encrypt::encrypt_stream(
+                    &pub_pem,
+                    pt.len() as u64,
+                    CHUNK_SIZE,
+                    &mut reader,
+                    &mut writer,
+                )
+                .unwrap();
             });
         });
     }
@@ -60,7 +66,14 @@ fn bench_decrypt_stream(c: &mut Criterion) {
         let plaintext = vec![0xCDu8; size];
         let mut reader = Cursor::new(&plaintext);
         let mut ciphertext = Vec::new();
-        encrypt::encrypt_stream(&pub_pem, size as u64, CHUNK_SIZE, &mut reader, &mut ciphertext).unwrap();
+        encrypt::encrypt_stream(
+            &pub_pem,
+            size as u64,
+            CHUNK_SIZE,
+            &mut reader,
+            &mut ciphertext,
+        )
+        .unwrap();
 
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), &ciphertext, |b, ct| {

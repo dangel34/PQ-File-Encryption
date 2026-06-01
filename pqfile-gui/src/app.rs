@@ -1,16 +1,18 @@
-use std::sync::{Arc, Mutex};
-use zeroize::Zeroizing;
-use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
-use crate::colors::{c_accent, c_bg, c_card, c_chrome, c_overlay, c_subtext, c_surface0, c_surface1, c_text};
+use crate::colors::{
+    c_accent, c_bg, c_card, c_chrome, c_overlay, c_subtext, c_surface0, c_surface1, c_text,
+};
 use crate::theme::apply_theme;
 use crate::types::{
-    Tab, OpStatus, PickedFile, FileInput, BatchPending, MultiFileEntry, Settings,
-    KeygenAlgorithm, RecipientEntry, pem_variant_name,
+    pem_variant_name, BatchPending, FileInput, KeygenAlgorithm, MultiFileEntry, OpStatus,
+    PickedFile, RecipientEntry, Settings, Tab,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::types::{EncryptJobHandle, DecryptBatchJobHandle, KeyEntry};
+use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry};
 use crate::widgets::{bullet, card, kv_row, section_label, tab_btn};
 use crate::APP_VERSION;
+use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
+use std::sync::{Arc, Mutex};
+use zeroize::Zeroizing;
 
 pub struct PqfileApp {
     pub(crate) tab: Tab,
@@ -36,6 +38,16 @@ pub struct PqfileApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) encrypt_job: Option<EncryptJobHandle>,
 
+    // WASM frame-by-frame encrypt queue (replaces the background thread).
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) encrypt_wasm_queue: Vec<(usize, String, Vec<u8>)>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) encrypt_wasm_pub_pems: Vec<String>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) encrypt_wasm_done: usize,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) encrypt_wasm_total: usize,
+
     pub(crate) decrypt_privkey: FileInput,
     pub(crate) decrypt_files: Vec<MultiFileEntry>,
     pub(crate) decrypt_batch_pending: BatchPending,
@@ -47,6 +59,75 @@ pub struct PqfileApp {
     pub(crate) inspect_pqf: FileInput,
     pub(crate) inspect_result: String,
     pub(crate) inspect_status: OpStatus,
+
+    // ── Sign tab ──────────────────────────────────────────────────────────
+    pub(crate) sign_keygen_use_passphrase: bool,
+    pub(crate) sign_keygen_passphrase: Zeroizing<String>,
+    pub(crate) sign_keygen_passphrase_confirm: Zeroizing<String>,
+    pub(crate) sign_keygen_passphrase_visible: bool,
+    pub(crate) sign_keygen_status: OpStatus,
+    pub(crate) sign_sk: FileInput,
+    pub(crate) sign_sk_passphrase: Zeroizing<String>,
+    pub(crate) sign_sk_passphrase_visible: bool,
+    pub(crate) sign_input_file: FileInput,
+    pub(crate) sign_status: OpStatus,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) sign_sig_output_path: Option<String>,
+    pub(crate) sign_vk: FileInput,
+    pub(crate) sign_verify_file: FileInput,
+    pub(crate) sign_sig_file: FileInput,
+    pub(crate) sign_verify_status: OpStatus,
+
+    // ── Signcrypt tab ─────────────────────────────────────────────────────
+    pub(crate) signcrypt_sk: FileInput,
+    pub(crate) signcrypt_sk_passphrase: Zeroizing<String>,
+    pub(crate) signcrypt_sk_passphrase_visible: bool,
+    pub(crate) signcrypt_pubkey: FileInput,
+    pub(crate) signcrypt_input: FileInput,
+    pub(crate) signcrypt_status: OpStatus,
+    pub(crate) signdecrypt_privkey: FileInput,
+    pub(crate) signdecrypt_privkey_passphrase: Zeroizing<String>,
+    pub(crate) signdecrypt_privkey_passphrase_visible: bool,
+    pub(crate) signdecrypt_vk: FileInput,
+    pub(crate) signdecrypt_input: FileInput,
+    pub(crate) signdecrypt_status: OpStatus,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) signdecrypt_output_path: Option<String>,
+
+    // ── Archive tab ───────────────────────────────────────────────────────
+    pub(crate) archive_pubkey: FileInput,
+    pub(crate) archive_files: Vec<MultiFileEntry>,
+    pub(crate) archive_batch_pending: BatchPending,
+    pub(crate) archive_status: OpStatus,
+    pub(crate) extract_privkey: FileInput,
+    pub(crate) extract_privkey_passphrase: Zeroizing<String>,
+    pub(crate) extract_privkey_passphrase_visible: bool,
+    pub(crate) extract_input: FileInput,
+    pub(crate) extract_list_only: bool,
+    pub(crate) extract_status: OpStatus,
+    pub(crate) extract_result: String,
+
+    // ── Shamir tab ────────────────────────────────────────────────────────
+    pub(crate) shamir_split_privkey: FileInput,
+    pub(crate) shamir_split_passphrase: Zeroizing<String>,
+    pub(crate) shamir_split_passphrase_visible: bool,
+    pub(crate) shamir_split_threshold: u8,
+    pub(crate) shamir_split_shares: u8,
+    pub(crate) shamir_split_status: OpStatus,
+    pub(crate) shamir_shares: Vec<MultiFileEntry>,
+    pub(crate) shamir_shares_pending: BatchPending,
+    pub(crate) shamir_reconstruct_status: OpStatus,
+
+    // ── Tools tab (Revoke + Rekey) ────────────────────────────────────────
+    pub(crate) revoke_pubkey: FileInput,
+    pub(crate) revoke_reason: String,
+    pub(crate) revoke_status: OpStatus,
+    pub(crate) rekey_privkey: FileInput,
+    pub(crate) rekey_privkey_passphrase: Zeroizing<String>,
+    pub(crate) rekey_privkey_passphrase_visible: bool,
+    pub(crate) rekey_new_pubkey: FileInput,
+    pub(crate) rekey_input: FileInput,
+    pub(crate) rekey_status: OpStatus,
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keys: Vec<KeyEntry>,
@@ -84,17 +165,80 @@ impl Default for PqfileApp {
             inspect_pqf: FileInput::default(),
             inspect_result: String::new(),
             inspect_status: OpStatus::None,
+            sign_keygen_use_passphrase: false,
+            sign_keygen_passphrase: Zeroizing::new(String::new()),
+            sign_keygen_passphrase_confirm: Zeroizing::new(String::new()),
+            sign_keygen_passphrase_visible: false,
+            sign_keygen_status: OpStatus::None,
+            sign_sk: FileInput::default(),
+            sign_sk_passphrase: Zeroizing::new(String::new()),
+            sign_sk_passphrase_visible: false,
+            sign_input_file: FileInput::default(),
+            sign_status: OpStatus::None,
+            sign_sig_output_path: None,
+            sign_vk: FileInput::default(),
+            sign_verify_file: FileInput::default(),
+            sign_sig_file: FileInput::default(),
+            sign_verify_status: OpStatus::None,
+            signcrypt_sk: FileInput::default(),
+            signcrypt_sk_passphrase: Zeroizing::new(String::new()),
+            signcrypt_sk_passphrase_visible: false,
+            signcrypt_pubkey: FileInput::default(),
+            signcrypt_input: FileInput::default(),
+            signcrypt_status: OpStatus::None,
+            signdecrypt_privkey: FileInput::default(),
+            signdecrypt_privkey_passphrase: Zeroizing::new(String::new()),
+            signdecrypt_privkey_passphrase_visible: false,
+            signdecrypt_vk: FileInput::default(),
+            signdecrypt_input: FileInput::default(),
+            signdecrypt_status: OpStatus::None,
+            signdecrypt_output_path: None,
+            archive_pubkey: FileInput::default(),
+            archive_files: Vec::new(),
+            archive_batch_pending: Arc::new(Mutex::new(None)),
+            archive_status: OpStatus::None,
+            extract_privkey: FileInput::default(),
+            extract_privkey_passphrase: Zeroizing::new(String::new()),
+            extract_privkey_passphrase_visible: false,
+            extract_input: FileInput::default(),
+            extract_list_only: false,
+            extract_status: OpStatus::None,
+            extract_result: String::new(),
+            shamir_split_privkey: FileInput::default(),
+            shamir_split_passphrase: Zeroizing::new(String::new()),
+            shamir_split_passphrase_visible: false,
+            shamir_split_threshold: 2,
+            shamir_split_shares: 3,
+            shamir_split_status: OpStatus::None,
+            shamir_shares: Vec::new(),
+            shamir_shares_pending: Arc::new(Mutex::new(None)),
+            shamir_reconstruct_status: OpStatus::None,
+            revoke_pubkey: FileInput::default(),
+            revoke_reason: String::new(),
+            revoke_status: OpStatus::None,
+            rekey_privkey: FileInput::default(),
+            rekey_privkey_passphrase: Zeroizing::new(String::new()),
+            rekey_privkey_passphrase_visible: false,
+            rekey_new_pubkey: FileInput::default(),
+            rekey_input: FileInput::default(),
+            rekey_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
             keys: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            encrypt_wasm_queue: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            encrypt_wasm_pub_pems: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            encrypt_wasm_done: 0,
+            #[cfg(target_arch = "wasm32")]
+            encrypt_wasm_total: 0,
         }
     }
 }
 
 impl PqfileApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let settings = cc.storage
-            .map(Settings::load)
-            .unwrap_or_default();
+        let settings = cc.storage.map(Settings::load).unwrap_or_default();
         apply_theme(&cc.egui_ctx, settings.dark_mode);
         #[cfg(not(target_arch = "wasm32"))]
         let keys = cc.storage.map(load_keys).unwrap_or_default();
@@ -136,6 +280,8 @@ impl eframe::App for PqfileApp {
         if self.poll_files() {
             ctx.request_repaint();
         }
+        #[cfg(target_arch = "wasm32")]
+        self.tick_encrypt_wasm(&ctx);
         self.handle_dropped_files(&ctx);
 
         // Drag-over overlay — paint above everything else when files are hovering
@@ -166,20 +312,26 @@ impl eframe::App for PqfileApp {
 
         let dark = self.settings.dark_mode;
         let chrome = c_chrome(dark);
-        let bg     = c_bg(dark);
+        let bg = c_bg(dark);
 
         // ── Title bar ──────────────────────────────────────────────────────
         egui::Panel::top("top_bar")
             .exact_size(46.0)
-            .frame(egui::Frame::NONE.fill(chrome).inner_margin(Margin::symmetric(14, 0)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(chrome)
+                    .inner_margin(Margin::symmetric(14, 0)),
+            )
             .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     if let Some(ref tex) = self.app_icon {
                         let pad = 4.0_f32;
                         let img_sz = 22.0_f32;
                         let side = img_sz + pad * 2.0;
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, egui::CornerRadius::same(6), c_accent(dark));
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+                        ui.painter()
+                            .rect_filled(rect, egui::CornerRadius::same(6), c_accent(dark));
                         egui::Image::new(tex)
                             .fit_to_exact_size(egui::vec2(img_sz, img_sz))
                             .paint_at(ui, rect.shrink(pad));
@@ -210,15 +362,25 @@ impl eframe::App for PqfileApp {
         // ── Footer ─────────────────────────────────────────────────────────
         egui::Panel::bottom("footer")
             .exact_size(26.0)
-            .frame(egui::Frame::NONE.fill(chrome).inner_margin(Margin::symmetric(14, 0)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(chrome)
+                    .inner_margin(Margin::symmetric(14, 0)),
+            )
             .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("v{APP_VERSION}")).size(11.0).color(c_overlay(dark)));
+                    ui.label(
+                        RichText::new(format!("v{APP_VERSION}"))
+                            .size(11.0)
+                            .color(c_overlay(dark)),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new("ML-KEM-768 · ML-KEM-1024 · Hybrid · ML-DSA-65 · ChaCha20-Poly1305")
-                                .size(11.0)
-                                .color(c_overlay(dark)),
+                            RichText::new(
+                                "ML-KEM-768 · ML-KEM-1024 · Hybrid · ML-DSA-65 · ChaCha20-Poly1305",
+                            )
+                            .size(11.0)
+                            .color(c_overlay(dark)),
                         );
                     });
                 });
@@ -238,13 +400,18 @@ impl eframe::App for PqfileApp {
                     .fill(chrome)
                     .inner_margin(Margin::symmetric(14, 7))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            tab_btn(ui, &mut self.tab, Tab::Keygen,   "🔑  Keygen",   dark);
-                            tab_btn(ui, &mut self.tab, Tab::Encrypt,  "🔒  Encrypt",  dark);
-                            tab_btn(ui, &mut self.tab, Tab::Decrypt,  "🔓  Decrypt",  dark);
-                            tab_btn(ui, &mut self.tab, Tab::Inspect,  "🔍  Inspect",  dark);
-                            tab_btn(ui, &mut self.tab, Tab::Keys,     "🗝  Keys",     dark);
-                            tab_btn(ui, &mut self.tab, Tab::Settings, "⚙  Settings", dark);
+                        ui.horizontal_wrapped(|ui| {
+                            tab_btn(ui, &mut self.tab, Tab::Keygen, "🔑 Keygen", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Encrypt, "🔒 Encrypt", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Decrypt, "🔓 Decrypt", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Sign, "✏ Sign", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Signcrypt, "🔏 Signcrypt", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Archive, "📦 Archive", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Shamir, "🔀 Shamir", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Tools, "🔧 Tools", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Inspect, "🔍 Inspect", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Keys, "🗝 Keys", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Settings, "⚙ Settings", dark);
                         });
                     });
 
@@ -254,11 +421,16 @@ impl eframe::App for PqfileApp {
                         egui::Frame::NONE
                             .inner_margin(Margin::symmetric(18, 14))
                             .show(ui, |ui| match self.tab {
-                                Tab::Keygen   => self.show_keygen(ui, dark),
-                                Tab::Encrypt  => self.show_encrypt(ui, dark),
-                                Tab::Decrypt  => self.show_decrypt(ui, dark),
-                                Tab::Inspect  => self.show_inspect(ui, dark),
-                                Tab::Keys     => self.show_keys(ui, dark),
+                                Tab::Keygen => self.show_keygen(ui, dark),
+                                Tab::Encrypt => self.show_encrypt(ui, dark),
+                                Tab::Decrypt => self.show_decrypt(ui, dark),
+                                Tab::Sign => self.show_sign(ui, dark),
+                                Tab::Signcrypt => self.show_signcrypt(ui, dark),
+                                Tab::Archive => self.show_archive(ui, dark),
+                                Tab::Shamir => self.show_shamir(ui, dark),
+                                Tab::Tools => self.show_tools(ui, dark),
+                                Tab::Inspect => self.show_inspect(ui, dark),
+                                Tab::Keys => self.show_keys(ui, dark),
                                 Tab::Settings => self.show_settings(ui, &ctx, dark),
                             });
                     });
@@ -286,9 +458,13 @@ impl PqfileApp {
                 Some(bytes.to_vec())
             } else {
                 #[cfg(not(target_arch = "wasm32"))]
-                { file.path.as_ref().and_then(|p| std::fs::read(p).ok()) }
+                {
+                    file.path.as_ref().and_then(|p| std::fs::read(p).ok())
+                }
                 #[cfg(target_arch = "wasm32")]
-                { None }
+                {
+                    None
+                }
             };
 
             let Some(data) = data else { continue };
@@ -298,9 +474,19 @@ impl PqfileApp {
 
     /// Route a dropped file into the correct slot based on the active tab and
     /// the file's extension. Pure logic with no egui dependency — testable directly.
-    pub(crate) fn route_drop(&mut self, name: String, data: Vec<u8>, path: Option<std::path::PathBuf>) {
+    pub(crate) fn route_drop(
+        &mut self,
+        name: String,
+        data: Vec<u8>,
+        path: Option<std::path::PathBuf>,
+    ) {
         let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        let picked = PickedFile { name, data, path, error: None };
+        let picked = PickedFile {
+            name,
+            data,
+            path,
+            error: None,
+        };
         match self.tab {
             Tab::Encrypt => {
                 if ext == "pem" {
@@ -319,6 +505,44 @@ impl PqfileApp {
                     *self.decrypt_privkey.pending.lock().unwrap() = Some(picked);
                 } else {
                     self.decrypt_files.push(MultiFileEntry {
+                        name: picked.name,
+                        data: picked.data,
+                        path: picked.path,
+                        status: OpStatus::None,
+                    });
+                }
+            }
+            Tab::Sign => {
+                if ext == "pem" {
+                    *self.sign_sk.pending.lock().unwrap() = Some(picked);
+                } else if ext == "sig" {
+                    *self.sign_sig_file.pending.lock().unwrap() = Some(picked);
+                } else {
+                    *self.sign_input_file.pending.lock().unwrap() = Some(picked);
+                }
+            }
+            Tab::Signcrypt => {
+                if ext == "pqf" {
+                    *self.signdecrypt_input.pending.lock().unwrap() = Some(picked);
+                } else {
+                    *self.signcrypt_input.pending.lock().unwrap() = Some(picked);
+                }
+            }
+            Tab::Archive => {
+                if ext == "pqf" {
+                    *self.extract_input.pending.lock().unwrap() = Some(picked);
+                } else {
+                    self.archive_files.push(MultiFileEntry {
+                        name: picked.name,
+                        data: picked.data,
+                        path: picked.path,
+                        status: OpStatus::None,
+                    });
+                }
+            }
+            Tab::Shamir => {
+                if ext == "pem" {
+                    self.shamir_shares.push(MultiFileEntry {
                         name: picked.name,
                         data: picked.data,
                         path: picked.path,
@@ -369,7 +593,11 @@ impl PqfileApp {
             if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
                 let name = std::mem::take(&mut self.encrypt_pubkey.name);
                 let variant_name = pem_variant_name(&pem);
-                self.encrypt_recipients.push(RecipientEntry { name, pem, variant_name });
+                self.encrypt_recipients.push(RecipientEntry {
+                    name,
+                    pem,
+                    variant_name,
+                });
             }
         }
         self.encrypt_pubkey.clear();
@@ -389,7 +617,10 @@ impl PqfileApp {
         apply_job_results(results, &mut self.encrypt_files);
         if finished {
             let all_ok = self.settings.auto_clear
-                && self.encrypt_files.iter().all(|e| matches!(e.status, OpStatus::Ok(_)));
+                && self
+                    .encrypt_files
+                    .iter()
+                    .all(|e| matches!(e.status, OpStatus::Ok(_)));
             if all_ok {
                 self.encrypt_recipients.clear();
                 self.encrypt_files.clear();
@@ -413,7 +644,10 @@ impl PqfileApp {
         apply_job_results(results, &mut self.decrypt_files);
         if finished {
             let all_ok = self.settings.auto_clear
-                && self.decrypt_files.iter().all(|e| matches!(e.status, OpStatus::Ok(_)));
+                && self
+                    .decrypt_files
+                    .iter()
+                    .all(|e| matches!(e.status, OpStatus::Ok(_)));
             if all_ok {
                 self.decrypt_privkey.clear();
                 self.decrypt_files.clear();
@@ -434,9 +668,40 @@ impl PqfileApp {
         self.decrypt_privkey.poll();
         self.inspect_pqf.poll();
 
+        // Sign tab
+        self.sign_sk.poll();
+        self.sign_input_file.poll();
+        self.sign_vk.poll();
+        self.sign_verify_file.poll();
+        self.sign_sig_file.poll();
+
+        // Signcrypt tab
+        self.signcrypt_sk.poll();
+        self.signcrypt_pubkey.poll();
+        self.signcrypt_input.poll();
+        self.signdecrypt_privkey.poll();
+        self.signdecrypt_vk.poll();
+        self.signdecrypt_input.poll();
+
+        // Archive tab
+        self.archive_pubkey.poll();
+        self.extract_privkey.poll();
+        self.extract_input.poll();
+
+        // Shamir tab
+        self.shamir_split_privkey.poll();
+
+        // Tools tab
+        self.revoke_pubkey.poll();
+        self.rekey_privkey.poll();
+        self.rekey_new_pubkey.poll();
+        self.rekey_input.poll();
+
         let enc_batch = drain_batch_pending(&self.encrypt_batch_pending, &mut self.encrypt_files);
         let dec_batch = drain_batch_pending(&self.decrypt_batch_pending, &mut self.decrypt_files);
-        let batch_arrived = enc_batch || dec_batch;
+        let arc_batch = drain_batch_pending(&self.archive_batch_pending, &mut self.archive_files);
+        let sha_batch = drain_batch_pending(&self.shamir_shares_pending, &mut self.shamir_shares);
+        let batch_arrived = enc_batch || dec_batch || arc_batch || sha_batch;
 
         #[cfg(not(target_arch = "wasm32"))]
         let enc_update = self.drain_encrypt_job_results();
@@ -452,18 +717,37 @@ impl PqfileApp {
             &self.encrypt_pubkey,
             &self.decrypt_privkey,
             &self.inspect_pqf,
+            &self.sign_sk,
+            &self.sign_input_file,
+            &self.sign_vk,
+            &self.sign_verify_file,
+            &self.sign_sig_file,
+            &self.signcrypt_sk,
+            &self.signcrypt_pubkey,
+            &self.signcrypt_input,
+            &self.signdecrypt_privkey,
+            &self.signdecrypt_vk,
+            &self.signdecrypt_input,
+            &self.archive_pubkey,
+            &self.extract_privkey,
+            &self.extract_input,
+            &self.shamir_split_privkey,
+            &self.revoke_pubkey,
+            &self.rekey_privkey,
+            &self.rekey_new_pubkey,
+            &self.rekey_input,
         ]
         .iter()
         .any(|f| f.pending.try_lock().map(|g| g.is_some()).unwrap_or(false));
 
-        let batch_pending = self.encrypt_batch_pending
-            .try_lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
-            || self.decrypt_batch_pending
-            .try_lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
+        let batch_pending = [
+            &self.encrypt_batch_pending,
+            &self.decrypt_batch_pending,
+            &self.archive_batch_pending,
+            &self.shamir_shares_pending,
+        ]
+        .iter()
+        .any(|p| p.try_lock().map(|g| g.is_some()).unwrap_or(false));
 
         singles_pending || batch_arrived || batch_pending || enc_update || dec_update
     }
@@ -475,113 +759,145 @@ impl PqfileApp {
     fn show_about_window(&mut self, ctx: &egui::Context, dark: bool) {
         let mut close = false;
 
-        egui::Window::new(RichText::new("About pqfile").size(14.0).strong().color(c_text(dark)))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .fixed_size([430.0, 490.0])
-            .frame(
-                egui::Frame::window(&ctx.global_style())
-                    .fill(c_bg(dark))
-                    .stroke(Stroke::new(2.0, c_subtext(dark)))
-                    .corner_radius(CornerRadius::same(10)),
-            )
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(440.0)
-                    .auto_shrink([true, true])
-                    .show(ui, |ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(6.0);
-                            if let Some(ref tex) = self.app_icon {
-                                let pad = 6.0_f32;
-                                let img_sz = 32.0_f32;
-                                let total = egui::vec2(img_sz + pad * 2.0, img_sz + pad * 2.0);
-                                let (rect, _) = ui.allocate_exact_size(total, egui::Sense::hover());
-                                ui.painter().rect_filled(rect, egui::CornerRadius::same(10), c_accent(dark));
-                                egui::Image::new(tex)
-                                    .fit_to_exact_size(egui::vec2(img_sz, img_sz))
-                                    .paint_at(ui, rect.shrink(pad));
-                            } else {
-                                ui.label(RichText::new("🔐").size(40.0));
-                            }
-                            ui.add_space(6.0);
-                            ui.label(RichText::new("pqfile").size(20.0).strong().color(c_accent(dark)));
-                            ui.label(RichText::new("Post-Quantum File Encryption").size(13.0).color(c_subtext(dark)));
-                            ui.label(
-                                RichText::new(format!("Version {APP_VERSION}"))
-                                    .size(12.0)
-                                    .color(c_subtext(dark)),
+        egui::Window::new(
+            RichText::new("About pqfile")
+                .size(14.0)
+                .strong()
+                .color(c_text(dark)),
+        )
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .fixed_size([430.0, 490.0])
+        .frame(
+            egui::Frame::window(&ctx.global_style())
+                .fill(c_bg(dark))
+                .stroke(Stroke::new(2.0, c_subtext(dark)))
+                .corner_radius(CornerRadius::same(10)),
+        )
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(440.0)
+                .auto_shrink([true, true])
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(6.0);
+                        if let Some(ref tex) = self.app_icon {
+                            let pad = 6.0_f32;
+                            let img_sz = 32.0_f32;
+                            let total = egui::vec2(img_sz + pad * 2.0, img_sz + pad * 2.0);
+                            let (rect, _) = ui.allocate_exact_size(total, egui::Sense::hover());
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(10),
+                                c_accent(dark),
                             );
-                        });
-
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.add_space(10.0);
-
+                            egui::Image::new(tex)
+                                .fit_to_exact_size(egui::vec2(img_sz, img_sz))
+                                .paint_at(ui, rect.shrink(pad));
+                        } else {
+                            ui.label(RichText::new("🔐").size(40.0));
+                        }
+                        ui.add_space(6.0);
                         ui.label(
-                            RichText::new(
-                                "Quantum-resistant file encryption for the post-quantum era. \
+                            RichText::new("pqfile")
+                                .size(20.0)
+                                .strong()
+                                .color(c_accent(dark)),
+                        );
+                        ui.label(
+                            RichText::new("Post-Quantum File Encryption")
+                                .size(13.0)
+                                .color(c_subtext(dark)),
+                        );
+                        ui.label(
+                            RichText::new(format!("Version {APP_VERSION}"))
+                                .size(12.0)
+                                .color(c_subtext(dark)),
+                        );
+                    });
+
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+
+                    ui.label(
+                        RichText::new(
+                            "Quantum-resistant file encryption for the post-quantum era. \
                                  Encrypt any file with a public key. \
                                  Only the matching private key can decrypt it.",
-                            )
-                            .size(13.0)
-                            .color(c_subtext(dark)),
+                        )
+                        .size(13.0)
+                        .color(c_subtext(dark)),
+                    );
+
+                    ui.add_space(14.0);
+                    section_label(ui, "CRYPTOGRAPHIC ALGORITHMS", dark);
+                    card(ui, c_card(dark), c_surface1(dark), |ui| {
+                        kv_row(
+                            ui,
+                            "Key encapsulation",
+                            "ML-KEM-512/768/1024, X25519 Hybrid (FIPS 203)",
+                            dark,
                         );
-
-                        ui.add_space(14.0);
-                        section_label(ui, "CRYPTOGRAPHIC ALGORITHMS", dark);
-                        card(ui, c_card(dark), c_surface1(dark), |ui| {
-                            kv_row(ui, "Key encapsulation", "ML-KEM-512/768/1024, X25519 Hybrid (FIPS 203)", dark);
-                            kv_row(ui, "Digital signatures", "ML-DSA-65  (NIST FIPS 204)", dark);
-                            kv_row(ui, "Symmetric cipher",  "ChaCha20-Poly1305  (RFC 8439)", dark);
-                            kv_row(ui, "Passphrase KDF",    "Argon2id  (m=64 MiB, t=3, p=1)", dark);
-                            kv_row(ui, "Randomness",        "OS CSPRNG  (OsRng)", dark);
-                            kv_row(ui, "File format",       ".pqf  v3-v6 / multi-recipient v4", dark);
-                        });
-
-                        ui.add_space(10.0);
-                        section_label(ui, "SECURITY PROPERTIES", dark);
-                        card(ui, c_card(dark), c_surface1(dark), |ui| {
-                            bullet(ui, "All operations run locally. No data is uploaded", dark);
-                            bullet(ui, "Keys and shared secrets zeroized after use", dark);
-                            bullet(ui, "AEAD authentication prevents silent corruption", dark);
-                            bullet(ui, "Fresh nonce and KEM encapsulation per file", dark);
-                        });
-
-                        ui.add_space(10.0);
-                        section_label(ui, "AUTHOR", dark);
-                        card(ui, c_card(dark), c_surface1(dark), |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("Created by").size(12.5).color(c_subtext(dark)));
-                                ui.hyperlink_to(
-                                    RichText::new("dangel34").size(12.5).color(c_accent(dark)),
-                                    "https://github.com/dangel34",
-                                );
-                            });
-                        });
-
-                        ui.add_space(14.0);
-                        ui.separator();
-                        ui.add_space(10.0);
-
-                        ui.vertical_centered(|ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new("Close").size(13.0).color(c_text(dark)),
-                                    )
-                                    .fill(c_surface0(dark))
-                                    .min_size(Vec2::new(88.0, 30.0)),
-                                )
-                                .clicked()
-                            {
-                                close = true;
-                            }
-                        });
-                        ui.add_space(4.0);
+                        kv_row(ui, "Digital signatures", "ML-DSA-65  (NIST FIPS 204)", dark);
+                        kv_row(
+                            ui,
+                            "Symmetric cipher",
+                            "ChaCha20-Poly1305  (RFC 8439)",
+                            dark,
+                        );
+                        kv_row(ui, "Passphrase KDF", "Argon2id  (m=64 MiB, t=3, p=1)", dark);
+                        kv_row(ui, "Randomness", "OS CSPRNG  (OsRng)", dark);
+                        kv_row(ui, "File format", ".pqf  v3-v6 / multi-recipient v4", dark);
                     });
-            });
+
+                    ui.add_space(10.0);
+                    section_label(ui, "SECURITY PROPERTIES", dark);
+                    card(ui, c_card(dark), c_surface1(dark), |ui| {
+                        bullet(ui, "All operations run locally. No data is uploaded", dark);
+                        bullet(ui, "Keys and shared secrets zeroized after use", dark);
+                        bullet(ui, "AEAD authentication prevents silent corruption", dark);
+                        bullet(ui, "Fresh nonce and KEM encapsulation per file", dark);
+                    });
+
+                    ui.add_space(10.0);
+                    section_label(ui, "AUTHOR", dark);
+                    card(ui, c_card(dark), c_surface1(dark), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Created by")
+                                    .size(12.5)
+                                    .color(c_subtext(dark)),
+                            );
+                            ui.hyperlink_to(
+                                RichText::new("dangel34").size(12.5).color(c_accent(dark)),
+                                "https://github.com/dangel34",
+                            );
+                        });
+                    });
+
+                    ui.add_space(14.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+
+                    ui.vertical_centered(|ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Close").size(13.0).color(c_text(dark)),
+                                )
+                                .fill(c_surface0(dark))
+                                .min_size(Vec2::new(88.0, 30.0)),
+                            )
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
+                    ui.add_space(4.0);
+                });
+        });
 
         if close {
             self.show_about = false;
@@ -596,7 +912,10 @@ pub(crate) fn save_keys(keys: &[KeyEntry], storage: &mut dyn eframe::Storage) {
     storage.set_string("keys.count", keys.len().to_string());
     for (i, k) in keys.iter().enumerate() {
         storage.set_string(&format!("keys.{i}.label"), k.label.clone());
-        storage.set_string(&format!("keys.{i}.pubkey"), k.pubkey_path.to_string_lossy().into_owned());
+        storage.set_string(
+            &format!("keys.{i}.pubkey"),
+            k.pubkey_path.to_string_lossy().into_owned(),
+        );
         storage.set_string(
             &format!("keys.{i}.privkey"),
             k.privkey_path
@@ -616,18 +935,33 @@ pub(crate) fn load_keys(storage: &dyn eframe::Storage) -> Vec<KeyEntry> {
         .unwrap_or(0);
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
-        let label = storage.get_string(&format!("keys.{i}.label")).unwrap_or_default();
-        let pubkey_str = storage.get_string(&format!("keys.{i}.pubkey")).unwrap_or_default();
-        let privkey_str = storage.get_string(&format!("keys.{i}.privkey")).unwrap_or_default();
-        let fingerprint = storage.get_string(&format!("keys.{i}.fp")).unwrap_or_default();
-        if pubkey_str.is_empty() { continue; }
+        let label = storage
+            .get_string(&format!("keys.{i}.label"))
+            .unwrap_or_default();
+        let pubkey_str = storage
+            .get_string(&format!("keys.{i}.pubkey"))
+            .unwrap_or_default();
+        let privkey_str = storage
+            .get_string(&format!("keys.{i}.privkey"))
+            .unwrap_or_default();
+        let fingerprint = storage
+            .get_string(&format!("keys.{i}.fp"))
+            .unwrap_or_default();
+        if pubkey_str.is_empty() {
+            continue;
+        }
         let pubkey_path = std::path::PathBuf::from(&pubkey_str);
         let privkey_path = if privkey_str.is_empty() {
             None
         } else {
             Some(std::path::PathBuf::from(&privkey_str))
         };
-        out.push(KeyEntry { label, pubkey_path, privkey_path, fingerprint });
+        out.push(KeyEntry {
+            label,
+            pubkey_path,
+            privkey_path,
+            fingerprint,
+        });
     }
     out
 }

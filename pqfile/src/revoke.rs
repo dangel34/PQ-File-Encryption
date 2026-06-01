@@ -5,6 +5,7 @@ use crate::error::PqfileError;
 use crate::keygen::fingerprint_pem;
 
 /// Returns the path of the `.revoked` sidecar for a given public key path.
+#[must_use]
 pub fn revoked_path_for(pubkey_path: &Path) -> PathBuf {
     let mut s = pubkey_path.as_os_str().to_owned();
     s.push(".revoked");
@@ -15,6 +16,7 @@ pub fn revoked_path_for(pubkey_path: &Path) -> PathBuf {
 ///
 /// The sidecar contains the key fingerprint and an optional reason string.
 /// On the next encrypt with this key path, `check_not_revoked` will fail.
+#[must_use = "revocation result must be checked"]
 pub fn revoke_key(pubkey_path: &Path, reason: &str) -> Result<String, PqfileError> {
     let pubkey_pem = fs::read_to_string(pubkey_path)?;
     let fingerprint = fingerprint_pem(&pubkey_pem);
@@ -32,6 +34,7 @@ pub fn revoke_key(pubkey_path: &Path, reason: &str) -> Result<String, PqfileErro
 ///
 /// Reads the `.revoked` sidecar if it exists and compares the fingerprint.
 /// Returns `Err(KeyRevoked)` if revoked, `Ok(())` otherwise.
+#[must_use = "revocation check must be inspected; ignoring it means encrypting to revoked keys"]
 pub fn check_not_revoked(pubkey_path: &Path, pubkey_pem: &str) -> Result<(), PqfileError> {
     let revoked_path = revoked_path_for(pubkey_path);
     if !revoked_path.exists() {
@@ -45,7 +48,10 @@ pub fn check_not_revoked(pubkey_path: &Path, pubkey_pem: &str) -> Result<(), Pqf
 
     // If fingerprints are present and match (or sidecar has no valid fingerprint), refuse.
     if fp_in_file.is_empty() || fp_of_key == fp_in_file {
-        return Err(PqfileError::KeyRevoked { fingerprint: fp_of_key, reason });
+        return Err(PqfileError::KeyRevoked {
+            fingerprint: fp_of_key,
+            reason,
+        });
     }
     Ok(())
 }
@@ -53,14 +59,17 @@ pub fn check_not_revoked(pubkey_path: &Path, pubkey_pem: &str) -> Result<(), Pqf
 // ── minimal JSON helpers (avoids pulling in serde_json at runtime) ─────────
 
 fn json_str(s: &str) -> String {
-    let escaped: String = s.chars().flat_map(|c| match c {
-        '"'  => vec!['\\', '"'],
-        '\\' => vec!['\\', '\\'],
-        '\n' => vec!['\\', 'n'],
-        '\r' => vec!['\\', 'r'],
-        '\t' => vec!['\\', 't'],
-        c    => vec![c],
-    }).collect();
+    let escaped: String = s
+        .chars()
+        .flat_map(|c| match c {
+            '"' => vec!['\\', '"'],
+            '\\' => vec!['\\', '\\'],
+            '\n' => vec!['\\', 'n'],
+            '\r' => vec!['\\', 'r'],
+            '\t' => vec!['\\', 't'],
+            c => vec![c],
+        })
+        .collect();
     format!("\"{escaped}\"")
 }
 
@@ -81,12 +90,15 @@ fn extract_json_str(json: &str, key: &str) -> Option<String> {
         match chars.next()? {
             '"' => break,
             '\\' => match chars.next()? {
-                '"'  => result.push('"'),
+                '"' => result.push('"'),
                 '\\' => result.push('\\'),
-                'n'  => result.push('\n'),
-                'r'  => result.push('\r'),
-                't'  => result.push('\t'),
-                c    => { result.push('\\'); result.push(c); }
+                'n' => result.push('\n'),
+                'r' => result.push('\r'),
+                't' => result.push('\t'),
+                c => {
+                    result.push('\\');
+                    result.push(c);
+                }
             },
             c => result.push(c),
         }
@@ -138,7 +150,7 @@ mod tests {
         std::fs::write(&pub_path, &pub_pem).unwrap();
         let fp = revoke_key(&pub_path, "").unwrap();
         let parts: Vec<&str> = fp.split(':').collect();
-        assert_eq!(parts.len(), 8);
+        assert_eq!(parts.len(), 16);
     }
 
     #[test]

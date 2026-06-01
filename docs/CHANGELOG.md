@@ -4,6 +4,37 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [3.3.0] - unreleased (API audit + security hardening)
+
+### Breaking changes
+
+- **Shamir share format**: The `pubkey_fp` field in each share PEM body grew from 8 bytes to 16 bytes (`SHARE_HEADER_LEN` changed from 14 to 22). Shares produced by v3.1.x or earlier are not compatible and are now rejected with a clear error rather than silently producing incorrect output.
+- **signcrypt parameter order**: `sign_passphrase: Option<&str>` moved to the last position in `signcrypt`, `signcrypt_bytes`. Callers that passed positional arguments must update their call sites.
+- **Hybrid HKDF salt**: HKDF for the hybrid X25519+ML-KEM-768 key exchange was corrected to use no explicit salt (previously a fixed zero salt was passed incorrectly). Files encrypted with a hybrid key before this fix cannot be decrypted by v3.3.x, and vice versa. Pure ML-KEM files are unaffected.
+
+### Security
+
+- `KemVariantMismatch { key, file }` error added. `decrypt_stream` and `decrypt_bytes` now return this distinct variant when the private key's KEM variant does not match the file header, rather than the generic `UnsupportedKem`. Callers can pattern-match to present a specific diagnostic.
+- `UnsupportedKem` is no longer returned for key/file variant mismatches; it is now reserved for genuinely unrecognised KEM variant identifiers in on-disk data.
+- Shamir `decode_share_pem` explicitly detects shares produced with the old 8-byte fingerprint layout (v3.1.x and earlier) and returns a clear error instead of producing garbage results.
+- Constant-time note: the `gf_mul` loop in GF(256) arithmetic branches on its second argument. In the Lagrange interpolation path, that argument is always a Lagrange coefficient derived from public share indices, so timing does not depend on secret share bytes. This is now documented in the source.
+- Shamir `reconstruct_raw` now borrows `y` slices rather than taking owned `Vec<u8>`, eliminating an intermediate non-zeroizing copy of sensitive share material.
+- Streaming decrypt_v6 path added: compressed-then-encrypted (v6) files can now be decrypted via `decrypt_stream` without first buffering the entire decompressed payload.
+- `signdecrypt` explicitly documents the v6 limitation (PqfReader does not support compressed files) and the write-before-verify hazard.
+
+### API changes
+
+- Constants renamed for clarity: `KEM_VARIANT` -> `KEM_VARIANT_768`, `KEM_CT_LEN` -> `KEM_CT_LEN_768`, `EK_LEN` -> `EK_LEN_768`, `HEADER_LEN` -> `HEADER_LEN_768`.
+- `signcrypt_bytes` added: signs and encrypts a `&[u8]` in a single pass without requiring `Seek`.
+- `#[non_exhaustive]` applied to `PqfileError`, `SplitResult`, `SignKeygenResult`, `ArchiveEntry`, `PqfHeaderInfo`. Future variants/fields can be added without a semver break.
+- `#[must_use]` applied to all fallible public functions.
+- Internal types (`PqfHeader`, `PqfHeaderV4`, `PqfHeaderV7`, `RecipientEntryV4`, `RecipientEntryV7`) and the `passphrase` module are now `pub(crate)`.
+- All 12 PEM tag constants in `keygen` are now `pub(crate)`.
+- CLI and GUI `inspect` commands migrated to `inspect_stream` (typed `PqfHeaderInfo` enum) rather than raw internal format structs.
+- File-path wrapper functions `encrypt::encrypt` and `decrypt::decrypt` removed. Callers open files and pass `Read`/`Write` impls to the streaming API directly.
+
+---
+
 ## [3.2.0] - 2026-05-28
 
 ### Added

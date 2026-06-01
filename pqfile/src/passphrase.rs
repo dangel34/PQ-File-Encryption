@@ -66,7 +66,10 @@ pub fn encrypt_seed(seed: &[u8; SEED_LEN], passphrase: &str) -> Result<Vec<u8>, 
 
 /// Decrypts the 108-byte payload from an encrypted private key PEM body.
 /// Returns the 64-byte seed on success, or `WrongPassphrase` on failure.
-pub fn decrypt_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
+pub fn decrypt_seed(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
     if body.len() != ENCRYPTED_BODY_LEN {
         return Err(PqfileError::InvalidKeyLength {
             expected: ENCRYPTED_BODY_LEN,
@@ -85,7 +88,7 @@ pub fn decrypt_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; SEED
     let plaintext = Zeroizing::new(
         cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| PqfileError::WrongPassphrase)?
+            .map_err(|_| PqfileError::WrongPassphrase)?,
     );
 
     if plaintext.len() != SEED_LEN {
@@ -98,7 +101,10 @@ pub fn decrypt_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; SEED
 }
 
 /// Encrypts a 96-byte hybrid seed (X25519 scalar || ML-KEM seed) under `passphrase`.
-pub fn encrypt_hybrid_seed(seed: &[u8; HYBRID_SEED_LEN], passphrase: &str) -> Result<Vec<u8>, PqfileError> {
+pub fn encrypt_hybrid_seed(
+    seed: &[u8; HYBRID_SEED_LEN],
+    passphrase: &str,
+) -> Result<Vec<u8>, PqfileError> {
     let mut salt = [0u8; SALT_LEN];
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
 
@@ -121,7 +127,10 @@ pub fn encrypt_hybrid_seed(seed: &[u8; HYBRID_SEED_LEN], passphrase: &str) -> Re
 }
 
 /// Decrypts the 140-byte payload from an encrypted hybrid private key PEM body.
-pub fn decrypt_hybrid_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
+pub fn decrypt_hybrid_seed(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
     if body.len() != ENCRYPTED_HYBRID_BODY_LEN {
         return Err(PqfileError::InvalidKeyLength {
             expected: ENCRYPTED_HYBRID_BODY_LEN,
@@ -140,7 +149,7 @@ pub fn decrypt_hybrid_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u
     let plaintext = Zeroizing::new(
         cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| PqfileError::WrongPassphrase)?
+            .map_err(|_| PqfileError::WrongPassphrase)?,
     );
 
     if plaintext.len() != HYBRID_SEED_LEN {
@@ -162,7 +171,10 @@ pub const ENCRYPTED_SIGNING_BODY_LEN: usize = SALT_LEN + NONCE_LEN + SIGNING_SEE
 
 /// Encrypts a 32-byte ML-DSA-65 signing seed under `passphrase`. Returns the 76-byte
 /// payload stored as the PEM body of an encrypted signing key.
-pub fn encrypt_signing_seed(seed: &[u8; SIGNING_SEED_LEN], passphrase: &str) -> Result<Vec<u8>, PqfileError> {
+pub fn encrypt_signing_seed(
+    seed: &[u8; SIGNING_SEED_LEN],
+    passphrase: &str,
+) -> Result<Vec<u8>, PqfileError> {
     let mut salt = [0u8; SALT_LEN];
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
 
@@ -186,7 +198,10 @@ pub fn encrypt_signing_seed(seed: &[u8; SIGNING_SEED_LEN], passphrase: &str) -> 
 
 /// Decrypts the 76-byte payload from an encrypted ML-DSA-65 signing key PEM body.
 /// Returns the 32-byte signing seed on success, or `WrongPassphrase` on failure.
-pub fn decrypt_signing_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; SIGNING_SEED_LEN]>, PqfileError> {
+pub fn decrypt_signing_seed(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; SIGNING_SEED_LEN]>, PqfileError> {
     if body.len() != ENCRYPTED_SIGNING_BODY_LEN {
         return Err(PqfileError::InvalidKeyLength {
             expected: ENCRYPTED_SIGNING_BODY_LEN,
@@ -205,7 +220,7 @@ pub fn decrypt_signing_seed(body: &[u8], passphrase: &str) -> Result<Zeroizing<[
     let plaintext = Zeroizing::new(
         cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| PqfileError::WrongPassphrase)?
+            .map_err(|_| PqfileError::WrongPassphrase)?,
     );
 
     if plaintext.len() != SIGNING_SEED_LEN {
@@ -245,7 +260,10 @@ mod tests {
     fn wrong_passphrase_returns_error() {
         let seed = [0x99u8; SEED_LEN];
         let body = encrypt_seed(&seed, "correct").unwrap();
-        assert!(matches!(decrypt_seed(&body, "wrong"), Err(PqfileError::WrongPassphrase)));
+        assert!(matches!(
+            decrypt_seed(&body, "wrong"),
+            Err(PqfileError::WrongPassphrase)
+        ));
     }
 
     #[test]
@@ -313,7 +331,10 @@ mod tests {
     fn signing_wrong_passphrase_returns_error() {
         let seed = [0x22u8; SIGNING_SEED_LEN];
         let body = encrypt_signing_seed(&seed, "correct").unwrap();
-        assert!(matches!(decrypt_signing_seed(&body, "wrong"), Err(PqfileError::WrongPassphrase)));
+        assert!(matches!(
+            decrypt_signing_seed(&body, "wrong"),
+            Err(PqfileError::WrongPassphrase)
+        ));
     }
 
     #[test]

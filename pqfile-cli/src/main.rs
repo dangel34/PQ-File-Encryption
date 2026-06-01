@@ -4,11 +4,15 @@ use std::path::{Path, PathBuf};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
-use pqfile::{archive, decrypt, encrypt, format, keygen, rekey, revoke, shamir, sign, signcrypt};
 use pqfile::error::PqfileError;
+use pqfile::inspect::{inspect_stream, PqfHeaderInfo, RecipientInfo};
+use pqfile::{archive, decrypt, encrypt, format, keygen, rekey, revoke, shamir, sign, signcrypt};
 
 #[derive(Parser)]
-#[command(name = "pqfile", about = "Quantum-resistant file encryption for the post-quantum era. Encrypt any file with a public key. Only the matching private key can decrypt it.")]
+#[command(
+    name = "pqfile",
+    about = "Quantum-resistant file encryption for the post-quantum era. Encrypt any file with a public key. Only the matching private key can decrypt it."
+)]
 struct Cli {
     /// Emit machine-readable JSON to stdout (errors go to stderr as JSON).
     #[arg(long, global = true)]
@@ -297,40 +301,129 @@ fn main() {
 fn run(cli: Cli) -> Result<(), PqfileError> {
     let json = cli.json;
     match cli.command {
-        Command::Keygen { out, force, passphrase, level, hybrid } => run_keygen(out, force, level, hybrid, passphrase, json),
-        Command::Encrypt { recipients, input, output, recursive, chunk_size, compress, compress_level, parallel, anonymous_recipients } => {
-            run_encrypt(recipients, input, output, recursive, EncryptOpts { chunk_size, compress, compress_level, parallel, anonymous_recipients, json })
-        }
-        Command::Decrypt { key, input, output, parallel } => run_decrypt(key, input, output, parallel, json),
+        Command::Keygen {
+            out,
+            force,
+            passphrase,
+            level,
+            hybrid,
+        } => run_keygen(out, force, level, hybrid, passphrase, json),
+        Command::Encrypt {
+            recipients,
+            input,
+            output,
+            recursive,
+            chunk_size,
+            compress,
+            compress_level,
+            parallel,
+            anonymous_recipients,
+        } => run_encrypt(
+            recipients,
+            input,
+            output,
+            recursive,
+            EncryptOpts {
+                chunk_size,
+                compress,
+                compress_level,
+                parallel,
+                anonymous_recipients,
+                json,
+            },
+        ),
+        Command::Decrypt {
+            key,
+            input,
+            output,
+            parallel,
+        } => run_decrypt(key, input, output, parallel, json),
         Command::Inspect { input } => inspect(input.as_path(), json),
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "pqfile", &mut io::stdout());
             Ok(())
         }
-        Command::SignKeygen { out, force, passphrase } => run_sign_keygen(out, force, passphrase, json),
+        Command::SignKeygen {
+            out,
+            force,
+            passphrase,
+        } => run_sign_keygen(out, force, passphrase, json),
         Command::Sign { key, input, output } => run_sign(key, input, output, json),
         Command::Verify { key, sig, input } => run_verify(key, sig, input, json),
         Command::Revoke { key, reason } => run_revoke(key, &reason, json),
-        Command::Rekey { key, recipient, input, output } => run_rekey(key, recipient, input, output, json),
-        Command::Archive { recipient, output, files, base } => run_archive(recipient, output, files, base, json),
-        Command::Extract { input, key, out, list } => run_extract(input, key, out, list, json),
-        Command::Signcrypt { key, recipient, input, output } => run_signcrypt(key, recipient, input, output, json),
-        Command::Signdecrypt { key, verifying_key, input, output } => run_signdecrypt(key, verifying_key, input, output, json),
-        Command::SplitKey { key, threshold, shares, out, force } => run_split_key(key, threshold, shares, out, force, json),
-        Command::ReconstructKey { shares, out, force } => run_reconstruct_key(shares, out, force, json),
+        Command::Rekey {
+            key,
+            recipient,
+            input,
+            output,
+        } => run_rekey(key, recipient, input, output, json),
+        Command::Archive {
+            recipient,
+            output,
+            files,
+            base,
+        } => run_archive(recipient, output, files, base, json),
+        Command::Extract {
+            input,
+            key,
+            out,
+            list,
+        } => run_extract(input, key, out, list, json),
+        Command::Signcrypt {
+            key,
+            recipient,
+            input,
+            output,
+        } => run_signcrypt(key, recipient, input, output, json),
+        Command::Signdecrypt {
+            key,
+            verifying_key,
+            input,
+            output,
+        } => run_signdecrypt(key, verifying_key, input, output, json),
+        Command::SplitKey {
+            key,
+            threshold,
+            shares,
+            out,
+            force,
+        } => run_split_key(key, threshold, shares, out, force, json),
+        Command::ReconstructKey { shares, out, force } => {
+            run_reconstruct_key(shares, out, force, json)
+        }
     }
 }
 
-fn run_keygen(out: PathBuf, force: bool, level: u16, hybrid: bool, passphrase: bool, json: bool) -> Result<(), PqfileError> {
-    let pp = if passphrase { Some(prompt_new_passphrase()?) } else { None };
-    let fp = keygen::keygen(&out, force, level, pp.as_deref().map(|z| z.as_str()), hybrid)?;
+fn run_keygen(
+    out: PathBuf,
+    force: bool,
+    level: u16,
+    hybrid: bool,
+    passphrase: bool,
+    json: bool,
+) -> Result<(), PqfileError> {
+    let pp = if passphrase {
+        Some(prompt_new_passphrase()?)
+    } else {
+        None
+    };
+    let fp = keygen::keygen(
+        &out,
+        force,
+        level,
+        pp.as_deref().map(|z| z.as_str()),
+        hybrid,
+    )?;
     if json {
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("pubkey_path", &out.join("pubkey.pem").to_string_lossy()),
-            kv_str("privkey_path", &out.join("privkey.pem").to_string_lossy()),
-            kv_str("fingerprint", &fp),
-        ]));
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("pubkey_path", &out.join("pubkey.pem").to_string_lossy()),
+                kv_str("privkey_path", &out.join("privkey.pem").to_string_lossy()),
+                kv_str("fingerprint", &fp),
+            ])
+        );
     } else {
         println!("Keys written to {}", out.display());
         println!("Public key fingerprint: {fp}");
@@ -348,17 +441,24 @@ fn run_encrypt(
     if opts.chunk_size == 0 || opts.chunk_size > 268_435_456 {
         return Err(PqfileError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("--chunk-size must be between 1 and 268435456, got {}", opts.chunk_size),
+            format!(
+                "--chunk-size must be between 1 and 268435456, got {}",
+                opts.chunk_size
+            ),
         )));
     }
     if opts.compress && (opts.compress_level < 1 || opts.compress_level > 22) {
         return Err(PqfileError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("--compress-level must be between 1 and 22, got {}", opts.compress_level),
+            format!(
+                "--compress-level must be between 1 and 22, got {}",
+                opts.compress_level
+            ),
         )));
     }
     // Check revocation for all recipient key files before encrypting.
-    let pubkey_pems: Vec<String> = recipients.iter()
+    let pubkey_pems: Vec<String> = recipients
+        .iter()
         .map(|p| {
             let pem = std::fs::read_to_string(p)?;
             revoke::check_not_revoked(p, &pem)?;
@@ -404,12 +504,30 @@ fn run_encrypt_single(
 
     let mut reader = open_reader(input)?;
     let mut writer = open_writer(to_stdout, &out_path)?;
-    perform_encrypt(pubkey_pems, original_size, &opts, &mut *reader, &mut *writer)?;
+    perform_encrypt(
+        pubkey_pems,
+        original_size,
+        &opts,
+        &mut *reader,
+        &mut *writer,
+    )?;
 
     if opts.json {
-        let out_val = if to_stdout { "-" } else { &out_path.to_string_lossy() };
-        let target: &mut dyn io::Write = if to_stdout { &mut io::stderr() } else { &mut io::stdout() };
-        writeln!(target, "{}", json_object(&[kv_str("status", "ok"), kv_str("output", out_val)]))?;
+        let out_val = if to_stdout {
+            "-"
+        } else {
+            &out_path.to_string_lossy()
+        };
+        let target: &mut dyn io::Write = if to_stdout {
+            &mut io::stderr()
+        } else {
+            &mut io::stdout()
+        };
+        writeln!(
+            target,
+            "{}",
+            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
+        )?;
     }
     Ok(())
 }
@@ -424,16 +542,30 @@ fn perform_encrypt(
     if pubkey_pems.len() == 1 {
         if opts.compress {
             encrypt::encrypt_stream_compressed(
-                &pubkey_pems[0], original_size, opts.chunk_size, opts.compress_level,
-                reader, writer,
+                &pubkey_pems[0],
+                original_size,
+                opts.chunk_size,
+                opts.compress_level,
+                reader,
+                writer,
             )
         } else if opts.parallel {
             encrypt::encrypt_stream_parallel(
-                &pubkey_pems[0], original_size, opts.chunk_size, PARALLEL_BATCH_SIZE,
-                reader, writer,
+                &pubkey_pems[0],
+                original_size,
+                opts.chunk_size,
+                PARALLEL_BATCH_SIZE,
+                reader,
+                writer,
             )
         } else {
-            encrypt::encrypt_stream(&pubkey_pems[0], original_size, opts.chunk_size, reader, writer)
+            encrypt::encrypt_stream(
+                &pubkey_pems[0],
+                original_size,
+                opts.chunk_size,
+                reader,
+                writer,
+            )
         }
     } else {
         if opts.chunk_size != format::CHUNK_SIZE {
@@ -463,12 +595,16 @@ fn perform_encrypt(
     }
 }
 
-fn run_encrypt_recursive(pubkey_pem: &str, input: &str, opts: EncryptOpts) -> Result<(), PqfileError> {
+fn run_encrypt_recursive(
+    pubkey_pem: &str,
+    input: &str,
+    opts: EncryptOpts,
+) -> Result<(), PqfileError> {
     let dir = PathBuf::from(input);
     if !dir.is_dir() {
-        return Err(PqfileError::Io(std::io::Error::other(
-            format!("'{input}' is not a directory (--recursive requires a directory path)"),
-        )));
+        return Err(PqfileError::Io(std::io::Error::other(format!(
+            "'{input}' is not a directory (--recursive requires a directory path)"
+        ))));
     }
 
     let mut files: Vec<PathBuf> = Vec::new();
@@ -536,7 +672,14 @@ fn encrypt_one_file(
     let mut reader = BufReader::new(std::fs::File::open(file_path)?);
     let mut writer = BufWriter::new(std::fs::File::create(out_path)?);
     if opts.compress {
-        encrypt::encrypt_stream_compressed(pubkey_pem, size, opts.chunk_size, opts.compress_level, &mut reader, &mut writer)
+        encrypt::encrypt_stream_compressed(
+            pubkey_pem,
+            size,
+            opts.chunk_size,
+            opts.compress_level,
+            &mut reader,
+            &mut writer,
+        )
     } else {
         encrypt::encrypt_stream(pubkey_pem, size, opts.chunk_size, &mut reader, &mut writer)
     }
@@ -558,7 +701,13 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), PqfileError
     Ok(())
 }
 
-fn run_decrypt(key: PathBuf, input: String, output: Option<String>, parallel: bool, json: bool) -> Result<(), PqfileError> {
+fn run_decrypt(
+    key: PathBuf,
+    input: String,
+    output: Option<String>,
+    parallel: bool,
+    json: bool,
+) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
     let pp = if keygen::is_encrypted_key(&privkey_pem) {
         Some(prompt_passphrase("Enter passphrase for private key: ")?)
@@ -581,15 +730,33 @@ fn run_decrypt(key: PathBuf, input: String, output: Option<String>, parallel: bo
     let mut reader = open_reader(&input)?;
     let mut writer = open_writer(to_stdout, &out_path)?;
     if parallel {
-        decrypt::decrypt_stream_parallel(&privkey_pem, &mut *reader, &mut *writer, pp_str, PARALLEL_BATCH_SIZE)?;
+        decrypt::decrypt_stream_parallel(
+            &privkey_pem,
+            &mut *reader,
+            &mut *writer,
+            pp_str,
+            PARALLEL_BATCH_SIZE,
+        )?;
     } else {
         decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut *writer, pp_str)?;
     }
 
     if json {
-        let out_val = if to_stdout { "-" } else { &out_path.to_string_lossy() };
-        let target: &mut dyn io::Write = if to_stdout { &mut io::stderr() } else { &mut io::stdout() };
-        writeln!(target, "{}", json_object(&[kv_str("status", "ok"), kv_str("output", out_val)]))?;
+        let out_val = if to_stdout {
+            "-"
+        } else {
+            &out_path.to_string_lossy()
+        };
+        let target: &mut dyn io::Write = if to_stdout {
+            &mut io::stderr()
+        } else {
+            &mut io::stdout()
+        };
+        writeln!(
+            target,
+            "{}",
+            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
+        )?;
     }
     Ok(())
 }
@@ -612,10 +779,10 @@ fn open_writer(to_stdout: bool, path: &Path) -> Result<Box<dyn io::Write>, Pqfil
 
 fn prompt_new_passphrase() -> Result<zeroize::Zeroizing<String>, PqfileError> {
     let pp = zeroize::Zeroizing::new(
-        rpassword::prompt_password("Enter passphrase: ").map_err(PqfileError::Io)?
+        rpassword::prompt_password("Enter passphrase: ").map_err(PqfileError::Io)?,
     );
     let confirm = zeroize::Zeroizing::new(
-        rpassword::prompt_password("Confirm passphrase: ").map_err(PqfileError::Io)?
+        rpassword::prompt_password("Confirm passphrase: ").map_err(PqfileError::Io)?,
     );
     if *pp != *confirm {
         return Err(PqfileError::PassphraseMismatch);
@@ -625,7 +792,7 @@ fn prompt_new_passphrase() -> Result<zeroize::Zeroizing<String>, PqfileError> {
 
 fn prompt_passphrase(prompt: &str) -> Result<zeroize::Zeroizing<String>, PqfileError> {
     Ok(zeroize::Zeroizing::new(
-        rpassword::prompt_password(prompt).map_err(PqfileError::Io)?
+        rpassword::prompt_password(prompt).map_err(PqfileError::Io)?,
     ))
 }
 
@@ -642,74 +809,97 @@ fn kem_variant_name(variant: u16) -> &'static str {
 fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
     let file = std::fs::File::open(input)?;
     let mut reader = BufReader::new(file);
-    let version = format::PqfHeader::read_magic_version(&mut reader)?;
-
-    match version {
-        format::VERSION | format::VERSION_V3 | format::VERSION_V5 | format::VERSION_V6 => {
-            let header = format::PqfHeader::read_body(&mut reader, version)?;
-            print_v2_header(&header, json)
+    let info = inspect_stream(&mut reader)?;
+    match &info {
+        PqfHeaderInfo::Single {
+            version,
+            kem_variant,
+            nonce,
+            original_size,
+            chunk_size,
+            compression_algo,
+        } => {
+            let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+            let variant_name = kem_variant_name(*kem_variant);
+            let has_chunk_size = *version == format::VERSION_V5 || *version == format::VERSION_V6;
+            let compression_name = match compression_algo {
+                v if *v == format::COMPRESSION_NONE => "none",
+                v if *v == format::COMPRESSION_ZSTD => "zstd",
+                _ => "unknown",
+            };
+            if json {
+                let mut fields = vec![
+                    kv_str("status", "ok"),
+                    kv_str("magic", "PQFL"),
+                    kv_str("version", &format!("{version:#04x}")),
+                    kv_raw("kem_variant", &format!("{kem_variant}")),
+                    kv_str("kem_variant_name", variant_name),
+                    kv_str("nonce", &nonce_hex),
+                    kv_raw("original_size", &format!("{original_size}")),
+                ];
+                if has_chunk_size {
+                    fields.push(kv_raw("chunk_size", &format!("{chunk_size}")));
+                }
+                if *version == format::VERSION_V6 {
+                    fields.push(kv_str("compression", compression_name));
+                }
+                println!("{}", json_object(&fields));
+            } else {
+                println!("Magic:              PQFL");
+                println!("Version:            {version:#04x}");
+                println!("KEM variant:        {kem_variant} ({variant_name})");
+                println!("Nonce:              {nonce_hex}");
+                println!("Original file size: {original_size} bytes");
+                if has_chunk_size {
+                    println!("Chunk size:         {chunk_size} bytes");
+                }
+                if *version == format::VERSION_V6 {
+                    println!("Compression:        {compression_name}");
+                }
+            }
         }
-        format::VERSION_V4 => {
-            let header = format::PqfHeaderV4::read_body(&mut reader)?;
-            print_v4_header(&header, json)
-        }
-        format::VERSION_V7 => {
-            let header = format::PqfHeaderV7::read_body(&mut reader)?;
-            print_v7_header(&header, json)
-        }
-        v => Err(PqfileError::UnsupportedVersion(v)),
-    }
-}
-
-fn print_v2_header(header: &format::PqfHeader, json: bool) -> Result<(), PqfileError> {
-    let nonce_hex: String = header.nonce.iter().map(|b| format!("{b:02x}")).collect();
-    let variant_name = kem_variant_name(header.kem_variant);
-    let has_chunk_size = header.version == format::VERSION_V5 || header.version == format::VERSION_V6;
-    let compression_name = match header.compression_algo {
-        format::COMPRESSION_NONE => "none",
-        format::COMPRESSION_ZSTD => "zstd",
-        _ => "unknown",
-    };
-    if json {
-        let mut fields = vec![
-            kv_str("status", "ok"),
-            kv_str("magic", "PQFL"),
-            kv_str("version", &format!("{:#04x}", header.version)),
-            kv_raw("kem_variant", &format!("{}", header.kem_variant)),
-            kv_str("kem_variant_name", variant_name),
-            kv_str("nonce", &nonce_hex),
-            kv_raw("original_size", &format!("{}", header.original_size)),
-        ];
-        if has_chunk_size {
-            fields.push(kv_raw("chunk_size", &format!("{}", header.chunk_size)));
-        }
-        if header.version == format::VERSION_V6 {
-            fields.push(kv_str("compression", compression_name));
-        }
-        println!("{}", json_object(&fields));
-    } else {
-        println!("Magic:              PQFL");
-        println!("Version:            {:#04x}", header.version);
-        println!("KEM variant:        {} ({})", header.kem_variant, variant_name);
-        println!("Nonce:              {nonce_hex}");
-        println!("Original file size: {} bytes", header.original_size);
-        if has_chunk_size {
-            println!("Chunk size:         {} bytes", header.chunk_size);
-        }
-        if header.version == format::VERSION_V6 {
-            println!("Compression:        {compression_name}");
-        }
+        PqfHeaderInfo::Multi {
+            recipients,
+            nonce,
+            original_size,
+        } => print_multi_header(
+            "0x04",
+            "0x04 (multi-recipient)",
+            nonce,
+            *original_size,
+            recipients,
+            None,
+            "",
+            &|i, v, name| println!("  Recipient {i}:      {v} ({name})"),
+            json,
+        ),
+        PqfHeaderInfo::AnonMulti {
+            recipients,
+            nonce,
+            original_size,
+        } => print_multi_header(
+            "0x07",
+            "0x07 (anonymous multi-recipient)",
+            nonce,
+            *original_size,
+            recipients,
+            Some("anonymous-recipients"),
+            " (order shuffled)",
+            &|i, v, name| println!("  Slot {i}:           {v} ({name})"),
+            json,
+        ),
+        _ => return Err(PqfileError::UnsupportedVersion(0)),
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-fn print_multi_recipient_header(
+fn print_multi_header(
     version_num: &str,
     version_label: &str,
     nonce: &[u8; 12],
     original_size: u64,
-    recipients: &[(u16, String)],
+    recipients: &[RecipientInfo],
     mode_json: Option<&str>,
     count_suffix: &str,
     row_fmt: &dyn Fn(usize, u16, &str),
@@ -717,12 +907,16 @@ fn print_multi_recipient_header(
 ) {
     let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
     if json {
-        let recipients_json: Vec<String> = recipients.iter().map(|(v, name)| {
-            json_object(&[
-                kv_raw("kem_variant", &v.to_string()),
-                kv_str("kem_variant_name", name),
-            ])
-        }).collect();
+        let recipients_json: Vec<String> = recipients
+            .iter()
+            .map(|r| {
+                let name = kem_variant_name(r.kem_variant);
+                json_object(&[
+                    kv_raw("kem_variant", &r.kem_variant.to_string()),
+                    kv_str("kem_variant_name", name),
+                ])
+            })
+            .collect();
         let mut fields = vec![
             kv_str("status", "ok"),
             kv_str("magic", "PQFL"),
@@ -742,53 +936,38 @@ fn print_multi_recipient_header(
         println!("Magic:              PQFL");
         println!("Version:            {version_label}");
         println!("Recipients:         {}{count_suffix}", recipients.len());
-        for (i, (v, name)) in recipients.iter().enumerate() {
-            row_fmt(i, *v, name);
+        for (i, r) in recipients.iter().enumerate() {
+            let name = kem_variant_name(r.kem_variant);
+            row_fmt(i, r.kem_variant, name);
         }
         println!("Nonce:              {nonce_hex}");
-        println!("Original file size: {} bytes", original_size);
+        println!("Original file size: {original_size} bytes");
     }
 }
 
-fn print_v4_header(header: &format::PqfHeaderV4, json: bool) -> Result<(), PqfileError> {
-    let recipients: Vec<(u16, String)> = header.recipients.iter()
-        .map(|r| (r.kem_variant, kem_variant_name(r.kem_variant).to_owned()))
-        .collect();
-    print_multi_recipient_header(
-        "0x04", "0x04 (multi-recipient)",
-        &header.nonce, header.original_size,
-        &recipients, None, "",
-        &|i, v, name| println!("  Recipient {i}:      {v} ({name})"),
-        json,
-    );
-    Ok(())
-}
-
-fn print_v7_header(header: &format::PqfHeaderV7, json: bool) -> Result<(), PqfileError> {
-    let recipients: Vec<(u16, String)> = header.recipients.iter()
-        .map(|r| (r.kem_variant, kem_variant_name(r.kem_variant).to_owned()))
-        .collect();
-    print_multi_recipient_header(
-        "0x07", "0x07 (anonymous multi-recipient)",
-        &header.nonce, header.original_size,
-        &recipients, Some("anonymous-recipients"), " (order shuffled)",
-        &|i, v, name| println!("  Slot {i}:           {v} ({name})"),
-        json,
-    );
-    Ok(())
-}
-
-fn run_sign_keygen(out: PathBuf, force: bool, use_passphrase: bool, json: bool) -> Result<(), PqfileError> {
-    let pp = if use_passphrase { Some(prompt_new_passphrase()?) } else { None };
+fn run_sign_keygen(
+    out: PathBuf,
+    force: bool,
+    use_passphrase: bool,
+    json: bool,
+) -> Result<(), PqfileError> {
+    let pp = if use_passphrase {
+        Some(prompt_new_passphrase()?)
+    } else {
+        None
+    };
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let r = sign::sign_keygen(&out, force, pp_str)?;
     if json {
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("vk_path", &out.join("sign_pubkey.pem").to_string_lossy()),
-            kv_str("sk_path", &out.join("sign_privkey.pem").to_string_lossy()),
-            kv_str("fingerprint", &r.vk_fingerprint),
-        ]));
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("vk_path", &out.join("sign_pubkey.pem").to_string_lossy()),
+                kv_str("sk_path", &out.join("sign_privkey.pem").to_string_lossy()),
+                kv_str("fingerprint", &r.vk_fingerprint),
+            ])
+        );
     } else {
         println!("Signing keys written to {}", out.display());
         println!("Verifying key fingerprint: {}", r.vk_fingerprint);
@@ -796,22 +975,33 @@ fn run_sign_keygen(out: PathBuf, force: bool, use_passphrase: bool, json: bool) 
     Ok(())
 }
 
-fn run_sign(key: PathBuf, input: PathBuf, output: Option<PathBuf>, json: bool) -> Result<(), PqfileError> {
+fn run_sign(
+    key: PathBuf,
+    input: PathBuf,
+    output: Option<PathBuf>,
+    json: bool,
+) -> Result<(), PqfileError> {
     let sk_pem = std::fs::read_to_string(&key)?;
-    let pp = if sign::is_encrypted_signing_key(&sk_pem) {
+    let pp = if pqfile::keys::PqfSigningKey::from_pem(&sk_pem)
+        .map(|k| k.is_encrypted())
+        .unwrap_or(false)
+    {
         Some(prompt_passphrase("Enter passphrase for signing key: ")?)
     } else {
         None
     };
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let sig_path = output.unwrap_or_else(|| sign::default_sig_path(&input));
-    sign::sign_file(&sk_pem, pp_str, &input, &sig_path)?;
+    sign::sign_file(&sk_pem, &input, &sig_path, pp_str)?;
     if json {
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("input", &input.to_string_lossy()),
-            kv_str("signature", &sig_path.to_string_lossy()),
-        ]));
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("input", &input.to_string_lossy()),
+                kv_str("signature", &sig_path.to_string_lossy()),
+            ])
+        );
     } else {
         println!("Signature written to {}", sig_path.display());
     }
@@ -822,12 +1012,15 @@ fn run_verify(key: PathBuf, sig: PathBuf, input: PathBuf, json: bool) -> Result<
     let vk_pem = std::fs::read_to_string(&key)?;
     sign::verify_file(&vk_pem, &input, &sig)?;
     if json {
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("input", &input.to_string_lossy()),
-            kv_str("signature", &sig.to_string_lossy()),
-            kv_str("result", "valid"),
-        ]));
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("input", &input.to_string_lossy()),
+                kv_str("signature", &sig.to_string_lossy()),
+                kv_str("result", "valid"),
+            ])
+        );
     } else {
         println!("Signature is valid.");
     }
@@ -837,19 +1030,34 @@ fn run_verify(key: PathBuf, sig: PathBuf, input: PathBuf, json: bool) -> Result<
 fn run_revoke(key: PathBuf, reason: &str, json: bool) -> Result<(), PqfileError> {
     let fp = revoke::revoke_key(&key, reason)?;
     if json {
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("fingerprint", &fp),
-            kv_str("revoked_path", &revoke::revoked_path_for(&key).to_string_lossy()),
-        ]));
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("fingerprint", &fp),
+                kv_str(
+                    "revoked_path",
+                    &revoke::revoked_path_for(&key).to_string_lossy()
+                ),
+            ])
+        );
     } else {
         println!("Key revoked: {fp}");
-        println!("Sidecar written to {}", revoke::revoked_path_for(&key).display());
+        println!(
+            "Sidecar written to {}",
+            revoke::revoked_path_for(&key).display()
+        );
     }
     Ok(())
 }
 
-fn run_rekey(key: PathBuf, recipient: PathBuf, input: String, output: Option<String>, json: bool) -> Result<(), PqfileError> {
+fn run_rekey(
+    key: PathBuf,
+    recipient: PathBuf,
+    input: String,
+    output: Option<String>,
+    json: bool,
+) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
     let pp = if keygen::is_encrypted_key(&privkey_pem) {
         Some(prompt_passphrase("Enter passphrase for private key: ")?)
@@ -874,12 +1082,30 @@ fn run_rekey(key: PathBuf, recipient: PathBuf, input: String, output: Option<Str
 
     let mut reader = open_reader(&input)?;
     let mut writer = open_writer(to_stdout, &out_path)?;
-    rekey::rekey_stream(&privkey_pem, &pubkey_pem, pp_str, &mut *reader, &mut *writer)?;
+    rekey::rekey_stream(
+        &privkey_pem,
+        &pubkey_pem,
+        &mut *reader,
+        &mut *writer,
+        pp_str,
+    )?;
 
     if json {
-        let out_val = if to_stdout { "-" } else { &out_path.to_string_lossy() };
-        let target: &mut dyn io::Write = if to_stdout { &mut io::stderr() } else { &mut io::stdout() };
-        writeln!(target, "{}", json_object(&[kv_str("status", "ok"), kv_str("output", out_val)]))?;
+        let out_val = if to_stdout {
+            "-"
+        } else {
+            &out_path.to_string_lossy()
+        };
+        let target: &mut dyn io::Write = if to_stdout {
+            &mut io::stderr()
+        } else {
+            &mut io::stdout()
+        };
+        writeln!(
+            target,
+            "{}",
+            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
+        )?;
     }
     Ok(())
 }
@@ -894,20 +1120,23 @@ fn run_archive(
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
     revoke::check_not_revoked(&recipient, &pubkey_pem)?;
 
-    let entries: Result<Vec<(String, PathBuf)>, PqfileError> = files.iter().map(|f| {
-        let archive_name = if let Some(ref b) = base {
-            f.strip_prefix(b)
-                .unwrap_or(f.as_path())
-                .to_string_lossy()
-                .replace('\\', "/")
-        } else {
-            f.file_name()
-                .unwrap_or(f.as_os_str())
-                .to_string_lossy()
-                .to_string()
-        };
-        Ok((archive_name, f.clone()))
-    }).collect();
+    let entries: Result<Vec<(String, PathBuf)>, PqfileError> = files
+        .iter()
+        .map(|f| {
+            let archive_name = if let Some(ref b) = base {
+                f.strip_prefix(b)
+                    .unwrap_or(f.as_path())
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            } else {
+                f.file_name()
+                    .unwrap_or(f.as_os_str())
+                    .to_string_lossy()
+                    .to_string()
+            };
+            Ok((archive_name, f.clone()))
+        })
+        .collect();
     let entries = entries?;
 
     let mut writer = BufWriter::new(std::fs::File::create(&output)?);
@@ -915,12 +1144,15 @@ fn run_archive(
 
     if json {
         let names: Vec<String> = entries.iter().map(|(n, _)| json_str(n)).collect();
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("output", &output.to_string_lossy()),
-            kv_raw("entry_count", &entries.len().to_string()),
-            format!("\"entries\":[{}]", names.join(",")),
-        ]));
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("output", &output.to_string_lossy()),
+                kv_raw("entry_count", &entries.len().to_string()),
+                format!("\"entries\":[{}]", names.join(",")),
+            ])
+        );
     } else {
         println!("Archive written to {}", output.display());
         for (name, _) in &entries {
@@ -949,14 +1181,22 @@ fn run_extract(
     if list_only {
         let manifest = archive::list(&privkey_pem, reader, pp_str)?;
         if json {
-            let entries: Vec<String> = manifest.iter().map(|e| json_object(&[
-                kv_str("path", &e.path),
-                kv_raw("size", &e.file_size.to_string()),
-            ])).collect();
-            println!("{}", json_object(&[
-                kv_str("status", "ok"),
-                format!("\"entries\":[{}]", entries.join(",")),
-            ]));
+            let entries: Vec<String> = manifest
+                .iter()
+                .map(|e| {
+                    json_object(&[
+                        kv_str("path", &e.path),
+                        kv_raw("size", &e.file_size.to_string()),
+                    ])
+                })
+                .collect();
+            println!(
+                "{}",
+                json_object(&[
+                    kv_str("status", "ok"),
+                    format!("\"entries\":[{}]", entries.join(",")),
+                ])
+            );
         } else {
             for e in &manifest {
                 println!("{:>12}  {}", e.file_size, e.path);
@@ -969,12 +1209,18 @@ fn run_extract(
     let paths = archive::extract(&privkey_pem, reader, &out, pp_str)?;
 
     if json {
-        let path_strs: Vec<String> = paths.iter().map(|p| json_str(&p.to_string_lossy())).collect();
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_raw("extracted", &paths.len().to_string()),
-            format!("\"files\":[{}]", path_strs.join(",")),
-        ]));
+        let path_strs: Vec<String> = paths
+            .iter()
+            .map(|p| json_str(&p.to_string_lossy()))
+            .collect();
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_raw("extracted", &paths.len().to_string()),
+                format!("\"files\":[{}]", path_strs.join(",")),
+            ])
+        );
     } else {
         for p in &paths {
             println!("  extracted: {}", p.display());
@@ -991,7 +1237,10 @@ fn run_signcrypt(
     json: bool,
 ) -> Result<(), PqfileError> {
     let sk_pem = std::fs::read_to_string(&key)?;
-    let pp = if sign::is_encrypted_signing_key(&sk_pem) {
+    let pp = if pqfile::keys::PqfSigningKey::from_pem(&sk_pem)
+        .map(|k| k.is_encrypted())
+        .unwrap_or(false)
+    {
         Some(prompt_passphrase("Enter passphrase for signing key: ")?)
     } else {
         None
@@ -1009,14 +1258,25 @@ fn run_signcrypt(
 
     let mut file = std::io::BufReader::new(std::fs::File::open(&input)?);
     let mut writer = BufWriter::new(std::fs::File::create(&out_path)?);
-    signcrypt::signcrypt(&sk_pem, pp_str, &pubkey_pem, &mut file, input_len, &mut writer, format::CHUNK_SIZE)?;
+    signcrypt::signcrypt(
+        &sk_pem,
+        &pubkey_pem,
+        &mut file,
+        input_len,
+        &mut writer,
+        format::CHUNK_SIZE,
+        pp_str,
+    )?;
 
     if json {
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("input", &input.to_string_lossy()),
-            kv_str("output", &out_path.to_string_lossy()),
-        ]));
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("input", &input.to_string_lossy()),
+                kv_str("output", &out_path.to_string_lossy()),
+            ])
+        );
     } else {
         println!("Signcrypted: {}", out_path.display());
     }
@@ -1054,11 +1314,34 @@ fn run_signdecrypt(
     signcrypt::signdecrypt(&privkey_pem, &vk_pem, reader, &mut *writer, pp_str)?;
 
     if json {
-        let out_val = if to_stdout { "-" } else { &out_path.to_string_lossy() };
-        let target: &mut dyn io::Write = if to_stdout { &mut io::stderr() } else { &mut io::stdout() };
-        writeln!(target, "{}", json_object(&[kv_str("status", "ok"), kv_str("output", out_val), kv_str("signature", "valid")]))?;
+        let out_val = if to_stdout {
+            "-"
+        } else {
+            &out_path.to_string_lossy()
+        };
+        let target: &mut dyn io::Write = if to_stdout {
+            &mut io::stderr()
+        } else {
+            &mut io::stdout()
+        };
+        writeln!(
+            target,
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("output", out_val),
+                kv_str("signature", "valid")
+            ])
+        )?;
     } else {
-        println!("Signature valid. Decrypted to: {}", if to_stdout { "-".to_owned() } else { out_path.to_string_lossy().into_owned() });
+        println!(
+            "Signature valid. Decrypted to: {}",
+            if to_stdout {
+                "-".to_owned()
+            } else {
+                out_path.to_string_lossy().into_owned()
+            }
+        );
     }
     Ok(())
 }
@@ -1079,19 +1362,32 @@ fn run_split_key(
     };
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let result = shamir::split_key(&privkey_pem, threshold, shares, pp_str)?;
-    let out_dir = out.unwrap_or_else(|| key.parent().unwrap_or(std::path::Path::new(".")).to_path_buf());
+    let out_dir = out.unwrap_or_else(|| {
+        key.parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf()
+    });
     let paths = shamir::write_shares(&result.share_pems, &out_dir, force)?;
     if json {
-        let path_strs: Vec<String> = paths.iter().map(|p| json_str(&p.to_string_lossy())).collect();
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("fingerprint", &result.pubkey_fingerprint),
-            kv_raw("threshold", &threshold.to_string()),
-            kv_raw("total", &shares.to_string()),
-            format!("\"shares\":[{}]", path_strs.join(",")),
-        ]));
+        let path_strs: Vec<String> = paths
+            .iter()
+            .map(|p| json_str(&p.to_string_lossy()))
+            .collect();
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("fingerprint", &result.pubkey_fingerprint),
+                kv_raw("threshold", &threshold.to_string()),
+                kv_raw("total", &shares.to_string()),
+                format!("\"shares\":[{}]", path_strs.join(",")),
+            ])
+        );
     } else {
-        println!("Key split into {} shares (threshold: {})", result.total, result.threshold);
+        println!(
+            "Key split into {} shares (threshold: {})",
+            result.total, result.threshold
+        );
         println!("Public key fingerprint: {}", result.pubkey_fingerprint);
         for p in &paths {
             println!("  Written: {}", p.display());
@@ -1106,7 +1402,10 @@ fn run_reconstruct_key(
     force: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
-    let share_pems: Vec<String> = shares.iter().map(std::fs::read_to_string).collect::<Result<_, _>>()?;
+    let share_pems: Vec<String> = shares
+        .iter()
+        .map(std::fs::read_to_string)
+        .collect::<Result<_, _>>()?;
     let refs: Vec<&str> = share_pems.iter().map(|s| s.as_str()).collect();
     let (priv_pem, pub_pem) = shamir::reconstruct_key(&refs)?;
 
@@ -1122,12 +1421,15 @@ fn run_reconstruct_key(
 
     let fp = keygen::fingerprint_pem(&pub_pem);
     if json {
-        println!("{}", json_object(&[
-            kv_str("status", "ok"),
-            kv_str("privkey_path", &priv_path.to_string_lossy()),
-            kv_str("pubkey_path", &pub_path.to_string_lossy()),
-            kv_str("fingerprint", &fp),
-        ]));
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("privkey_path", &priv_path.to_string_lossy()),
+                kv_str("pubkey_path", &pub_path.to_string_lossy()),
+                kv_str("fingerprint", &fp),
+            ])
+        );
     } else {
         println!("Key reconstructed successfully.");
         println!("Public key fingerprint: {fp}");
@@ -1142,12 +1444,12 @@ fn run_reconstruct_key(
 fn json_escape(s: &str) -> String {
     s.chars()
         .flat_map(|c| match c {
-            '"'  => vec!['\\', '"'],
+            '"' => vec!['\\', '"'],
             '\\' => vec!['\\', '\\'],
             '\n' => vec!['\\', 'n'],
             '\r' => vec!['\\', 'r'],
             '\t' => vec!['\\', 't'],
-            c    => vec![c],
+            c => vec![c],
         })
         .collect()
 }

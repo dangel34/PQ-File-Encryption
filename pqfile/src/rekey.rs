@@ -13,8 +13,7 @@ use crate::decrypt::decapsulate_for_rekey;
 use crate::encrypt::encapsulate_for_rekey;
 use crate::error::PqfileError;
 use crate::format::{
-    CHUNK_SIZE, VERSION_V3, VERSION_V5,
-    PqfHeader, PqfHeaderV4, RecipientEntryV4, fill_chunk,
+    fill_chunk, PqfHeader, PqfHeaderV4, RecipientEntryV4, CHUNK_SIZE, VERSION_V3, VERSION_V5,
 };
 
 /// Rekeys a v3/v5 file to a new public key without re-encrypting the payload.
@@ -26,9 +25,9 @@ use crate::format::{
 pub fn rekey_stream(
     old_privkey_pem: &str,
     new_pubkey_pem: &str,
-    passphrase: Option<&str>,
     reader: &mut dyn Read,
     writer: &mut dyn Write,
+    passphrase: Option<&str>,
 ) -> Result<(), PqfileError> {
     let version = PqfHeader::read_magic_version(reader)?;
     match version {
@@ -67,7 +66,9 @@ pub fn rekey_stream(
     let mut buf = vec![0u8; CHUNK_SIZE + 16];
     loop {
         let n = fill_chunk(reader, &mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         writer.write_all(&buf[..n])?;
     }
 
@@ -87,10 +88,17 @@ mod tests {
         let (pub_new, priv_new) = keygen_bytes(768, None).unwrap();
         let plaintext = b"rekey test payload";
         let mut enc = Vec::new();
-        encrypt_stream(&pub_old, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc).unwrap();
+        encrypt_stream(
+            &pub_old,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut enc,
+        )
+        .unwrap();
 
         let mut rekeyed = Vec::new();
-        rekey_stream(&priv_old, &pub_new, None, &mut enc.as_slice(), &mut rekeyed).unwrap();
+        rekey_stream(&priv_old, &pub_new, &mut enc.as_slice(), &mut rekeyed, None).unwrap();
 
         let mut decrypted = Vec::new();
         decrypt_stream(&priv_new, &mut rekeyed.as_slice(), &mut decrypted, None).unwrap();
@@ -103,10 +111,17 @@ mod tests {
         let (pub_new, _) = keygen_bytes(768, None).unwrap();
         let plaintext = b"old key must not work after rekey";
         let mut enc = Vec::new();
-        encrypt_stream(&pub_old, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc).unwrap();
+        encrypt_stream(
+            &pub_old,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut enc,
+        )
+        .unwrap();
 
         let mut rekeyed = Vec::new();
-        rekey_stream(&priv_old, &pub_new, None, &mut enc.as_slice(), &mut rekeyed).unwrap();
+        rekey_stream(&priv_old, &pub_new, &mut enc.as_slice(), &mut rekeyed, None).unwrap();
 
         let mut out = Vec::new();
         let result = decrypt_stream(&priv_old, &mut rekeyed.as_slice(), &mut out, None);
@@ -119,7 +134,7 @@ mod tests {
         let (pub2, _) = keygen_bytes(768, None).unwrap();
         let pqf = crate::encrypt::encrypt_bytes(&pub_pem, b"v2 payload").unwrap();
         let mut out = Vec::new();
-        let result = rekey_stream(&priv_pem, &pub2, None, &mut pqf.as_slice(), &mut out);
+        let result = rekey_stream(&priv_pem, &pub2, &mut pqf.as_slice(), &mut out, None);
         assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x02))));
     }
 
@@ -129,10 +144,14 @@ mod tests {
         let (pub2, _) = keygen_bytes(768, None).unwrap();
         let mut enc = Vec::new();
         crate::encrypt::encrypt_stream_multi(
-            &[pub_pem.as_str()], 3, &mut b"abc".as_slice(), &mut enc,
-        ).unwrap();
+            &[pub_pem.as_str()],
+            3,
+            &mut b"abc".as_slice(),
+            &mut enc,
+        )
+        .unwrap();
         let mut out = Vec::new();
-        let result = rekey_stream(&priv_pem, &pub2, None, &mut enc.as_slice(), &mut out);
+        let result = rekey_stream(&priv_pem, &pub2, &mut enc.as_slice(), &mut out, None);
         assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x04))));
     }
 
@@ -143,7 +162,7 @@ mod tests {
         let mut enc = Vec::new();
         encrypt_stream(&pub_old, 5, 4096, &mut b"hello".as_slice(), &mut enc).unwrap();
         let mut out = Vec::new();
-        let result = rekey_stream(&priv_old, &pub_new, None, &mut enc.as_slice(), &mut out);
+        let result = rekey_stream(&priv_old, &pub_new, &mut enc.as_slice(), &mut out, None);
         assert!(matches!(result, Err(PqfileError::Io(_))));
     }
 
@@ -153,10 +172,24 @@ mod tests {
         let (pub_new, priv_new) = keygen_bytes(768, None).unwrap();
         let plaintext = b"passphrase rekey roundtrip";
         let mut enc = Vec::new();
-        encrypt_stream(&pub_old, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut enc).unwrap();
+        encrypt_stream(
+            &pub_old,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut enc,
+        )
+        .unwrap();
 
         let mut rekeyed = Vec::new();
-        rekey_stream(&priv_old, &pub_new, Some("oldpass"), &mut enc.as_slice(), &mut rekeyed).unwrap();
+        rekey_stream(
+            &priv_old,
+            &pub_new,
+            &mut enc.as_slice(),
+            &mut rekeyed,
+            Some("oldpass"),
+        )
+        .unwrap();
 
         let mut decrypted = Vec::new();
         decrypt_stream(&priv_new, &mut rekeyed.as_slice(), &mut decrypted, None).unwrap();

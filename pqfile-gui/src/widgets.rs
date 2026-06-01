@@ -1,14 +1,31 @@
-use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
-use crate::colors::{c_accent, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
+use crate::colors::{
+    c_accent, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text,
+};
 use crate::types::{BatchPending, FileInput, OpStatus, Pending, PickedFile};
+use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
+use zeroize::Zeroizing;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 
-pub(crate) fn tab_btn(ui: &mut egui::Ui, current: &mut crate::types::Tab, target: crate::types::Tab, label: &str, dark: bool) {
+pub(crate) fn tab_btn(
+    ui: &mut egui::Ui,
+    current: &mut crate::types::Tab,
+    target: crate::types::Tab,
+    label: &str,
+    dark: bool,
+) {
     let active = *current == target;
-    let text_color = if active { c_accent(dark) } else { c_subtext(dark) };
-    let fill = if active { c_surface1(dark) } else { Color32::TRANSPARENT };
+    let text_color = if active {
+        c_accent(dark)
+    } else {
+        c_subtext(dark)
+    };
+    let fill = if active {
+        c_surface1(dark)
+    } else {
+        Color32::TRANSPARENT
+    };
     let resp = ui.add(
         egui::Button::new(RichText::new(label).size(13.0).color(text_color))
             .fill(fill)
@@ -17,7 +34,10 @@ pub(crate) fn tab_btn(ui: &mut egui::Ui, current: &mut crate::types::Tab, target
     if active {
         let r = resp.rect;
         ui.painter().line_segment(
-            [egui::pos2(r.left() + 4.0, r.bottom()), egui::pos2(r.right() - 4.0, r.bottom())],
+            [
+                egui::pos2(r.left() + 4.0, r.bottom()),
+                egui::pos2(r.right() - 4.0, r.bottom()),
+            ],
             Stroke::new(2.0, c_accent(dark)),
         );
     }
@@ -34,9 +54,15 @@ pub(crate) fn tab_heading(ui: &mut egui::Ui, text: &str, dark: bool) {
 pub(crate) fn section_label(ui: &mut egui::Ui, text: &str, dark: bool) {
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(egui::vec2(3.0, 11.0), egui::Sense::hover());
-        ui.painter().rect_filled(r, CornerRadius::same(1), c_accent(dark));
+        ui.painter()
+            .rect_filled(r, CornerRadius::same(1), c_accent(dark));
         ui.add_space(4.0);
-        ui.label(RichText::new(text).size(10.5).color(c_subtext(dark)).strong());
+        ui.label(
+            RichText::new(text)
+                .size(10.5)
+                .color(c_subtext(dark))
+                .strong(),
+        );
     });
     ui.add_space(3.0);
 }
@@ -87,7 +113,7 @@ pub(crate) fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, dark: bool) -> egu
     if ui.is_rect_visible(rect) {
         let t = ui.ctx().animate_bool(response.id, *on);
         let off_col = c_surface1(dark);
-        let on_col  = c_accent(dark);
+        let on_col = c_accent(dark);
         let track = Color32::from_rgba_premultiplied(
             lerp_u8(off_col.r(), on_col.r(), t),
             lerp_u8(off_col.g(), on_col.g(), t),
@@ -97,11 +123,8 @@ pub(crate) fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, dark: bool) -> egu
         let r = rect.height() / 2.0;
         ui.painter().rect_filled(rect, CornerRadius::from(r), track);
         let knob_x = rect.left() + r + t * (rect.width() - 2.0 * r);
-        ui.painter().circle_filled(
-            egui::pos2(knob_x, rect.center().y),
-            r - 2.0,
-            Color32::WHITE,
-        );
+        ui.painter()
+            .circle_filled(egui::pos2(knob_x, rect.center().y), r - 2.0, Color32::WHITE);
     }
     response
 }
@@ -146,12 +169,18 @@ pub(crate) fn file_row(
                     )
                     .clicked()
                 {
-                    pick_file(std::sync::Arc::clone(&slot.pending), filter_name, filter_exts);
+                    pick_file(
+                        std::sync::Arc::clone(&slot.pending),
+                        filter_name,
+                        filter_exts,
+                    );
                 }
                 let display = if slot.loaded() {
                     RichText::new(&slot.name).size(13.0).color(c_text(dark))
                 } else {
-                    RichText::new("No file chosen").size(13.0).color(c_overlay(dark))
+                    RichText::new("No file chosen")
+                        .size(13.0)
+                        .color(c_overlay(dark))
                 };
                 ui.label(display);
             });
@@ -159,7 +188,11 @@ pub(crate) fn file_row(
     });
 }
 
-pub(crate) fn pick_file(pending: Pending, filter_name: &'static str, filter_exts: &'static [&'static str]) {
+pub(crate) fn pick_file(
+    pending: Pending,
+    filter_name: &'static str,
+    filter_exts: &'static [&'static str],
+) {
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
         let mut d = rfd::FileDialog::new();
@@ -172,7 +205,12 @@ pub(crate) fn pick_file(pending: Pending, filter_name: &'static str, filter_exts
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                *pending.lock().unwrap() = Some(PickedFile { name, data, path: Some(path), error: None });
+                *pending.lock().unwrap() = Some(PickedFile {
+                    name,
+                    data,
+                    path: Some(path),
+                    error: None,
+                });
             }
         }
     });
@@ -186,22 +224,41 @@ pub(crate) fn pick_file(pending: Pending, filter_name: &'static str, filter_exts
         if let Some(file) = d.pick_file().await {
             let name = file.file_name();
             let data = file.read().await;
-            *pending.lock().unwrap() = Some(PickedFile { name, data, path: None, error: None });
+            *pending.lock().unwrap() = Some(PickedFile {
+                name,
+                data,
+                path: None,
+                error: None,
+            });
         }
     });
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_paths_into_batch(paths: Vec<std::path::PathBuf>) -> Vec<PickedFile> {
-    paths.into_iter().map(|path| {
-        let name = path.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        match std::fs::read(&path) {
-            Ok(data) => PickedFile { name, data, path: Some(path), error: None },
-            Err(e) => PickedFile { name, data: Vec::new(), path: Some(path), error: Some(e.to_string()) },
-        }
-    }).collect()
+    paths
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            match std::fs::read(&path) {
+                Ok(data) => PickedFile {
+                    name,
+                    data,
+                    path: Some(path),
+                    error: None,
+                },
+                Err(e) => PickedFile {
+                    name,
+                    data: Vec::new(),
+                    path: Some(path),
+                    error: Some(e.to_string()),
+                },
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn pick_files(pending: BatchPending) {
@@ -222,7 +279,12 @@ pub(crate) fn pick_files(pending: BatchPending) {
             for file in files {
                 let name = file.file_name();
                 let data = file.read().await;
-                batch.push(PickedFile { name, data, path: None, error: None });
+                batch.push(PickedFile {
+                    name,
+                    data,
+                    path: None,
+                    error: None,
+                });
             }
             if !batch.is_empty() {
                 *pending.lock().unwrap() = Some(batch);
@@ -257,7 +319,12 @@ pub(crate) fn pick_pqf_files(pending: BatchPending) {
             for file in files {
                 let name = file.file_name();
                 let data = file.read().await;
-                batch.push(PickedFile { name, data, path: None, error: None });
+                batch.push(PickedFile {
+                    name,
+                    data,
+                    path: None,
+                    error: None,
+                });
             }
             if !batch.is_empty() {
                 *pending.lock().unwrap() = Some(batch);
@@ -289,12 +356,18 @@ pub(crate) fn pick_folder_pqf(pending: BatchPending) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn walk_dir_pqf(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<PickedFile>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             walk_dir_pqf(root, &path, out);
-        } else if path.extension().map(|e| e.eq_ignore_ascii_case("pqf")).unwrap_or(false) {
+        } else if path
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("pqf"))
+            .unwrap_or(false)
+        {
             if let Ok(data) = std::fs::read(&path) {
                 let name = path
                     .strip_prefix(root)
@@ -304,7 +377,12 @@ fn walk_dir_pqf(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<Pic
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default()
                     });
-                out.push(PickedFile { name, data, path: Some(path), error: None });
+                out.push(PickedFile {
+                    name,
+                    data,
+                    path: Some(path),
+                    error: None,
+                });
             }
         }
     }
@@ -335,12 +413,10 @@ pub(crate) fn pick_folder_files(pending: BatchPending) {
 
 /// Recursively walks `dir`, collecting all files relative to `root`.
 #[cfg(not(target_arch = "wasm32"))]
-fn walk_dir_recursive(
-    root: &std::path::Path,
-    dir: &std::path::Path,
-    out: &mut Vec<PickedFile>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+fn walk_dir_recursive(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<PickedFile>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -356,8 +432,77 @@ fn walk_dir_recursive(
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default()
                 });
-            out.push(PickedFile { name, data, path: Some(path), error: None });
+            out.push(PickedFile {
+                name,
+                data,
+                path: Some(path),
+                error: None,
+            });
         }
+    }
+}
+
+/// A single-row passphrase input with a show/hide toggle.
+pub(crate) fn passphrase_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Zeroizing<String>,
+    visible: &mut bool,
+    hint: &str,
+    dark: bool,
+) {
+    let w = ui.available_width();
+    ui.allocate_ui(egui::vec2(w, 26.0), |ui| {
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.label(RichText::new(label).size(13.0).color(c_subtext(dark)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let eye = if *visible { "●" } else { "○" };
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(eye).size(12.0).color(c_subtext(dark)))
+                            .fill(c_surface0(dark))
+                            .min_size(egui::vec2(22.0, 22.0)),
+                    )
+                    .on_hover_text(if *visible { "Hide" } else { "Show" })
+                    .clicked()
+                {
+                    *visible = !*visible;
+                }
+                ui.add(
+                    egui::TextEdit::singleline(&mut **value)
+                        .password(!*visible)
+                        .hint_text(hint)
+                        .font(egui::TextStyle::Body)
+                        .desired_width(ui.available_width()),
+                );
+            });
+        });
+    });
+}
+
+/// Opens the containing folder in the OS file manager.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn reveal_in_explorer(path: &str) {
+    use std::path::Path;
+    let p = Path::new(path);
+    let dir = if p.is_dir() {
+        p.to_owned()
+    } else {
+        p.parent()
+            .map(|d| d.to_owned())
+            .unwrap_or_else(|| p.to_owned())
+    };
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(dir).spawn();
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }
 
@@ -416,10 +561,13 @@ fn try_download_bytes(filename: &str, data: &[u8]) -> Result<(), JsValue> {
     let url = web_sys::Url::create_object_url_with_blob(&blob)?;
     let result = (|| -> Result<(), JsValue> {
         let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-        let document = window.document().ok_or_else(|| JsValue::from_str("no document"))?;
-        let body = document.body().ok_or_else(|| JsValue::from_str("no body"))?;
-        let a: web_sys::HtmlAnchorElement =
-            document.create_element("a")?.dyn_into()?;
+        let document = window
+            .document()
+            .ok_or_else(|| JsValue::from_str("no document"))?;
+        let body = document
+            .body()
+            .ok_or_else(|| JsValue::from_str("no body"))?;
+        let a: web_sys::HtmlAnchorElement = document.create_element("a")?.dyn_into()?;
         a.set_href(&url);
         a.set_download(filename);
         body.append_child(&a)?;
@@ -436,12 +584,17 @@ pub(crate) fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {
     let (msg, color) = match status {
         OpStatus::None => return,
         OpStatus::Ok(m) if m.is_empty() => return,
-        OpStatus::Ok(m)  => (m.as_str(), c_green(dark)),
+        OpStatus::Ok(m) => (m.as_str(), c_green(dark)),
         OpStatus::Err(m) => (m.as_str(), c_red(dark)),
     };
     ui.add_space(8.0);
     egui::Frame::NONE
-        .fill(Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 30))
+        .fill(Color32::from_rgba_premultiplied(
+            color.r(),
+            color.g(),
+            color.b(),
+            30,
+        ))
         .stroke(Stroke::new(
             1.0,
             Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 100),

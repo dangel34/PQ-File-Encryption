@@ -1,10 +1,8 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 fn main() {
-    let icon = eframe::icon_data::from_png_bytes(
-        include_bytes!("../assets/icon.png"),
-    )
-    .expect("failed to load app icon");
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+        .expect("failed to load app icon");
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

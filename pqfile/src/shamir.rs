@@ -1,9 +1,6 @@
 use std::path::Path;
 
-use ml_kem::{
-    DecapsulationKey512, DecapsulationKey768, DecapsulationKey1024,
-    KeyExport, Seed,
-};
+use ml_kem::{DecapsulationKey1024, DecapsulationKey512, DecapsulationKey768, KeyExport, Seed};
 use pem::Pem;
 use sha3::{Digest, Sha3_256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -11,12 +8,12 @@ use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 use crate::format::{
-    HYBRID_SEED_LEN_768, KEM_VARIANT, KEM_VARIANT_512, KEM_VARIANT_1024, KEM_VARIANT_HYBRID_768,
+    HYBRID_SEED_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
 };
 use crate::keygen::{
-    PRIV_ENC_TAG, PRIV_ENC_TAG_512, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_HYBRID_768,
-    PRIV_TAG, PRIV_TAG_512, PRIV_TAG_1024, PRIV_TAG_HYBRID_768,
-    PUB_TAG, PUB_TAG_512, PUB_TAG_1024, PUB_TAG_HYBRID_768,
+    PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_512, PRIV_ENC_TAG_HYBRID_768, PRIV_TAG,
+    PRIV_TAG_1024, PRIV_TAG_512, PRIV_TAG_HYBRID_768, PUB_TAG, PUB_TAG_1024, PUB_TAG_512,
+    PUB_TAG_HYBRID_768,
 };
 use crate::passphrase;
 
@@ -29,16 +26,21 @@ pub const SHARE_TAG_1024: &str = "ML-KEM-1024 KEY SHARE";
 /// PEM tag for a hybrid X25519+ML-KEM-768 Shamir key share.
 pub const SHARE_TAG_HYBRID_768: &str = "X25519+ML-KEM-768 KEY SHARE";
 
-// Share body layout:
+// Share body layout (version 1, introduced in pqfile v3.2.x):
 //   version:     u8          = 1
 //   kem_variant: u16 BE
 //   threshold:   u8
 //   total:       u8
 //   x:           u8          (1-indexed share index)
-//   pubkey_fp:   [u8; 8]     (first 8 bytes of SHA3-256 of derived public key, for verification)
+//   pubkey_fp:   [u8; 16]    (first 16 bytes of SHA3-256 of derived public key, for verification)
 //   y:           [u8; seed_len]
+//
+// The previous layout (pqfile v3.1.x and earlier) used pubkey_fp: [u8; 8] and
+// SHARE_HEADER_LEN = 14. Shares from that version are detected and rejected with a
+// clear diagnostic rather than producing incorrect results.
 
-const SHARE_HEADER_LEN: usize = 1 + 2 + 1 + 1 + 1 + 8; // 14 bytes
+const SHARE_HEADER_LEN: usize = 1 + 2 + 1 + 1 + 1 + 16; // 22 bytes
+const OLD_SHARE_HEADER_LEN: usize = 1 + 2 + 1 + 1 + 1 + 8; // 14 bytes (pre-v3.2.x)
 
 // ── GF(256) arithmetic (AES irreducible polynomial: x^8+x^4+x^3+x+1 = 0x11B) ─
 
@@ -46,6 +48,10 @@ fn gf_add(a: u8, b: u8) -> u8 {
     a ^ b
 }
 
+// Loop count and branches depend on b. In the Lagrange interpolation, b is always
+// a product of public x coordinates (share indices), so timing does not depend on
+// the secret y bytes. The y values appear only as `a`, whose XOR with result is
+// data-independent from the loop structure.
 fn gf_mul(mut a: u8, mut b: u8) -> u8 {
     let mut result = 0u8;
     while b > 0 {
@@ -89,9 +95,8 @@ fn gf_div(a: u8, b: u8) -> u8 {
 /// Returns (x, y_bytes) pairs; x values are 1..=total.
 fn split_raw(secret: &[u8], threshold: u8, total: u8) -> Result<Vec<(u8, Vec<u8>)>, PqfileError> {
     let degree = (threshold - 1) as usize;
-    let mut shares: Vec<(u8, Vec<u8>)> = (1..=total)
-        .map(|x| (x, vec![0u8; secret.len()]))
-        .collect();
+    let mut shares: Vec<(u8, Vec<u8>)> =
+        (1..=total).map(|x| (x, vec![0u8; secret.len()])).collect();
 
     let mut coeff_buf = vec![0u8; degree];
     for (i, &s) in secret.iter().enumerate() {
@@ -111,7 +116,16 @@ fn split_raw(secret: &[u8], threshold: u8, total: u8) -> Result<Vec<(u8, Vec<u8>
 }
 
 /// Reconstructs the secret from shares via Lagrange interpolation at x=0.
-fn reconstruct_raw(shares: &[(u8, Vec<u8>)]) -> Result<Zeroizing<Vec<u8>>, PqfileError> {
+///
+/// `shares` is a slice of `(x, y_bytes)` pairs. `y_bytes` are borrowed to avoid
+/// non-zeroizing copies of sensitive share material; callers should hold the originals
+/// in `Zeroizing` wrappers so they are cleared on drop.
+///
+/// Timing note: the gf_mul calls inside Lagrange interpolation have timing that
+/// depends only on the Lagrange coefficients (derived from the public x coordinates),
+/// not on the secret y values. The y values appear only as the first argument to
+/// gf_mul, whose XOR accumulation is data-independent from the loop structure.
+fn reconstruct_raw(shares: &[(u8, &[u8])]) -> Result<Zeroizing<Vec<u8>>, PqfileError> {
     let len = shares[0].1.len();
     let xs: Vec<u8> = shares.iter().map(|(x, _)| *x).collect();
 
@@ -120,7 +134,9 @@ fn reconstruct_raw(shares: &[(u8, Vec<u8>)]) -> Result<Zeroizing<Vec<u8>>, Pqfil
         if y.len() != len {
             return Err(bad_arg(&format!(
                 "share {} has wrong length ({} bytes, expected {})",
-                i + 1, y.len(), len
+                i + 1,
+                y.len(),
+                len
             )));
         }
     }
@@ -143,8 +159,8 @@ fn reconstruct_raw(shares: &[(u8, Vec<u8>)]) -> Result<Zeroizing<Vec<u8>>, Pqfil
             let mut den = 1u8;
             for (k, &xk) in xs.iter().enumerate() {
                 if k != j {
-                    num = gf_mul(num, xk);          // numerator *= xk  (-xk = xk in GF(2^8))
-                    den = gf_mul(den, gf_add(xj, xk)); // denominator *= (xj - xk)
+                    num = gf_mul(num, xk);
+                    den = gf_mul(den, gf_add(xj, xk));
                 }
             }
             val = gf_add(val, gf_mul(yj, gf_div(num, den)));
@@ -157,12 +173,15 @@ fn reconstruct_raw(shares: &[(u8, Vec<u8>)]) -> Result<Zeroizing<Vec<u8>>, Pqfil
 // ── Seed / public-key utilities ───────────────────────────────────────────────
 
 /// Decode the private key seed (plaintext bytes) from PEM, decrypting if needed.
-fn extract_seed(privkey_pem: &str, passphrase: Option<&str>) -> Result<(u16, Zeroizing<Vec<u8>>), PqfileError> {
+fn extract_seed(
+    privkey_pem: &str,
+    passphrase: Option<&str>,
+) -> Result<(u16, Zeroizing<Vec<u8>>), PqfileError> {
     let parsed = pem::parse(privkey_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
     let (variant, seed) = match parsed.tag() {
         t @ (PRIV_TAG | PRIV_ENC_TAG) => {
             let seed = load_64byte_seed(t, parsed.contents(), passphrase)?;
-            (KEM_VARIANT, seed)
+            (KEM_VARIANT_768, seed)
         }
         t @ (PRIV_TAG_512 | PRIV_ENC_TAG_512) => {
             let seed = load_64byte_seed(t, parsed.contents(), passphrase)?;
@@ -187,28 +206,39 @@ fn extract_seed(privkey_pem: &str, passphrase: Option<&str>) -> Result<(u16, Zer
             };
             (KEM_VARIANT_HYBRID_768, seed)
         }
-        tag => return Err(PqfileError::InvalidPem(format!("unexpected PEM tag: {tag}"))),
+        tag => {
+            return Err(PqfileError::InvalidPem(format!(
+                "unexpected PEM tag: {tag}"
+            )))
+        }
     };
     Ok((variant, seed))
 }
 
-fn load_64byte_seed(tag: &str, body: &[u8], passphrase: Option<&str>) -> Result<Zeroizing<Vec<u8>>, PqfileError> {
+fn load_64byte_seed(
+    tag: &str,
+    body: &[u8],
+    passphrase: Option<&str>,
+) -> Result<Zeroizing<Vec<u8>>, PqfileError> {
     if tag.contains("ENCRYPTED") {
         let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
         Ok(Zeroizing::new(passphrase::decrypt_seed(body, pp)?.to_vec()))
     } else {
         if body.len() != 64 {
-            return Err(PqfileError::InvalidKeyLength { expected: 64, got: body.len() });
+            return Err(PqfileError::InvalidKeyLength {
+                expected: 64,
+                got: body.len(),
+            });
         }
         Ok(Zeroizing::new(body.to_vec()))
     }
 }
 
-/// Derive public key bytes from a private key seed and compute an 8-byte fingerprint.
-fn pubkey_fp(kem_variant: u16, seed: &[u8]) -> Result<[u8; 8], PqfileError> {
+/// Derive public key bytes from a private key seed and compute a 16-byte fingerprint.
+fn pubkey_fp(kem_variant: u16, seed: &[u8]) -> Result<[u8; 16], PqfileError> {
     let pub_bytes = pubkey_bytes(kem_variant, seed)?;
     let hash = Sha3_256::digest(&pub_bytes);
-    Ok(hash[..8].try_into().unwrap())
+    Ok(hash[..16].try_into().unwrap())
 }
 
 fn pubkey_bytes(kem_variant: u16, seed: &[u8]) -> Result<Vec<u8>, PqfileError> {
@@ -218,7 +248,7 @@ fn pubkey_bytes(kem_variant: u16, seed: &[u8]) -> Result<Vec<u8>, PqfileError> {
             let dk = DecapsulationKey512::from_seed(s);
             Ok(dk.encapsulation_key().to_bytes().as_slice().to_vec())
         }
-        KEM_VARIANT => {
+        KEM_VARIANT_768 => {
             let s = Seed::try_from(seed).map_err(|_| bad_len(64, seed.len()))?;
             let dk = DecapsulationKey768::from_seed(s);
             Ok(dk.encapsulation_key().to_bytes().as_slice().to_vec())
@@ -250,14 +280,14 @@ fn seed_to_pems(kem_variant: u16, seed: &[u8]) -> Result<(String, String), Pqfil
     let pub_bytes = pubkey_bytes(kem_variant, seed)?;
     let (pub_tag, priv_tag) = match kem_variant {
         KEM_VARIANT_512 => (PUB_TAG_512, PRIV_TAG_512),
-        KEM_VARIANT => (PUB_TAG, PRIV_TAG),
+        KEM_VARIANT_768 => (PUB_TAG, PRIV_TAG),
         KEM_VARIANT_1024 => (PUB_TAG_1024, PRIV_TAG_1024),
         KEM_VARIANT_HYBRID_768 => (PUB_TAG_HYBRID_768, PRIV_TAG_HYBRID_768),
         v => return Err(PqfileError::UnsupportedKem(v)),
     };
     Ok((
-        pem::encode(&Pem::new(priv_tag, seed.to_vec())),
         pem::encode(&Pem::new(pub_tag, pub_bytes)),
+        pem::encode(&Pem::new(priv_tag, seed.to_vec())),
     ))
 }
 
@@ -266,7 +296,7 @@ fn seed_to_pems(kem_variant: u16, seed: &[u8]) -> Result<(String, String), Pqfil
 fn share_tag(kem_variant: u16) -> Result<&'static str, PqfileError> {
     match kem_variant {
         KEM_VARIANT_512 => Ok(SHARE_TAG_512),
-        KEM_VARIANT => Ok(SHARE_TAG),
+        KEM_VARIANT_768 => Ok(SHARE_TAG),
         KEM_VARIANT_1024 => Ok(SHARE_TAG_1024),
         KEM_VARIANT_HYBRID_768 => Ok(SHARE_TAG_HYBRID_768),
         v => Err(PqfileError::UnsupportedKem(v)),
@@ -278,7 +308,7 @@ fn encode_share_pem(
     threshold: u8,
     total: u8,
     x: u8,
-    fp8: &[u8; 8],
+    fp16: &[u8; 16],
     y: &[u8],
 ) -> Result<String, PqfileError> {
     let tag = share_tag(kem_variant)?;
@@ -289,19 +319,28 @@ fn encode_share_pem(
     body.push(threshold);
     body.push(total);
     body.push(x);
-    body.extend_from_slice(fp8);
+    body.extend_from_slice(fp16);
     body.extend_from_slice(y);
     Ok(pem::encode(&Pem::new(tag, body)))
 }
 
+#[derive(Debug)]
 struct DecodedShare {
     kem_variant: u16,
     threshold: u8,
     #[allow(dead_code)]
     total: u8,
     x: u8,
-    pubkey_fp: [u8; 8],
+    pubkey_fp: [u8; 16],
     y: Zeroizing<Vec<u8>>,
+}
+
+fn seed_len_for_variant(kem_variant: u16) -> Option<usize> {
+    match kem_variant {
+        KEM_VARIANT_512 | KEM_VARIANT_768 | KEM_VARIANT_1024 => Some(64),
+        KEM_VARIANT_HYBRID_768 => Some(HYBRID_SEED_LEN_768),
+        _ => None,
+    }
 }
 
 fn decode_share_pem(pem_str: &str) -> Result<DecodedShare, PqfileError> {
@@ -311,20 +350,46 @@ fn decode_share_pem(pem_str: &str) -> Result<DecodedShare, PqfileError> {
         return Err(PqfileError::InvalidPem("share body too short".into()));
     }
     if body[0] != 1 {
-        return Err(PqfileError::InvalidPem(format!("unsupported share version: {}", body[0])));
+        return Err(PqfileError::InvalidPem(format!(
+            "unsupported share version: {}",
+            body[0]
+        )));
     }
     let kem_variant = u16::from_be_bytes([body[1], body[2]]);
+
+    // Detect shares produced by pqfile v3.1.x or earlier, which used an 8-byte
+    // fingerprint (OLD_SHARE_HEADER_LEN = 14) rather than the current 16-byte form.
+    // Those shares cannot be decoded correctly with the new layout.
+    if let Some(sl) = seed_len_for_variant(kem_variant) {
+        if body.len() == OLD_SHARE_HEADER_LEN + sl {
+            return Err(PqfileError::InvalidPem(
+                "share was produced with pqfile v3.1.x or earlier (8-byte fingerprint). \
+                 The fingerprint format changed in v3.2.x. Reconstruct the key from \
+                 the original private key and split again."
+                    .into(),
+            ));
+        }
+    }
+
     let threshold = body[3];
     let total = body[4];
     let x = body[5];
-    let pubkey_fp: [u8; 8] = body[6..14].try_into().unwrap();
-    let y = Zeroizing::new(body[14..].to_vec());
-    Ok(DecodedShare { kem_variant, threshold, total, x, pubkey_fp, y })
+    let pubkey_fp: [u8; 16] = body[6..22].try_into().unwrap();
+    let y = Zeroizing::new(body[22..].to_vec());
+    Ok(DecodedShare {
+        kem_variant,
+        threshold,
+        total,
+        x,
+        pubkey_fp,
+        y,
+    })
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Result of splitting a private key into Shamir shares.
+#[non_exhaustive]
 pub struct SplitResult {
     /// PEM-encoded share files, one per share index.
     pub share_pems: Vec<String>,
@@ -337,6 +402,7 @@ pub struct SplitResult {
 }
 
 /// Split a private key into `total` Shamir shares requiring `threshold` to reconstruct.
+#[must_use = "split result must be saved or the shares are lost"]
 pub fn split_key(
     privkey_pem: &str,
     threshold: u8,
@@ -351,13 +417,17 @@ pub fn split_key(
     }
 
     let (variant, seed) = extract_seed(privkey_pem, passphrase)?;
-    let fp8 = pubkey_fp(variant, &seed)?;
-    let fp_str = fp8.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":");
+    let fp16 = pubkey_fp(variant, &seed)?;
+    let fp_str = fp16
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":");
 
     let raw_shares = split_raw(&seed, threshold, total)?;
     let share_pems: Result<Vec<_>, _> = raw_shares
         .iter()
-        .map(|(x, y)| encode_share_pem(variant, threshold, total, *x, &fp8, y))
+        .map(|(x, y)| encode_share_pem(variant, threshold, total, *x, &fp16, y))
         .collect();
 
     Ok(SplitResult {
@@ -370,6 +440,7 @@ pub fn split_key(
 
 /// Reconstruct a private key (and derived public key) from M-of-N shares.
 /// Returns `(privkey_pem, pubkey_pem)` — both unencrypted.
+#[must_use = "reconstructed key must be saved or the key material is lost"]
 pub fn reconstruct_key(share_pems: &[&str]) -> Result<(String, String), PqfileError> {
     if share_pems.is_empty() {
         return Err(bad_arg("no shares provided"));
@@ -389,7 +460,9 @@ pub fn reconstruct_key(share_pems: &[&str]) -> Result<(String, String), PqfileEr
             return Err(bad_arg("shares have mismatched KEM variants"));
         }
         if d.pubkey_fp != fp {
-            return Err(bad_arg("shares are for different keys (fingerprint mismatch)"));
+            return Err(bad_arg(
+                "shares are for different keys (fingerprint mismatch)",
+            ));
         }
     }
 
@@ -400,7 +473,9 @@ pub fn reconstruct_key(share_pems: &[&str]) -> Result<(String, String), PqfileEr
         )));
     }
 
-    let raw: Vec<(u8, Vec<u8>)> = decoded.iter().map(|d| (d.x, d.y.to_vec())).collect();
+    // Borrow y slices directly to avoid non-zeroizing copies of sensitive share material.
+    // The Zeroizing<Vec<u8>> in each DecodedShare clears the bytes on drop.
+    let raw: Vec<(u8, &[u8])> = decoded.iter().map(|d| (d.x, d.y.as_slice())).collect();
     let secret = reconstruct_raw(&raw)?;
 
     // Verify the reconstructed seed produces the expected public key fingerprint
@@ -430,14 +505,6 @@ pub fn write_shares(
     Ok(paths)
 }
 
-/// Returns `true` if `pem_str` contains a PEM block with a Shamir key share tag.
-#[allow(dead_code)]
-pub fn is_share_pem(pem_str: &str) -> bool {
-    pem::parse(pem_str)
-        .map(|p| matches!(p.tag(), SHARE_TAG_512 | SHARE_TAG | SHARE_TAG_1024 | SHARE_TAG_HYBRID_768))
-        .unwrap_or(false)
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn bad_arg(msg: &str) -> PqfileError {
@@ -454,6 +521,10 @@ fn bad_len(expected: usize, got: usize) -> PqfileError {
 mod tests {
     use super::*;
     use crate::keygen::keygen_bytes;
+
+    fn as_slices(shares: &[(u8, Vec<u8>)]) -> Vec<(u8, &[u8])> {
+        shares.iter().map(|(x, y)| (*x, y.as_slice())).collect()
+    }
 
     #[test]
     fn gf_mul_identity() {
@@ -476,7 +547,7 @@ mod tests {
     fn split_reconstruct_2_of_3() {
         let secret = b"this is a 64-byte test secret padded to exactly 64 bytes!!!!!!!!";
         let shares = split_raw(secret, 2, 3).unwrap();
-        let recovered = reconstruct_raw(&shares[..2]).unwrap();
+        let recovered = reconstruct_raw(&as_slices(&shares[..2])).unwrap();
         assert_eq!(&*recovered, secret.as_ref());
     }
 
@@ -484,8 +555,9 @@ mod tests {
     fn split_reconstruct_3_of_5_non_consecutive() {
         let secret = [0xABu8; 64];
         let shares = split_raw(&secret, 3, 5).unwrap();
-        let subset = vec![shares[0].clone(), shares[2].clone(), shares[4].clone()];
-        let recovered = reconstruct_raw(&subset).unwrap();
+        let subset = [&shares[0], &shares[2], &shares[4]];
+        let refs: Vec<(u8, &[u8])> = subset.iter().map(|(x, y)| (*x, y.as_slice())).collect();
+        let recovered = reconstruct_raw(&refs).unwrap();
         assert_eq!(&*recovered, &secret);
     }
 
@@ -494,7 +566,7 @@ mod tests {
         let secret = [0x42u8; 64];
         let shares = split_raw(&secret, 3, 5).unwrap();
         // Only 2 of threshold-3 → Lagrange gives wrong answer
-        let recovered = reconstruct_raw(&shares[..2]).unwrap();
+        let recovered = reconstruct_raw(&as_slices(&shares[..2])).unwrap();
         assert_ne!(&*recovered, &secret);
     }
 
@@ -504,7 +576,7 @@ mod tests {
         let result = split_key(&priv_pem, 2, 3, None).unwrap();
         assert_eq!(result.share_pems.len(), 3);
         let refs: Vec<&str> = result.share_pems.iter().map(|s| s.as_str()).collect();
-        let (recovered_priv, _) = reconstruct_key(&refs[..2]).unwrap();
+        let (_, recovered_priv) = reconstruct_key(&refs[..2]).unwrap();
         // Fingerprint of recovered key should match original
         let result2 = split_key(&recovered_priv, 2, 2, None).unwrap();
         assert_eq!(result2.pubkey_fingerprint, result.pubkey_fingerprint);
@@ -541,7 +613,8 @@ mod tests {
         let (_, priv2) = keygen_bytes(768, None).unwrap();
         let r1 = split_key(&priv1, 2, 2, None).unwrap();
         let r2 = split_key(&priv2, 2, 2, None).unwrap();
-        let err = reconstruct_key(&[r1.share_pems[0].as_str(), r2.share_pems[1].as_str()]).unwrap_err();
+        let err =
+            reconstruct_key(&[r1.share_pems[0].as_str(), r2.share_pems[1].as_str()]).unwrap_err();
         assert!(err.to_string().contains("different keys"), "got: {err}");
     }
 
@@ -558,10 +631,21 @@ mod tests {
     }
 
     #[test]
-    fn is_share_pem_identifies_shares() {
-        let (_, priv_pem) = keygen_bytes(768, None).unwrap();
-        let result = split_key(&priv_pem, 2, 2, None).unwrap();
-        assert!(is_share_pem(&result.share_pems[0]));
-        assert!(!is_share_pem(&priv_pem));
+    fn old_format_share_gives_clear_error() {
+        // Construct a share body matching the pre-v3.2.x layout (8-byte fp, SHARE_HEADER_LEN=14).
+        let mut body = Vec::new();
+        body.push(1u8); // version
+        body.extend_from_slice(&KEM_VARIANT_768.to_be_bytes());
+        body.push(2u8); // threshold
+        body.push(3u8); // total
+        body.push(1u8); // x
+        body.extend_from_slice(&[0xAAu8; 8]); // old 8-byte fp
+        body.extend_from_slice(&[0xBBu8; 64]); // y (768 seed len)
+        let pem_str = pem::encode(&pem::Pem::new(SHARE_TAG, body));
+        let err = decode_share_pem(&pem_str).unwrap_err();
+        assert!(
+            err.to_string().contains("v3.1.x"),
+            "expected old-format error, got: {err}"
+        );
     }
 }

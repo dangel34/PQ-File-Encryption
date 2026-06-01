@@ -123,10 +123,11 @@ pqfile inspect secret.txt.pqf
 
 ```
 Magic:              PQFL
-Version:            0x02
+Version:            0x03
 KEM variant:        768
 Nonce:              a3f09c12de87b64c01e5a920
 Original file size: 2048 bytes
+Chunk size:         65536
 ```
 
 ### 5. Pipe via stdin / stdout

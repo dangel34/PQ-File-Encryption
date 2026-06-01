@@ -1,16 +1,12 @@
-use std::fs;
-use std::io::{Read, Write};
 use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use std::io::{Read, Write};
 
 use chacha20poly1305::{
-    ChaCha20Poly1305, Key, Nonce,
     aead::{Aead, AeadInPlace, KeyInit, Payload},
+    ChaCha20Poly1305, Key, Nonce,
 };
 use ml_kem::{
-    EncapsulationKey512, EncapsulationKey768, EncapsulationKey1024,
-    array::Array,
-    kem::Encapsulate,
+    array::Array, kem::Encapsulate, EncapsulationKey1024, EncapsulationKey512, EncapsulationKey768,
 };
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroizing;
@@ -19,42 +15,25 @@ use crate::error::PqfileError;
 use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
 
 use crate::format::{
-    BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD, EK_LEN, EK_LEN_512, EK_LEN_1024,
-    HEADER_LEN, HYBRID_CT_LEN_768, HYBRID_EK_LEN_768, KEM_VARIANT, KEM_VARIANT_512, KEM_VARIANT_1024,
-    KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V3, VERSION_V5, VERSION_V6,
-    PqfHeader, PqfHeaderV4, PqfHeaderV7, RecipientEntryV4, RecipientEntryV7, WRAPPED_KEY_LEN,
-    chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf,
+    chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf, PqfHeader, PqfHeaderV4, PqfHeaderV7,
+    RecipientEntryV4, RecipientEntryV7, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE,
+    EK_LEN_1024, EK_LEN_512, EK_LEN_768, HEADER_LEN_768, HYBRID_CT_LEN_768,
+    HYBRID_EK_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
+    NONCE_LEN, VERSION, VERSION_V3, VERSION_V5, WRAPPED_KEY_LEN,
 };
-use crate::keygen::{PUB_TAG, PUB_TAG_512, PUB_TAG_1024, PUB_TAG_HYBRID_768};
+// Used only in the native compressed-encrypt path and its tests.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::format::{COMPRESSION_ZSTD, VERSION_V6};
+use crate::keygen::{PUB_TAG, PUB_TAG_1024, PUB_TAG_512, PUB_TAG_HYBRID_768};
 
 enum EkVariant {
     Kem512(EncapsulationKey512),
     Kem768(EncapsulationKey768),
     Kem1024(EncapsulationKey1024),
-    HybridKem768 { x25519_pk: [u8; 32], ml_ek: EncapsulationKey768 },
-}
-
-/// Encrypts the file at `input_path` to a `.pqf` file using the public key at `pubkey_path`.
-/// Output is written to `output_path`, or to `input_path` with `.pqf` appended if `None`.
-#[allow(dead_code)]
-pub fn encrypt(
-    pubkey_path: &Path,
-    input_path: &Path,
-    output_path: Option<&Path>,
-) -> Result<(), PqfileError> {
-    let pubkey_pem = fs::read_to_string(pubkey_path)?;
-    let plaintext = fs::read(input_path)?;
-    let output = encrypt_bytes(&pubkey_pem, &plaintext)?;
-    let out: PathBuf = match output_path {
-        Some(p) => p.to_path_buf(),
-        None => {
-            let mut s = input_path.as_os_str().to_owned();
-            s.push(".pqf");
-            PathBuf::from(s)
-        }
-    };
-    fs::write(&out, output)?;
-    Ok(())
+    HybridKem768 {
+        x25519_pk: [u8; 32],
+        ml_ek: EncapsulationKey768,
+    },
 }
 
 /// Encrypts `plaintext` in a single pass (v2 format). Kept for library consumers
@@ -79,14 +58,20 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
         chunk_size: CHUNK_SIZE as u32,
         compression_algo: COMPRESSION_NONE,
     };
-    let mut output = Vec::with_capacity(HEADER_LEN + plaintext.len() + 16);
+    let mut output = Vec::with_capacity(HEADER_LEN_768 + plaintext.len() + 16);
     header.write(&mut output)?;
 
     let key = Key::from_slice(ss_bytes.as_ref());
     let nonce = Nonce::from_slice(&nonce_bytes);
     let cipher = ChaCha20Poly1305::new(key);
     let ciphertext = cipher
-        .encrypt(nonce, Payload { msg: plaintext, aad: &output })
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad: &output,
+            },
+        )
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
     output.extend_from_slice(&ciphertext);
@@ -121,7 +106,11 @@ pub fn encrypt_stream(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let version = if chunk_size == CHUNK_SIZE { VERSION_V3 } else { VERSION_V5 };
+    let version = if chunk_size == CHUNK_SIZE {
+        VERSION_V3
+    } else {
+        VERSION_V5
+    };
     let header = PqfHeader {
         version,
         kem_variant,
@@ -133,7 +122,8 @@ pub fn encrypt_stream(
     };
     header.write(writer)?;
 
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into()
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = Key::from_slice(ss_bytes.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
@@ -145,39 +135,60 @@ fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u16), PqfileE
     let raw = pem.contents();
     match pem.tag() {
         t if t == PUB_TAG_512 => {
-            let raw_arr = Array::try_from(raw)
-                .map_err(|_| PqfileError::InvalidKeyLength { expected: EK_LEN_512, got: raw.len() })?;
+            let raw_arr = Array::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
+                expected: EK_LEN_512,
+                got: raw.len(),
+            })?;
             let ek = EncapsulationKey512::new(&raw_arr)
                 .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-512 public key".to_owned()))?;
             Ok((EkVariant::Kem512(ek), KEM_VARIANT_512))
         }
         t if t == PUB_TAG => {
-            let raw_arr = Array::try_from(raw)
-                .map_err(|_| PqfileError::InvalidKeyLength { expected: EK_LEN, got: raw.len() })?;
+            let raw_arr = Array::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
+                expected: EK_LEN_768,
+                got: raw.len(),
+            })?;
             let ek = EncapsulationKey768::new(&raw_arr)
                 .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-768 public key".to_owned()))?;
-            Ok((EkVariant::Kem768(ek), KEM_VARIANT))
+            Ok((EkVariant::Kem768(ek), KEM_VARIANT_768))
         }
         t if t == PUB_TAG_1024 => {
-            let raw_arr = Array::try_from(raw)
-                .map_err(|_| PqfileError::InvalidKeyLength { expected: EK_LEN_1024, got: raw.len() })?;
-            let ek = EncapsulationKey1024::new(&raw_arr)
-                .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-1024 public key".to_owned()))?;
+            let raw_arr = Array::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
+                expected: EK_LEN_1024,
+                got: raw.len(),
+            })?;
+            let ek = EncapsulationKey1024::new(&raw_arr).map_err(|_| {
+                PqfileError::InvalidPem("invalid ML-KEM-1024 public key".to_owned())
+            })?;
             Ok((EkVariant::Kem1024(ek), KEM_VARIANT_1024))
         }
         t if t == PUB_TAG_HYBRID_768 => {
             if raw.len() != HYBRID_EK_LEN_768 {
-                return Err(PqfileError::InvalidKeyLength { expected: HYBRID_EK_LEN_768, got: raw.len() });
+                return Err(PqfileError::InvalidKeyLength {
+                    expected: HYBRID_EK_LEN_768,
+                    got: raw.len(),
+                });
             }
             let x25519_pk_bytes: [u8; 32] = raw[..32].try_into().unwrap();
             let ml_raw = &raw[32..];
-            let ml_arr = Array::try_from(ml_raw)
-                .map_err(|_| PqfileError::InvalidKeyLength { expected: EK_LEN, got: ml_raw.len() })?;
-            let ml_ek = EncapsulationKey768::new(&ml_arr)
-                .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-768 public key in hybrid".to_owned()))?;
-            Ok((EkVariant::HybridKem768 { x25519_pk: x25519_pk_bytes, ml_ek }, KEM_VARIANT_HYBRID_768))
+            let ml_arr = Array::try_from(ml_raw).map_err(|_| PqfileError::InvalidKeyLength {
+                expected: EK_LEN_768,
+                got: ml_raw.len(),
+            })?;
+            let ml_ek = EncapsulationKey768::new(&ml_arr).map_err(|_| {
+                PqfileError::InvalidPem("invalid ML-KEM-768 public key in hybrid".to_owned())
+            })?;
+            Ok((
+                EkVariant::HybridKem768 {
+                    x25519_pk: x25519_pk_bytes,
+                    ml_ek,
+                },
+                KEM_VARIANT_HYBRID_768,
+            ))
         }
-        _ => Err(PqfileError::InvalidPem("unrecognised public key tag".to_owned())),
+        _ => Err(PqfileError::InvalidPem(
+            "unrecognised public key tag".to_owned(),
+        )),
     }
 }
 
@@ -242,17 +253,26 @@ pub fn encrypt_stream_multi(
         let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
         let (kem_ct, ss) = encapsulate(ek)?;
         let wrapped_key = wrap_session_key(&session_key, &ss)?;
-        recipients.push(RecipientEntryV4 { kem_variant, kem_ciphertext: kem_ct, wrapped_key });
+        recipients.push(RecipientEntryV4 {
+            kem_variant,
+            kem_ciphertext: kem_ct,
+            wrapped_key,
+        });
     }
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let header = PqfHeaderV4 { recipients, nonce: nonce_bytes, original_size };
+    let header = PqfHeaderV4 {
+        recipients,
+        nonce: nonce_bytes,
+        original_size,
+    };
     header.write(writer)?;
 
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into()
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
@@ -279,7 +299,11 @@ pub fn encrypt_stream_multi_anon(
         let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
         let (kem_ct, ss) = encapsulate(ek)?;
         let wrapped_key = wrap_session_key(&session_key, &ss)?;
-        recipients.push(RecipientEntryV7 { kem_variant, kem_ciphertext: kem_ct, wrapped_key });
+        recipients.push(RecipientEntryV7 {
+            kem_variant,
+            kem_ciphertext: kem_ct,
+            wrapped_key,
+        });
     }
 
     // Fisher-Yates shuffle with rejection sampling to eliminate modulo bias.
@@ -303,10 +327,15 @@ pub fn encrypt_stream_multi_anon(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let header = PqfHeaderV7 { recipients, nonce: nonce_bytes, original_size };
+    let header = PqfHeaderV7 {
+        recipients,
+        nonce: nonce_bytes,
+        original_size,
+    };
     header.write(writer)?;
 
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into()
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
@@ -361,18 +390,26 @@ pub fn encrypt_stream_compressed(
         };
         header.write(writer)?;
 
-        let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into()
+        let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+            .try_into()
             .expect("BASE_NONCE_LEN <= NONCE_LEN");
         let key = Key::from_slice(ss_bytes.as_ref());
         let cipher = ChaCha20Poly1305::new(key);
         // Stream through a zstd encoder instead of buffering the full compressed payload.
-        let mut zstd_src = zstd::stream::read::Encoder::new(reader, compress_level)
-            .map_err(PqfileError::Io)?;
+        let mut zstd_src =
+            zstd::stream::read::Encoder::new(reader, compress_level).map_err(PqfileError::Io)?;
         encrypt_chunks(&cipher, base_nonce, chunk_size, &mut zstd_src, writer)
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (pubkey_pem, original_size, chunk_size, compress_level, reader, writer);
+        let _ = (
+            pubkey_pem,
+            original_size,
+            chunk_size,
+            compress_level,
+            reader,
+            writer,
+        );
         Err(PqfileError::CompressionNotSupported)
     }
 }
@@ -398,8 +435,12 @@ fn encrypt_chunks(
             .map_err(|_| PqfileError::EncryptionFailure)?;
         writer.write_all(&current[..current_len])?;
         writer.write_all(tag.as_ref())?;
-        if is_last { break; }
-        counter = counter.checked_add(1).ok_or(PqfileError::EncryptionFailure)?;
+        if is_last {
+            break;
+        }
+        counter = counter
+            .checked_add(1)
+            .ok_or(PqfileError::EncryptionFailure)?;
         std::mem::swap(&mut current, &mut next);
         current_len = next_len;
     }
@@ -413,7 +454,10 @@ fn encrypt_chunks(
 /// Nonce uniqueness is guaranteed per-key, not per-nonce, so a constant nonce
 /// with a unique key is cryptographically equivalent to a random nonce with a
 /// fixed key. See §5.1 of RFC 5116 for the formal nonce-uniqueness requirement.
-pub(crate) fn wrap_session_key(session_key: &[u8; 32], ss: &[u8; 32]) -> Result<[u8; WRAPPED_KEY_LEN], PqfileError> {
+pub(crate) fn wrap_session_key(
+    session_key: &[u8; 32],
+    ss: &[u8; 32],
+) -> Result<[u8; WRAPPED_KEY_LEN], PqfileError> {
     let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(ss));
     let nonce = AesNonce::from([0u8; 12]);
     let ct = cipher
@@ -432,6 +476,13 @@ pub(crate) fn wrap_session_key(session_key: &[u8; 32], ss: &[u8; 32]) -> Result<
 /// decryptor.
 ///
 /// Falls back to [`encrypt_stream`] for `batch_size` == 1.
+///
+/// **Performance note:** The rayon thread-pool spin-up cost is amortized across
+/// the entire file and is negligible for files with more than ~4 chunks (> 256 KiB
+/// at the default 64 KiB chunk size). For smaller files the overhead is comparable
+/// to or larger than the encryption time; the overhead crossover is roughly 100-200 KiB
+/// on a modern CPU. Callers should measure on their target workload before enabling
+/// `--parallel` for small-file paths.
 #[must_use = "encryption result must be used"]
 pub fn encrypt_stream_parallel(
     pubkey_pem: &str,
@@ -455,7 +506,11 @@ pub fn encrypt_stream_parallel(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let version = if chunk_size == CHUNK_SIZE { VERSION_V3 } else { VERSION_V5 };
+    let version = if chunk_size == CHUNK_SIZE {
+        VERSION_V3
+    } else {
+        VERSION_V5
+    };
     let header = PqfHeader {
         version,
         kem_variant,
@@ -521,13 +576,19 @@ pub fn encrypt_stream_parallel(
             .into_par_iter()
             .enumerate()
             .map(|(i, (mut chunk, chunk_len))| {
-                let c = batch_start.checked_add(i as u32).ok_or(PqfileError::EncryptionFailure)?;
+                let c = batch_start
+                    .checked_add(i as u32)
+                    .ok_or(PqfileError::EncryptionFailure)?;
                 let is_last = batch_is_final && i == batch_len - 1;
                 let cn = chunk_nonce(&base_nonce, c);
                 let aad = chunk_aad(c, is_last);
                 let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
                 let tag = cipher
-                    .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut chunk[..chunk_len])
+                    .encrypt_in_place_detached(
+                        Nonce::from_slice(&cn),
+                        &aad,
+                        &mut chunk[..chunk_len],
+                    )
                     .map_err(|_| PqfileError::EncryptionFailure)?;
                 let mut tag_arr = [0u8; 16];
                 tag_arr.copy_from_slice(tag.as_ref());
@@ -557,7 +618,6 @@ pub fn encrypt_stream_parallel(
 mod tests {
     use super::*;
     use crate::keygen::keygen_bytes;
-    use tempfile::tempdir;
 
     fn keypair() -> (String, String) {
         keygen_bytes(768, None).unwrap()
@@ -569,34 +629,6 @@ mod tests {
 
     fn keypair_512() -> (String, String) {
         keygen_bytes(512, None).unwrap()
-    }
-
-    fn write_pubkey(dir: &Path) -> PathBuf {
-        let (pub_pem, _) = keypair();
-        let path = dir.join("pk.pem");
-        fs::write(&path, pub_pem.as_bytes()).unwrap();
-        path
-    }
-
-    #[test]
-    fn encrypt_writes_to_custom_output_path() {
-        let tmp = tempdir().unwrap();
-        let pk = write_pubkey(tmp.path());
-        let input = tmp.path().join("plain.txt");
-        fs::write(&input, b"hello custom output").unwrap();
-        let out = tmp.path().join("custom.pqf");
-        encrypt(&pk, &input, Some(&out)).unwrap();
-        assert!(out.exists());
-    }
-
-    #[test]
-    fn encrypt_defaults_to_input_with_pqf_suffix() {
-        let tmp = tempdir().unwrap();
-        let pk = write_pubkey(tmp.path());
-        let input = tmp.path().join("data.txt");
-        fs::write(&input, b"hello default").unwrap();
-        encrypt(&pk, &input, None).unwrap();
-        assert!(tmp.path().join("data.txt.pqf").exists());
     }
 
     #[test]
@@ -638,7 +670,7 @@ mod tests {
         let mut writer = Vec::new();
         encrypt_stream(&pub_pem, 0, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
         // Header (1115 bytes for 768) + one empty chunk AEAD tag (16 bytes)
-        assert_eq!(writer.len(), HEADER_LEN + 16);
+        assert_eq!(writer.len(), HEADER_LEN_768 + 16);
     }
 
     #[test]
@@ -647,8 +679,15 @@ mod tests {
         let plaintext = b"small payload";
         let mut reader: &[u8] = plaintext;
         let mut writer = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
-        assert_eq!(writer.len(), HEADER_LEN + plaintext.len() + 16);
+        encrypt_stream(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut reader,
+            &mut writer,
+        )
+        .unwrap();
+        assert_eq!(writer.len(), HEADER_LEN_768 + plaintext.len() + 16);
     }
 
     #[test]
@@ -657,8 +696,15 @@ mod tests {
         let plaintext = vec![0xABu8; CHUNK_SIZE];
         let mut reader: &[u8] = &plaintext;
         let mut writer = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
-        assert_eq!(writer.len(), HEADER_LEN + CHUNK_SIZE + 16);
+        encrypt_stream(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut reader,
+            &mut writer,
+        )
+        .unwrap();
+        assert_eq!(writer.len(), HEADER_LEN_768 + CHUNK_SIZE + 16);
     }
 
     #[test]
@@ -667,15 +713,22 @@ mod tests {
         let plaintext = vec![0x42u8; CHUNK_SIZE * 2 + 1];
         let mut reader: &[u8] = &plaintext;
         let mut writer = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
-        let expected = HEADER_LEN + (CHUNK_SIZE + 16) * 2 + (1 + 16);
+        encrypt_stream(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut reader,
+            &mut writer,
+        )
+        .unwrap();
+        let expected = HEADER_LEN_768 + (CHUNK_SIZE + 16) * 2 + (1 + 16);
         assert_eq!(writer.len(), expected);
     }
 
     #[test]
     fn encrypt_stream_writes_v3_version_byte() {
-        use std::io::Cursor;
         use crate::format::VERSION_V3;
+        use std::io::Cursor;
 
         let (pub_pem, _) = keypair();
         let mut reader: &[u8] = b"test";
@@ -688,8 +741,8 @@ mod tests {
 
     #[test]
     fn encrypt_stream_1024_writes_correct_header() {
-        use std::io::Cursor;
         use crate::format::{HEADER_LEN_1024, KEM_VARIANT_1024, VERSION_V3};
+        use std::io::Cursor;
 
         let (pub_pem, _) = keypair_1024();
         let mut reader: &[u8] = b"test";
@@ -708,8 +761,8 @@ mod tests {
 
     #[test]
     fn encrypt_stream_512_writes_correct_header() {
-        use std::io::Cursor;
         use crate::format::{HEADER_LEN_512, KEM_VARIANT_512, VERSION_V3};
+        use std::io::Cursor;
 
         let (pub_pem, _) = keypair_512();
         let mut reader: &[u8] = b"test";
@@ -738,8 +791,8 @@ mod tests {
 
     #[test]
     fn encrypt_stream_custom_chunk_size_emits_v5() {
-        use std::io::Cursor;
         use crate::format::VERSION_V5;
+        use std::io::Cursor;
         let (pub_pem, _) = keypair();
         let mut reader: &[u8] = b"hello";
         let mut writer = Vec::new();
@@ -771,7 +824,15 @@ mod tests {
         let (pub_pem, _) = keypair();
         let plaintext = b"compress me";
         let mut out = Vec::new();
-        encrypt_stream_compressed(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 3, &mut plaintext.as_slice(), &mut out).unwrap();
+        encrypt_stream_compressed(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            3,
+            &mut plaintext.as_slice(),
+            &mut out,
+        )
+        .unwrap();
 
         let version_pos = crate::format::MAGIC.len();
         assert_eq!(out[version_pos], VERSION_V6);
@@ -795,7 +856,15 @@ mod tests {
         let (pub_pem, priv_pem) = keypair();
         let plaintext = b"parallel small";
         let mut ct = Vec::new();
-        encrypt_stream_parallel(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 4, &mut plaintext.as_slice(), &mut ct).unwrap();
+        encrypt_stream_parallel(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            4,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
         let mut out = Vec::new();
         decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
         assert_eq!(out, plaintext);
@@ -807,7 +876,15 @@ mod tests {
         let (pub_pem, priv_pem) = keypair();
         let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 10 + 7).collect();
         let mut ct = Vec::new();
-        encrypt_stream_parallel(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 4, &mut plaintext.as_slice(), &mut ct).unwrap();
+        encrypt_stream_parallel(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            4,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
         let mut out = Vec::new();
         decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
         assert_eq!(out, plaintext);
@@ -830,10 +907,25 @@ mod tests {
         let (pub_pem, _) = keypair();
         let plaintext = b"v6 header size check";
         let mut v3_out = Vec::new();
-        encrypt_stream(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, &mut plaintext.as_slice(), &mut v3_out).unwrap();
+        encrypt_stream(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut v3_out,
+        )
+        .unwrap();
 
         let mut v6_out = Vec::new();
-        encrypt_stream_compressed(&pub_pem, plaintext.len() as u64, CHUNK_SIZE, 1, &mut plaintext.as_slice(), &mut v6_out).unwrap();
+        encrypt_stream_compressed(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            1,
+            &mut plaintext.as_slice(),
+            &mut v6_out,
+        )
+        .unwrap();
 
         // v6 header = v3 header + chunk_size(4) + compression_algo(1) = v3 + 5 bytes
         use crate::format::{V5_CHUNK_SIZE_FIELD_LEN, V6_COMPRESSION_FIELD_LEN};

@@ -18,6 +18,7 @@ const PQFA_VERSION: u8 = 1;
 //   mode:     u32 LE          (Unix permissions, 0 on Windows)
 
 /// Metadata for a single file in the archive.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ArchiveEntry {
     /// Relative path stored in the archive.
@@ -34,6 +35,7 @@ pub struct ArchiveEntry {
 ///
 /// Writes a standard `.pqf` stream to `writer` whose plaintext payload begins with
 /// a `PQFA` header and manifest, followed by concatenated file contents.
+#[must_use = "archive creation result must be checked for errors"]
 pub fn create(
     pubkey_pem: &str,
     entries: &[(String, PathBuf)],
@@ -79,6 +81,7 @@ pub fn create(
 /// Extract a `.pqf` archive into `out_dir`, creating subdirectories as needed.
 ///
 /// Authentication of each chunk happens before any bytes are written to disk.
+#[must_use = "extracted file paths must be used"]
 pub fn extract<R: Read>(
     privkey_pem: &str,
     reader: R,
@@ -117,6 +120,7 @@ pub fn extract<R: Read>(
 }
 
 /// List the archive manifest without decrypting file contents.
+#[must_use = "archive manifest must be used"]
 pub fn list<R: Read>(
     privkey_pem: &str,
     reader: R,
@@ -124,6 +128,69 @@ pub fn list<R: Read>(
 ) -> Result<Vec<ArchiveEntry>, PqfileError> {
     let mut pqf = PqfReader::new(reader, privkey_pem, passphrase)?;
     read_manifest(&mut pqf)
+}
+
+/// Decrypt an archive and return all file contents in memory as `(path, data)` pairs.
+///
+/// Equivalent to [`extract`] but writes into `Vec<u8>` buffers rather than to disk.
+/// Useful when no filesystem is available (e.g., WASM builds).
+#[must_use = "extracted data must be used"]
+pub fn extract_to_memory<R: Read>(
+    privkey_pem: &str,
+    reader: R,
+    passphrase: Option<&str>,
+) -> Result<Vec<(String, Vec<u8>)>, PqfileError> {
+    let mut pqf = PqfReader::new(reader, privkey_pem, passphrase)?;
+    let manifest = read_manifest(&mut pqf)?;
+    let mut result = Vec::with_capacity(manifest.len());
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    for entry in &manifest {
+        let mut data = Vec::with_capacity(entry.file_size as usize);
+        let mut remaining = entry.file_size;
+        while remaining > 0 {
+            let to_read = (remaining as usize).min(buf.len());
+            let n = pqf.read(&mut buf[..to_read]).map_err(PqfileError::Io)?;
+            if n == 0 {
+                return Err(PqfileError::DecryptionFailure);
+            }
+            data.extend_from_slice(&buf[..n]);
+            remaining -= n as u64;
+        }
+        result.push((entry.path.clone(), data));
+    }
+    Ok(result)
+}
+
+/// Create an archive from in-memory file data as `(path_in_archive, data)` pairs.
+///
+/// Unlike [`create`], this variant does not require files to exist on disk and
+/// works on all platforms including WASM.
+#[must_use = "archive creation result must be checked for errors"]
+pub fn create_from_memory(
+    pubkey_pem: &str,
+    entries: &[(String, Vec<u8>)],
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let manifest: Vec<ArchiveEntry> = entries
+        .iter()
+        .map(|(path, data)| ArchiveEntry {
+            path: path.clone(),
+            file_size: data.len() as u64,
+            mtime_secs: 0,
+            mode: 0,
+        })
+        .collect();
+
+    let header_bytes = serialize_manifest(&manifest)?;
+    let total_size =
+        header_bytes.len() as u64 + entries.iter().map(|(_, d)| d.len() as u64).sum::<u64>();
+
+    let mut chain: Box<dyn Read> = Box::new(Cursor::new(header_bytes));
+    for (_, data) in entries {
+        chain = Box::new(chain.chain(Cursor::new(data.clone())));
+    }
+
+    crate::encrypt::encrypt_stream(pubkey_pem, total_size, CHUNK_SIZE, &mut chain, writer)
 }
 
 // ── Manifest serialization ────────────────────────────────────────────────────
@@ -194,7 +261,12 @@ fn read_manifest<R: Read>(reader: &mut R) -> Result<Vec<ArchiveEntry>, PqfileErr
         reader.read_exact(&mut mode_bytes).map_err(io_err)?;
         let mode = u32::from_le_bytes(mode_bytes);
 
-        entries.push(ArchiveEntry { path, file_size, mtime_secs, mode });
+        entries.push(ArchiveEntry {
+            path,
+            file_size,
+            mtime_secs,
+            mode,
+        });
     }
     Ok(entries)
 }
@@ -209,9 +281,11 @@ fn safe_dest(base: &Path, archive_path: &str) -> Result<PathBuf, PqfileError> {
         match component {
             std::path::Component::Normal(c) => dest.push(c),
             std::path::Component::CurDir => {}
-            _ => return Err(bad_arg(&format!(
-                "archive entry '{archive_path}' contains unsafe path component"
-            ))),
+            _ => {
+                return Err(bad_arg(&format!(
+                    "archive entry '{archive_path}' contains unsafe path component"
+                )))
+            }
         }
     }
     Ok(dest)

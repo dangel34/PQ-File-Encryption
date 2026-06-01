@@ -49,6 +49,20 @@
 //! assert_eq!(out, plaintext);
 //! ```
 //!
+//! # Crate layout
+//!
+//! Items re-exported to the crate root (`pqfile::PqfileError`, `pqfile::CHUNK_SIZE`,
+//! `pqfile::PqfReader`, `pqfile::PqfInfo`, `pqfile::inspect_stream`, `pqfile::PqfHeaderInfo`,
+//! `pqfile::RecipientInfo`, and the typed key wrappers) are the stable, high-level surface.
+//!
+//! Operation functions (`encrypt_stream`, `decrypt_stream`, `signcrypt`, etc.) are always
+//! addressed via their module path — e.g. `pqfile::encrypt::encrypt_stream`.
+//!
+//! The typed wrappers in `pqfile::keys` (`PqfPublicKey`, `PqfPrivateKey`, `PqfSigningKey`,
+//! `PqfVerifyingKey`) are the recommended way to pass keys; they validate eagerly on
+//! construction. Raw `&str` PEM parameters on operation functions are the lower-level
+//! alternative when a typed wrapper is not convenient.
+//!
 //! # Stability
 //!
 //! The public API is not yet stabilised for 1.0. Breaking changes between minor versions
@@ -76,8 +90,7 @@ pub mod format;
 /// Key generation: ML-KEM (512/768/1024), hybrid X25519+ML-KEM-768.
 pub mod keygen;
 
-/// Passphrase-based key protection (Argon2id + AES-256-GCM).
-pub mod passphrase;
+pub(crate) mod passphrase;
 
 /// Streaming decryptor: `PqfReader<R>` implements `std::io::Read`.
 pub mod reader;
@@ -96,3 +109,23 @@ pub mod sign;
 
 /// Signcrypt: sign-then-encrypt and decrypt-then-verify in a single step.
 pub mod signcrypt;
+
+/// Add a recipient to an existing multi-recipient file without re-encrypting.
+pub mod add_recipient;
+
+/// File header inspection without decryption.
+pub mod inspect;
+
+/// Typed key wrapper structs (`PqfPublicKey`, `PqfPrivateKey`, `PqfSigningKey`, `PqfVerifyingKey`).
+pub mod keys;
+
+/// Secure file shredding: overwrite then delete.
+pub mod shred;
+
+// ── Crate-root re-exports ──────────────────────────────────────────────────
+
+pub use error::PqfileError;
+pub use format::CHUNK_SIZE;
+pub use inspect::{inspect_stream, PqfHeaderInfo, RecipientInfo};
+pub use keys::{PqfPrivateKey, PqfPublicKey, PqfSigningKey, PqfVerifyingKey};
+pub use reader::{PqfInfo, PqfReader};

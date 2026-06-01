@@ -1,16 +1,24 @@
-use eframe::egui::{self, Color32, CornerRadius, Margin, Stroke, Vec2};
 use crate::colors::{
-    D_BASE, D_MANTLE, D_SURFACE0, D_SURFACE1, D_OVERLAY, D_SUBTEXT, D_TEXT, D_ACCENT,
-    L_BASE, L_MANTLE, L_SURFACE0, L_SURFACE1, L_OVERLAY, L_SUBTEXT, L_TEXT, L_ACCENT,
+    D_ACCENT, D_BASE, D_MANTLE, D_OVERLAY, D_SUBTEXT, D_SURFACE0, D_SURFACE1, D_TEXT, L_ACCENT,
+    L_BASE, L_MANTLE, L_OVERLAY, L_SUBTEXT, L_SURFACE0, L_SURFACE1, L_TEXT,
 };
+use eframe::egui::{self, Color32, CornerRadius, Margin, Stroke, Vec2};
 
 pub(crate) fn apply_theme(ctx: &egui::Context, dark: bool) {
-    let mut v = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    let mut v = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
 
     let (base, mantle, surf0, surf1, overlay, subtext, text, accent) = if dark {
-        (D_BASE, D_MANTLE, D_SURFACE0, D_SURFACE1, D_OVERLAY, D_SUBTEXT, D_TEXT, D_ACCENT)
+        (
+            D_BASE, D_MANTLE, D_SURFACE0, D_SURFACE1, D_OVERLAY, D_SUBTEXT, D_TEXT, D_ACCENT,
+        )
     } else {
-        (L_BASE, L_MANTLE, L_SURFACE0, L_SURFACE1, L_OVERLAY, L_SUBTEXT, L_TEXT, L_ACCENT)
+        (
+            L_BASE, L_MANTLE, L_SURFACE0, L_SURFACE1, L_OVERLAY, L_SUBTEXT, L_TEXT, L_ACCENT,
+        )
     };
 
     let shadow_alpha = if dark { 80u8 } else { 24u8 };
@@ -35,9 +43,7 @@ pub(crate) fn apply_theme(ctx: &egui::Context, dark: bool) {
     v.widgets.active.bg_fill = accent;
     v.widgets.active.fg_stroke = Stroke::new(1.5, mantle);
 
-    v.selection.bg_fill = Color32::from_rgba_premultiplied(
-        accent.r(), accent.g(), accent.b(), 55,
-    );
+    v.selection.bg_fill = Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 55);
     v.selection.stroke = Stroke::new(1.0, accent);
 
     v.window_corner_radius = CornerRadius::same(8);

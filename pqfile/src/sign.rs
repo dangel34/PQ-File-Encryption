@@ -11,9 +11,9 @@ use zeroize::Zeroizing;
 use crate::error::PqfileError;
 use crate::passphrase;
 
-const VK_TAG: &str = "ML-DSA-65 VERIFYING KEY";
-const SK_TAG: &str = "ML-DSA-65 SIGNING KEY";
-const SK_ENC_TAG: &str = "ML-DSA-65 ENCRYPTED SIGNING KEY";
+pub(crate) const VK_TAG: &str = "ML-DSA-65 VERIFYING KEY";
+pub(crate) const SK_TAG: &str = "ML-DSA-65 SIGNING KEY";
+pub(crate) const SK_ENC_TAG: &str = "ML-DSA-65 ENCRYPTED SIGNING KEY";
 const SIG_TAG: &str = "ML-DSA-65 SIGNATURE";
 
 const VK_LEN: usize = 1952;
@@ -21,6 +21,7 @@ const SK_SEED_LEN: usize = 32;
 const SIG_LEN: usize = 3309;
 
 /// Result of generating an ML-DSA-65 signing key pair.
+#[non_exhaustive]
 pub struct SignKeygenResult {
     /// PEM-encoded verifying (public) key.
     pub vk_pem: String,
@@ -32,6 +33,7 @@ pub struct SignKeygenResult {
 
 /// Generates an ML-DSA-65 signing key pair in memory.
 /// If `passphrase` is `Some`, the signing seed is encrypted before PEM encoding.
+#[must_use = "signing key pair must be saved or the generated keys are lost"]
 pub fn sign_keygen_bytes(passphrase: Option<&str>) -> Result<SignKeygenResult, PqfileError> {
     let sk = SigningKey::<MlDsa65>::generate();
     let vk = sk.verifying_key();
@@ -45,7 +47,10 @@ pub fn sign_keygen_bytes(passphrase: Option<&str>) -> Result<SignKeygenResult, P
     let vk_pem = pem::encode(&Pem::new(VK_TAG, vk_bytes.to_vec()));
     let sk_pem = if let Some(pp) = passphrase {
         if seed_bytes.len() != SK_SEED_LEN {
-            return Err(PqfileError::InvalidKeyLength { expected: SK_SEED_LEN, got: seed_bytes.len() });
+            return Err(PqfileError::InvalidKeyLength {
+                expected: SK_SEED_LEN,
+                got: seed_bytes.len(),
+            });
         }
         let mut seed_arr = Zeroizing::new([0u8; SK_SEED_LEN]);
         seed_arr.copy_from_slice(seed_bytes);
@@ -57,12 +62,20 @@ pub fn sign_keygen_bytes(passphrase: Option<&str>) -> Result<SignKeygenResult, P
 
     let vk_fingerprint = crate::keygen::fingerprint(vk_bytes);
 
-    Ok(SignKeygenResult { vk_pem, sk_pem, vk_fingerprint })
+    Ok(SignKeygenResult {
+        vk_pem,
+        sk_pem,
+        vk_fingerprint,
+    })
 }
 
 /// Generates an ML-DSA-65 signing key pair and writes it to `out_dir`.
 /// Returns `OutputExists` if key files already exist and `force` is false.
-pub fn sign_keygen(out_dir: &Path, force: bool, passphrase: Option<&str>) -> Result<SignKeygenResult, PqfileError> {
+pub fn sign_keygen(
+    out_dir: &Path,
+    force: bool,
+    passphrase: Option<&str>,
+) -> Result<SignKeygenResult, PqfileError> {
     let vk_path = out_dir.join("sign_pubkey.pem");
     let sk_path = out_dir.join("sign_privkey.pem");
 
@@ -82,15 +95,13 @@ pub fn sign_keygen(out_dir: &Path, force: bool, passphrase: Option<&str>) -> Res
     Ok(result)
 }
 
-/// Returns true if `pem_str` uses the encrypted ML-DSA-65 signing key tag.
-pub fn is_encrypted_signing_key(pem_str: &str) -> bool {
-    pem::parse(pem_str)
-        .map(|p| p.tag() == SK_ENC_TAG)
-        .unwrap_or(false)
-}
-
 /// Signs `data` with the ML-DSA-65 signing key in `sk_pem` and returns the raw signature bytes.
-pub fn sign_bytes(sk_pem: &str, passphrase: Option<&str>, data: &[u8]) -> Result<Vec<u8>, PqfileError> {
+#[must_use = "sign result must be used"]
+pub fn sign_bytes(
+    sk_pem: &str,
+    data: &[u8],
+    passphrase: Option<&str>,
+) -> Result<Vec<u8>, PqfileError> {
     let sk = parse_signing_key(sk_pem, passphrase)?;
     let sig: Signature<MlDsa65> = sk.sign(data);
     let encoded: EncodedSignature<MlDsa65> = sig.encode();
@@ -99,29 +110,37 @@ pub fn sign_bytes(sk_pem: &str, passphrase: Option<&str>, data: &[u8]) -> Result
 }
 
 /// Signs the file at `input` and writes a PEM signature to `sig_out`.
-pub fn sign_file(sk_pem: &str, passphrase: Option<&str>, input: &Path, sig_out: &Path) -> Result<(), PqfileError> {
+#[must_use = "sign result must be used"]
+pub fn sign_file(
+    sk_pem: &str,
+    input: &Path,
+    sig_out: &Path,
+    passphrase: Option<&str>,
+) -> Result<(), PqfileError> {
     let data = fs::read(input)?;
-    let sig_bytes = sign_bytes(sk_pem, passphrase, &data)?;
+    let sig_bytes = sign_bytes(sk_pem, &data, passphrase)?;
     let sig_pem = pem::encode(&Pem::new(SIG_TAG, sig_bytes));
     fs::write(sig_out, sig_pem)?;
     Ok(())
 }
 
 /// Verifies `sig_bytes` against `data` using the ML-DSA-65 verifying key in `vk_pem`.
+#[must_use = "verify result must be used"]
 pub fn verify_bytes(vk_pem: &str, data: &[u8], sig_bytes: &[u8]) -> Result<(), PqfileError> {
     let vk = parse_verifying_key(vk_pem)?;
 
     if sig_bytes.len() != SIG_LEN {
         return Err(PqfileError::InvalidSignature);
     }
-    let sig = Signature::<MlDsa65>::try_from(sig_bytes)
-        .map_err(|_| PqfileError::InvalidSignature)?;
+    let sig =
+        Signature::<MlDsa65>::try_from(sig_bytes).map_err(|_| PqfileError::InvalidSignature)?;
 
     vk.verify(data, &sig)
         .map_err(|_| PqfileError::SignatureVerificationFailed)
 }
 
 /// Reads `input` and its detached PEM signature from `sig_path`, then verifies.
+#[must_use = "verify result must be used"]
 pub fn verify_file(vk_pem: &str, input: &Path, sig_path: &Path) -> Result<(), PqfileError> {
     let data = fs::read(input)?;
     let sig_pem_str = fs::read_to_string(sig_path)?;
@@ -130,6 +149,7 @@ pub fn verify_file(vk_pem: &str, input: &Path, sig_path: &Path) -> Result<(), Pq
 }
 
 /// Returns the default signature output path for `input` (appends `.sig` to the extension).
+#[must_use]
 pub fn default_sig_path(input: &Path) -> PathBuf {
     let mut p = input.to_path_buf();
     let ext = match p.extension() {
@@ -140,7 +160,10 @@ pub fn default_sig_path(input: &Path) -> PathBuf {
     p
 }
 
-fn parse_signing_key(pem_str: &str, passphrase: Option<&str>) -> Result<SigningKey<MlDsa65>, PqfileError> {
+fn parse_signing_key(
+    pem_str: &str,
+    passphrase: Option<&str>,
+) -> Result<SigningKey<MlDsa65>, PqfileError> {
     let p = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
 
     let seed_bytes: Zeroizing<Vec<u8>> = if p.tag() == SK_ENC_TAG {
@@ -152,7 +175,9 @@ fn parse_signing_key(pem_str: &str, passphrase: Option<&str>) -> Result<SigningK
     } else {
         return Err(PqfileError::InvalidPem(format!(
             "expected tag '{}' or '{}', got '{}'",
-            SK_TAG, SK_ENC_TAG, p.tag()
+            SK_TAG,
+            SK_ENC_TAG,
+            p.tag()
         )));
     };
 
@@ -162,13 +187,14 @@ fn parse_signing_key(pem_str: &str, passphrase: Option<&str>) -> Result<SigningK
             got: seed_bytes.len(),
         });
     }
-    let seed_arr: &[u8; SK_SEED_LEN] = seed_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| PqfileError::InvalidKeyLength {
-            expected: SK_SEED_LEN,
-            got: seed_bytes.len(),
-        })?;
+    let seed_arr: &[u8; SK_SEED_LEN] =
+        seed_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| PqfileError::InvalidKeyLength {
+                expected: SK_SEED_LEN,
+                got: seed_bytes.len(),
+            })?;
     Ok(SigningKey::<MlDsa65>::from_seed(seed_arr.into()))
 }
 
@@ -195,6 +221,20 @@ fn parse_verifying_key(pem_str: &str) -> Result<VerifyingKey<MlDsa65>, PqfileErr
             got: vk_bytes.len(),
         })?;
     Ok(VerifyingKey::<MlDsa65>::decode(vk_arr.into()))
+}
+
+/// Encodes raw signature bytes into a PEM string suitable for writing to a `.sig` file.
+#[must_use = "encoded signature must be used"]
+pub fn encode_sig_pem(sig_bytes: &[u8]) -> Vec<u8> {
+    pem::encode(&pem::Pem::new(SIG_TAG, sig_bytes.to_vec())).into_bytes()
+}
+
+/// Decodes a PEM signature file and returns the raw signature bytes.
+#[must_use = "decoded signature bytes must be used"]
+pub fn decode_sig_pem(pem_bytes: &[u8]) -> Result<Vec<u8>, PqfileError> {
+    let s = std::str::from_utf8(pem_bytes)
+        .map_err(|_| PqfileError::InvalidPem("not valid UTF-8".into()))?;
+    parse_sig_pem(s)
 }
 
 fn parse_sig_pem(pem_str: &str) -> Result<Vec<u8>, PqfileError> {
@@ -238,7 +278,7 @@ mod tests {
     fn sign_and_verify_roundtrip() {
         let r = sign_keygen_bytes(None).unwrap();
         let msg = b"hello pqfile";
-        let sig = sign_bytes(&r.sk_pem, None, msg).unwrap();
+        let sig = sign_bytes(&r.sk_pem, msg, None).unwrap();
         verify_bytes(&r.vk_pem, msg, &sig).unwrap();
     }
 
@@ -246,16 +286,19 @@ mod tests {
     fn verify_rejects_tampered_message() {
         let r = sign_keygen_bytes(None).unwrap();
         let msg = b"hello pqfile";
-        let sig = sign_bytes(&r.sk_pem, None, msg).unwrap();
+        let sig = sign_bytes(&r.sk_pem, msg, None).unwrap();
         let result = verify_bytes(&r.vk_pem, b"tampered", &sig);
-        assert!(matches!(result, Err(PqfileError::SignatureVerificationFailed)));
+        assert!(matches!(
+            result,
+            Err(PqfileError::SignatureVerificationFailed)
+        ));
     }
 
     #[test]
     fn verify_rejects_tampered_signature() {
         let r = sign_keygen_bytes(None).unwrap();
         let msg = b"hello pqfile";
-        let mut sig = sign_bytes(&r.sk_pem, None, msg).unwrap();
+        let mut sig = sign_bytes(&r.sk_pem, msg, None).unwrap();
         sig[0] ^= 0xff;
         let result = verify_bytes(&r.vk_pem, msg, &sig);
         assert!(matches!(
@@ -269,9 +312,12 @@ mod tests {
         let r1 = sign_keygen_bytes(None).unwrap();
         let r2 = sign_keygen_bytes(None).unwrap();
         let msg = b"hello pqfile";
-        let sig = sign_bytes(&r1.sk_pem, None, msg).unwrap();
+        let sig = sign_bytes(&r1.sk_pem, msg, None).unwrap();
         let result = verify_bytes(&r2.vk_pem, msg, &sig);
-        assert!(matches!(result, Err(PqfileError::SignatureVerificationFailed)));
+        assert!(matches!(
+            result,
+            Err(PqfileError::SignatureVerificationFailed)
+        ));
     }
 
     #[test]
@@ -306,7 +352,7 @@ mod tests {
         fs::write(&input, b"some file content").unwrap();
         let sig_path = dir.path().join("data.txt.sig");
         let sk_pem = fs::read_to_string(dir.path().join("sign_privkey.pem")).unwrap();
-        sign_file(&sk_pem, None, &input, &sig_path).unwrap();
+        sign_file(&sk_pem, &input, &sig_path, None).unwrap();
         let vk_pem = fs::read_to_string(dir.path().join("sign_pubkey.pem")).unwrap();
         verify_file(&vk_pem, &input, &sig_path).unwrap();
         drop(r);
@@ -324,14 +370,17 @@ mod tests {
     #[test]
     fn sign_bytes_wrong_pem_tag_returns_error() {
         let wrong_pem = pem::encode(&Pem::new("WRONG TAG", vec![0u8; SK_SEED_LEN]));
-        assert!(matches!(sign_bytes(&wrong_pem, None, b"data"), Err(PqfileError::InvalidPem(_))));
+        assert!(matches!(
+            sign_bytes(&wrong_pem, b"data", None),
+            Err(PqfileError::InvalidPem(_))
+        ));
     }
 
     #[test]
     fn sign_bytes_wrong_seed_length_returns_error() {
         let wrong_pem = pem::encode(&Pem::new(SK_TAG, vec![0u8; 16]));
         assert!(matches!(
-            sign_bytes(&wrong_pem, None, b"data"),
+            sign_bytes(&wrong_pem, b"data", None),
             Err(PqfileError::InvalidKeyLength { .. })
         ));
     }
@@ -340,16 +389,19 @@ mod tests {
     fn verify_bytes_wrong_vk_pem_tag_returns_error() {
         let r = sign_keygen_bytes(None).unwrap();
         let msg = b"hello";
-        let sig = sign_bytes(&r.sk_pem, None, msg).unwrap();
+        let sig = sign_bytes(&r.sk_pem, msg, None).unwrap();
         let wrong_pem = pem::encode(&Pem::new("WRONG TAG", vec![0u8; VK_LEN]));
-        assert!(matches!(verify_bytes(&wrong_pem, msg, &sig), Err(PqfileError::InvalidPem(_))));
+        assert!(matches!(
+            verify_bytes(&wrong_pem, msg, &sig),
+            Err(PqfileError::InvalidPem(_))
+        ));
     }
 
     #[test]
     fn verify_bytes_wrong_vk_length_returns_error() {
         let r = sign_keygen_bytes(None).unwrap();
         let msg = b"hello";
-        let sig = sign_bytes(&r.sk_pem, None, msg).unwrap();
+        let sig = sign_bytes(&r.sk_pem, msg, None).unwrap();
         let wrong_pem = pem::encode(&Pem::new(VK_TAG, vec![0u8; 16]));
         assert!(matches!(
             verify_bytes(&wrong_pem, msg, &sig),
@@ -376,7 +428,10 @@ mod tests {
         let sig_path = dir.path().join("data.txt.sig");
         let wrong_sig_pem = pem::encode(&Pem::new("WRONG TAG", vec![0u8; SIG_LEN]));
         fs::write(&sig_path, wrong_sig_pem).unwrap();
-        assert!(matches!(verify_file(&r.vk_pem, &input, &sig_path), Err(PqfileError::InvalidPem(_))));
+        assert!(matches!(
+            verify_file(&r.vk_pem, &input, &sig_path),
+            Err(PqfileError::InvalidPem(_))
+        ));
     }
 
     #[test]
@@ -400,41 +455,32 @@ mod tests {
     fn sign_keygen_bytes_encrypted_body_is_76_bytes() {
         let r = sign_keygen_bytes(Some("secret")).unwrap();
         let p = pem::parse(&r.sk_pem).unwrap();
-        assert_eq!(p.contents().len(), crate::passphrase::ENCRYPTED_SIGNING_BODY_LEN);
+        assert_eq!(
+            p.contents().len(),
+            crate::passphrase::ENCRYPTED_SIGNING_BODY_LEN
+        );
     }
 
     #[test]
     fn sign_and_verify_roundtrip_with_passphrase() {
         let r = sign_keygen_bytes(Some("mypass")).unwrap();
         let msg = b"signed with encrypted key";
-        let sig = sign_bytes(&r.sk_pem, Some("mypass"), msg).unwrap();
+        let sig = sign_bytes(&r.sk_pem, msg, Some("mypass")).unwrap();
         verify_bytes(&r.vk_pem, msg, &sig).unwrap();
     }
 
     #[test]
     fn sign_bytes_wrong_passphrase_returns_error() {
         let r = sign_keygen_bytes(Some("correct")).unwrap();
-        let result = sign_bytes(&r.sk_pem, Some("wrong"), b"data");
+        let result = sign_bytes(&r.sk_pem, b"data", Some("wrong"));
         assert!(matches!(result, Err(PqfileError::WrongPassphrase)));
     }
 
     #[test]
     fn sign_bytes_encrypted_key_no_passphrase_returns_error() {
         let r = sign_keygen_bytes(Some("secret")).unwrap();
-        let result = sign_bytes(&r.sk_pem, None, b"data");
+        let result = sign_bytes(&r.sk_pem, b"data", None);
         assert!(matches!(result, Err(PqfileError::PassphraseRequired)));
-    }
-
-    #[test]
-    fn is_encrypted_signing_key_detects_encrypted_tag() {
-        let r = sign_keygen_bytes(Some("pass")).unwrap();
-        assert!(is_encrypted_signing_key(&r.sk_pem));
-    }
-
-    #[test]
-    fn is_encrypted_signing_key_returns_false_for_plain_key() {
-        let r = sign_keygen_bytes(None).unwrap();
-        assert!(!is_encrypted_signing_key(&r.sk_pem));
     }
 
     #[test]

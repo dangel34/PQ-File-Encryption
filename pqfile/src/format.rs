@@ -30,7 +30,7 @@ pub const PADDED_CT_LEN: usize = KEM_CT_LEN_1024;
 /// ML-KEM-512 variant identifier.
 pub const KEM_VARIANT_512: u16 = 512;
 /// ML-KEM-768 variant identifier (default security level).
-pub const KEM_VARIANT: u16 = 768;
+pub const KEM_VARIANT_768: u16 = 768;
 /// ML-KEM-1024 variant identifier.
 pub const KEM_VARIANT_1024: u16 = 1024;
 /// Hybrid X25519+ML-KEM-768 variant identifier (0x0301).
@@ -42,9 +42,9 @@ pub const KEM_CT_LEN_512: usize = 768;
 pub const EK_LEN_512: usize = 800;
 
 /// ML-KEM-768 ciphertext length in bytes.
-pub const KEM_CT_LEN: usize = 1088;
+pub const KEM_CT_LEN_768: usize = 1088;
 /// ML-KEM-768 encapsulation key (public key) length in bytes.
-pub const EK_LEN: usize = 1184;
+pub const EK_LEN_768: usize = 1184;
 
 /// ML-KEM-1024 ciphertext length in bytes.
 pub const KEM_CT_LEN_1024: usize = 1568;
@@ -57,9 +57,9 @@ pub const X25519_PUBKEY_LEN: usize = 32;
 /// X25519 static public key length (same as ephemeral).
 pub const X25519_SCALAR_LEN: usize = 32;
 /// Hybrid KEM ciphertext length: X25519 ephemeral pubkey (32) + ML-KEM-768 CT (1088).
-pub const HYBRID_CT_LEN_768: usize = X25519_PUBKEY_LEN + KEM_CT_LEN;
+pub const HYBRID_CT_LEN_768: usize = X25519_PUBKEY_LEN + KEM_CT_LEN_768;
 /// Combined hybrid public key stored in PEM: X25519 pubkey (32) + ML-KEM-768 EK (1184).
-pub const HYBRID_EK_LEN_768: usize = X25519_PUBKEY_LEN + EK_LEN;
+pub const HYBRID_EK_LEN_768: usize = X25519_PUBKEY_LEN + EK_LEN_768;
 /// Combined hybrid private key stored in PEM: X25519 scalar (32) + ML-KEM-768 seed (64).
 pub const HYBRID_SEED_LEN_768: usize = X25519_SCALAR_LEN + 64;
 
@@ -69,22 +69,16 @@ pub const WRAPPED_KEY_LEN: usize = 48;
 /// Full ChaCha20-Poly1305 nonce length (12 bytes = 8-byte base + 4-byte counter).
 pub const NONCE_LEN: usize = 12;
 
-/// Fixed prefix: MAGIC(4) + VERSION(1) + KEM_VARIANT(2) = 7 bytes.
+/// Fixed prefix: MAGIC(4) + VERSION(1) + KEM_VARIANT_768(2) = 7 bytes.
 const HEADER_PREFIX_LEN: usize = 7;
 /// Fixed suffix: NONCE(12) + ORIGINAL_SIZE(8) = 20 bytes.
 const HEADER_SUFFIX_LEN: usize = 20;
 
-/// Header length for a ML-KEM-512 file (v3 format).
 #[allow(dead_code)]
-pub const HEADER_LEN_512: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_512 + HEADER_SUFFIX_LEN;
-/// Header length for a ML-KEM-768 file (kept as a constant for tests).
-pub const HEADER_LEN: usize = HEADER_PREFIX_LEN + KEM_CT_LEN + HEADER_SUFFIX_LEN;
-/// Header length for a ML-KEM-1024 file.
+pub(crate) const HEADER_LEN_512: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_512 + HEADER_SUFFIX_LEN;
+pub(crate) const HEADER_LEN_768: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_768 + HEADER_SUFFIX_LEN;
 #[allow(dead_code)]
-pub const HEADER_LEN_1024: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_1024 + HEADER_SUFFIX_LEN;
-/// Header length for a Hybrid X25519+ML-KEM-768 file.
-#[allow(dead_code)]
-pub const HEADER_LEN_HYBRID_768: usize = HEADER_PREFIX_LEN + HYBRID_CT_LEN_768 + HEADER_SUFFIX_LEN;
+pub(crate) const HEADER_LEN_1024: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_1024 + HEADER_SUFFIX_LEN;
 /// Extra bytes added to any header when version is VERSION_V5 (the chunk_size u32 field).
 pub const V5_CHUNK_SIZE_FIELD_LEN: usize = 4;
 /// Extra byte added to VERSION_V6 headers for the compression algorithm identifier.
@@ -107,7 +101,7 @@ pub(crate) const STREAM_AAD_PREFIX: &[u8] = b"pqfile";
 // ── Single-recipient header (v2 / v3) ────────────────────────────────────
 
 /// Parsed header for single-recipient formats (v2, v3, v5, v6).
-pub struct PqfHeader {
+pub(crate) struct PqfHeader {
     /// Format version byte.
     pub version: u8,
     /// KEM variant identifier (e.g. 768 for ML-KEM-768).
@@ -155,7 +149,11 @@ impl PqfHeader {
     /// Deserializes a v2/v3/v5/v6 header from `r`. Returns `UnsupportedVersion` for v4/v7.
     pub fn read<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
         let version = Self::read_magic_version(r)?;
-        if version != VERSION && version != VERSION_V3 && version != VERSION_V5 && version != VERSION_V6 {
+        if version != VERSION
+            && version != VERSION_V3
+            && version != VERSION_V5
+            && version != VERSION_V6
+        {
             return Err(PqfileError::UnsupportedVersion(version));
         }
         Self::read_body(r, version)
@@ -202,14 +200,22 @@ impl PqfHeader {
         } else {
             (CHUNK_SIZE as u32, COMPRESSION_NONE)
         };
-        Ok(PqfHeader { version, kem_variant, kem_ciphertext, nonce, original_size, chunk_size, compression_algo })
+        Ok(PqfHeader {
+            version,
+            kem_variant,
+            kem_ciphertext,
+            nonce,
+            original_size,
+            chunk_size,
+            compression_algo,
+        })
     }
 }
 
 // ── Multi-recipient header (v4) ───────────────────────────────────────────
 
 /// One recipient slot in a v4 multi-recipient header.
-pub struct RecipientEntryV4 {
+pub(crate) struct RecipientEntryV4 {
     /// KEM variant for this recipient's key.
     pub kem_variant: u16,
     /// KEM ciphertext encapsulating the per-file session key for this recipient.
@@ -219,7 +225,7 @@ pub struct RecipientEntryV4 {
 }
 
 /// Parsed header for v4 (multi-recipient) format.
-pub struct PqfHeaderV4 {
+pub(crate) struct PqfHeaderV4 {
     /// Ordered list of recipient slots.
     pub recipients: Vec<RecipientEntryV4>,
     /// Base nonce for the STREAM payload.
@@ -228,13 +234,21 @@ pub struct PqfHeaderV4 {
     pub original_size: u64,
 }
 
-fn write_multi_header_prefix<W: Write + ?Sized>(w: &mut W, version: u8, count: usize) -> Result<(), std::io::Error> {
+fn write_multi_header_prefix<W: Write + ?Sized>(
+    w: &mut W,
+    version: u8,
+    count: usize,
+) -> Result<(), std::io::Error> {
     w.write_all(MAGIC)?;
     w.write_all(&[version])?;
     w.write_all(&(count as u16).to_le_bytes())
 }
 
-fn write_nonce_and_size<W: Write + ?Sized>(w: &mut W, nonce: &[u8; NONCE_LEN], size: u64) -> Result<(), std::io::Error> {
+fn write_nonce_and_size<W: Write + ?Sized>(
+    w: &mut W,
+    nonce: &[u8; NONCE_LEN],
+    size: u64,
+) -> Result<(), std::io::Error> {
     w.write_all(nonce)?;
     w.write_all(&size.to_le_bytes())
 }
@@ -277,18 +291,26 @@ impl PqfHeaderV4 {
             let mut wrapped_key = [0u8; WRAPPED_KEY_LEN];
             r.read_exact(&mut wrapped_key)?;
 
-            recipients.push(RecipientEntryV4 { kem_variant, kem_ciphertext, wrapped_key });
+            recipients.push(RecipientEntryV4 {
+                kem_variant,
+                kem_ciphertext,
+                wrapped_key,
+            });
         }
 
         let (nonce, original_size) = read_nonce_and_size(r)?;
-        Ok(PqfHeaderV4 { recipients, nonce, original_size })
+        Ok(PqfHeaderV4 {
+            recipients,
+            nonce,
+            original_size,
+        })
     }
 }
 
 // ── Anonymous multi-recipient header (v7) ────────────────────────────────
 
 /// One recipient entry in a v7 header. The KEM ciphertext is zero-padded to PADDED_CT_LEN.
-pub struct RecipientEntryV7 {
+pub(crate) struct RecipientEntryV7 {
     /// KEM variant for this recipient's key.
     pub kem_variant: u16,
     /// Actual KEM ciphertext (only the first `ct_len_for_variant(kem_variant)` bytes are real).
@@ -298,7 +320,7 @@ pub struct RecipientEntryV7 {
 }
 
 /// Parsed header for v7 (anonymous multi-recipient) format.
-pub struct PqfHeaderV7 {
+pub(crate) struct PqfHeaderV7 {
     /// Shuffled recipient slots, each with a fixed 1618-byte layout.
     pub recipients: Vec<RecipientEntryV7>,
     /// Base nonce for the STREAM payload.
@@ -352,11 +374,19 @@ impl PqfHeaderV7 {
             let mut wrapped_key = [0u8; WRAPPED_KEY_LEN];
             r.read_exact(&mut wrapped_key)?;
 
-            recipients.push(RecipientEntryV7 { kem_variant, kem_ciphertext: padded, wrapped_key });
+            recipients.push(RecipientEntryV7 {
+                kem_variant,
+                kem_ciphertext: padded,
+                wrapped_key,
+            });
         }
 
         let (nonce, original_size) = read_nonce_and_size(r)?;
-        Ok(PqfHeaderV7 { recipients, nonce, original_size })
+        Ok(PqfHeaderV7 {
+            recipients,
+            nonce,
+            original_size,
+        })
     }
 }
 
@@ -377,10 +407,10 @@ fn validate_chunk_size(val: u32) -> Result<(), PqfileError> {
 }
 
 /// Returns the KEM ciphertext length for a given kem_variant, or UnsupportedKem.
-pub fn ct_len_for_variant(kem_variant: u16) -> Result<usize, PqfileError> {
+pub(crate) fn ct_len_for_variant(kem_variant: u16) -> Result<usize, PqfileError> {
     match kem_variant {
         KEM_VARIANT_512 => Ok(KEM_CT_LEN_512),
-        KEM_VARIANT => Ok(KEM_CT_LEN),
+        KEM_VARIANT_768 => Ok(KEM_CT_LEN_768),
         KEM_VARIANT_1024 => Ok(KEM_CT_LEN_1024),
         KEM_VARIANT_HYBRID_768 => Ok(HYBRID_CT_LEN_768),
         v => Err(PqfileError::UnsupportedKem(v)),
@@ -417,7 +447,10 @@ pub(crate) fn chunk_aad(counter: u32, is_last: bool) -> [u8; 11] {
 
 /// Fills `buf` from `reader`, returning the number of bytes read.
 /// Reads until the buffer is full or EOF is reached.
-pub(crate) fn fill_chunk<R: Read + ?Sized>(reader: &mut R, buf: &mut [u8]) -> Result<usize, PqfileError> {
+pub(crate) fn fill_chunk<R: Read + ?Sized>(
+    reader: &mut R,
+    buf: &mut [u8],
+) -> Result<usize, PqfileError> {
     let mut total = 0;
     while total < buf.len() {
         match reader.read(&mut buf[total..])? {
@@ -430,7 +463,10 @@ pub(crate) fn fill_chunk<R: Read + ?Sized>(reader: &mut R, buf: &mut [u8]) -> Re
 
 /// Derives the 32-byte hybrid session key via HKDF-SHA256(IKM = x25519_ss || ml_ss).
 /// HKDF expand with a 32-byte output cannot fail, so the error arm is unreachable.
-pub(crate) fn hybrid_hkdf(x25519_ss: &[u8; 32], ml_ss: &[u8]) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+pub(crate) fn hybrid_hkdf(
+    x25519_ss: &[u8; 32],
+    ml_ss: &[u8],
+) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     let mut ikm = Zeroizing::new(Vec::with_capacity(64));
     ikm.extend_from_slice(x25519_ss);
     ikm.extend_from_slice(ml_ss);

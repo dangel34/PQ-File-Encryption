@@ -141,6 +141,9 @@ jobs:
           key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-test-
 
+      - name: Check formatting
+        run: cargo fmt --check
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- --deny warnings
 

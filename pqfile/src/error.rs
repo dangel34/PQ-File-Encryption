@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 /// Errors returned by all pqfile operations.
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum PqfileError {
     /// Underlying I/O error.
@@ -18,6 +19,15 @@ pub enum PqfileError {
     /// KEM variant field in the header is not recognized.
     #[error("unsupported KEM variant: {0}")]
     UnsupportedKem(u16),
+
+    /// The decryption key uses a different KEM variant than the file was encrypted with.
+    #[error("KEM variant mismatch: key is {key}, file uses {file}")]
+    KemVariantMismatch {
+        /// KEM variant identifier of the supplied private key.
+        key: u16,
+        /// KEM variant identifier recorded in the file header.
+        file: u16,
+    },
 
     /// An encryption or key-encapsulation operation failed.
     #[error("encryption failure")]

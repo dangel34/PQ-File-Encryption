@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:crates.io)",
-      "Bash(cargo search *)"
+      "Bash(cargo search *)",
+      "Bash(cargo test *)"
     ]
   }
 }
