@@ -41,7 +41,7 @@ if ($LASTEXITCODE -ne 0) { Write-Error "cargo fmt check failed — run 'cargo fm
 Write-Host "  fmt OK"
 
 Write-Host "Running clippy..."
-cargo clippy --workspace --all-targets -- --deny warnings -q
+cargo clippy -q --workspace --all-targets -- --deny warnings
 if ($LASTEXITCODE -ne 0) { Write-Error "Clippy failed — fix warnings before releasing"; exit 1 }
 Write-Host "  clippy OK"
 
