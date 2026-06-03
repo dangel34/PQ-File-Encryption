@@ -28,6 +28,7 @@ paths = [
     '''tests/static_vectors\.rs''',
     '''tests/vectors\.rs''',
     '''examples/gen_vectors\.rs''',
+    '''tests/compat/''',
 ]
 
 [[allowlists]]
