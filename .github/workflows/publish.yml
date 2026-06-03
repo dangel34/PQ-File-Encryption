@@ -1,37 +1,59 @@
 name: Publish to crates.io
 
+# Fires exactly once: when a GitHub Release is published (i.e. moved out of draft).
+# The Release workflow builds artifacts and creates a *draft* release on tag push;
+# this workflow only runs when a human explicitly clicks "Publish release", giving
+# a review gate before touching the immutable crates.io registry.
 on:
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
+  release:
+    types: [published]
 
 jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     environment: release
-    # Guard: only run when the Release workflow succeeded AND the trigger came
-    # from this repository itself (not a fork). This prevents untrusted code
-    # from a forked PR from accessing CARGO_REGISTRY_TOKEN.
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
     permissions:
       contents: read
     steps:
-      # Use the exact commit SHA from the triggering workflow run for reproducibility;
-      # branch names are mutable. The `head_repository.full_name == github.repository`
-      # guard above ensures this SHA always comes from our own repo, not a fork.
-      # S7631: head_sha is safe here — the job-level `if` blocks all fork runs. # NOSONAR
+      # Check out the exact tag that was released for reproducibility.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.release.tag_name }}
 
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 (pinned for 1.96.0)
         with:
           toolchain: 1.96.0
 
+      # Idempotency guard: skip publishing any crate that is already on crates.io.
+      # Protects against accidental double-publishes if the workflow is re-run.
+      - name: Check which crates are already published
+        id: check
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import sys,json; \
+              pkgs=json.load(sys.stdin)['packages']; \
+              print(next(p['version'] for p in pkgs if p['name']=='pqfile'))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if cargo search pqfile --limit 1 | grep -qF "pqfile = \"$VERSION\""; then
+            echo "pqfile_published=true"  >> "$GITHUB_OUTPUT"
+            echo "pqfile $VERSION already on crates.io — skipping"
+          else
+            echo "pqfile_published=false" >> "$GITHUB_OUTPUT"
+            echo "pqfile $VERSION not yet on crates.io — will publish"
+          fi
+
+          if cargo search pqfile-cli --limit 1 | grep -qF "pqfile-cli = \"$VERSION\""; then
+            echo "cli_published=true"  >> "$GITHUB_OUTPUT"
+            echo "pqfile-cli $VERSION already on crates.io — skipping"
+          else
+            echo "cli_published=false" >> "$GITHUB_OUTPUT"
+            echo "pqfile-cli $VERSION not yet on crates.io — will publish"
+          fi
+
       - name: Publish pqfile
+        if: steps.check.outputs.pqfile_published == 'false'
         run: cargo publish -p pqfile --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -40,23 +62,22 @@ jobs:
       # pqfile-cli depends on it and cargo publish will fail if the index lags.
       # Each iteration waits 10 s; most propagations finish within 60 s.
       - name: Wait for pqfile to appear in crates.io index
+        if: steps.check.outputs.pqfile_published == 'false'
         run: |
-          PQFILE_VERSION=$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c "import sys,json; \
-              pkgs=json.load(sys.stdin)['packages']; \
-              print(next(p['version'] for p in pkgs if p['name']=='pqfile'))")
-          echo "Waiting for pqfile $PQFILE_VERSION on crates.io..."
+          VERSION="${{ steps.check.outputs.version }}"
+          echo "Waiting for pqfile $VERSION on crates.io..."
           for i in $(seq 1 30); do
-            if cargo search pqfile --limit 1 | grep -qF "pqfile = \"$PQFILE_VERSION\""; then
-              echo "Found pqfile $PQFILE_VERSION in index after $((i * 10))s"
+            if cargo search pqfile --limit 1 | grep -qF "pqfile = \"$VERSION\""; then
+              echo "Found pqfile $VERSION in index after $((i * 10))s"
               exit 0
             fi
             sleep 10
           done
-          echo "Timed out waiting for pqfile $PQFILE_VERSION in crates.io index" >&2
+          echo "Timed out waiting for pqfile $VERSION in crates.io index" >&2
           exit 1
 
       - name: Publish pqfile-cli
+        if: steps.check.outputs.cli_published == 'false'
         run: cargo publish -p pqfile-cli --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
