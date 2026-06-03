@@ -4,7 +4,7 @@ fn main() {
         res.set_icon("assets/icon.ico");
         res.set(
             "FileDescription",
-            "pqfile — Quantum-Resistant File Encryption",
+            "pqfile - Quantum-Resistant File Encryption",
         );
         res.set("ProductName", "pqfile");
         res.set("LegalCopyright", "MIT License");

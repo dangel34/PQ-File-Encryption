@@ -3,7 +3,7 @@ use crate::app::PqfileApp;
 use crate::colors::c_overlay;
 use crate::colors::{c_card, c_red, c_subtext, c_surface0, c_surface1, c_text};
 use crate::theme::apply_theme;
-use crate::types::{OpStatus, Tab};
+use crate::types::{KeygenAlgorithm, OpStatus, Tab};
 use crate::widgets::{card, section_label, setting_toggle, tab_heading_help};
 use eframe::egui::{self, RichText, Stroke};
 
@@ -25,9 +25,12 @@ impl PqfileApp {
         self.show_output_dir_section(ui, dark);
 
         self.show_behavior_section(ui, dark);
-        self.show_security_section(ui, dark);
+        self.show_defaults_section(ui, dark);
+        self.show_clipboard_settings(ui, dark);
         self.show_danger_zone_section(ui, dark);
     }
+
+    // ── Appearance ────────────────────────────────────────────────────────
 
     fn show_appearance_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, dark: bool) {
         section_label(ui, "APPEARANCE", dark);
@@ -39,9 +42,9 @@ impl PqfileApp {
                     ui.label(RichText::new("Theme").size(13.0).color(c_text(dark)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let label = if self.settings.dark_mode {
-                            "🌙  Dark"
+                            "Moon  Dark"
                         } else {
-                            "☀  Light"
+                            "Sun  Light"
                         };
                         if ui
                             .add(
@@ -64,6 +67,8 @@ impl PqfileApp {
         ui.add_space(10.0);
     }
 
+    // ── Output directory ──────────────────────────────────────────────────
+
     #[cfg(not(target_arch = "wasm32"))]
     fn show_output_dir_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "DEFAULT OUTPUT DIRECTORY", dark);
@@ -85,8 +90,10 @@ impl PqfileApp {
                 );
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("Browse…").size(13.0).color(c_text(dark)))
-                            .fill(c_surface0(dark)),
+                        egui::Button::new(
+                            RichText::new("Browse...").size(13.0).color(c_text(dark)),
+                        )
+                        .fill(c_surface0(dark)),
                     )
                     .clicked()
                 {
@@ -110,6 +117,8 @@ impl PqfileApp {
         });
         ui.add_space(10.0);
     }
+
+    // ── Behavior ──────────────────────────────────────────────────────────
 
     fn show_behavior_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "BEHAVIOR", dark);
@@ -136,45 +145,181 @@ impl PqfileApp {
         ui.add_space(10.0);
     }
 
-    fn show_security_section(&self, ui: &mut egui::Ui, dark: bool) {
-        section_label(ui, "SECURITY", dark);
+    // ── Defaults ─────────────────────────────────────────────────────────
+
+    fn show_defaults_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        section_label(ui, "KEYGEN DEFAULTS", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             ui.label(
-                RichText::new(
-                    "pqfile runs entirely on your device. No keys, files, or metadata \
-                     are transmitted over the network. Private keys are zeroized from \
-                     memory immediately after use.",
-                )
-                .size(12.0)
-                .color(c_subtext(dark)),
+                RichText::new("Default algorithm for new key pairs.")
+                    .size(12.0)
+                    .color(c_subtext(dark)),
             );
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.radio_value(
+                    &mut self.settings.default_algorithm,
+                    KeygenAlgorithm::MlKem512,
+                    RichText::new("ML-KEM-512")
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                );
+                ui.add_space(4.0);
+                ui.radio_value(
+                    &mut self.settings.default_algorithm,
+                    KeygenAlgorithm::MlKem768,
+                    RichText::new("ML-KEM-768  (recommended)")
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                );
+                ui.add_space(4.0);
+                ui.radio_value(
+                    &mut self.settings.default_algorithm,
+                    KeygenAlgorithm::MlKem1024,
+                    RichText::new("ML-KEM-1024")
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                );
+                ui.add_space(4.0);
+                ui.radio_value(
+                    &mut self.settings.default_algorithm,
+                    KeygenAlgorithm::HybridX25519MlKem768,
+                    RichText::new("Hybrid X25519+ML-KEM-768")
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                );
+            });
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("Default key expiry (days from today). Set to 0 to disable.")
+                    .size(12.0)
+                    .color(c_subtext(dark)),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let mut days = self.settings.default_expiry_days as i32;
+                ui.add(
+                    egui::DragValue::new(&mut days)
+                        .range(0..=3650)
+                        .speed(1.0)
+                        .suffix(" days"),
+                );
+                self.settings.default_expiry_days = days.max(0) as u32;
+                if self.settings.default_expiry_days > 0 {
+                    // Show what today + N days resolves to.
+                    if let Some(date) = days_from_now(self.settings.default_expiry_days) {
+                        ui.label(
+                            RichText::new(format!("(expires {date})"))
+                                .size(11.5)
+                                .color(c_subtext(dark)),
+                        );
+                    }
+                } else {
+                    ui.label(
+                        RichText::new("No default expiry")
+                            .size(11.5)
+                            .color(c_subtext(dark)),
+                    );
+                }
+            });
         });
         ui.add_space(10.0);
     }
+
+    // ── Clipboard ────────────────────────────────────────────────────────
+
+    fn show_clipboard_settings(&mut self, ui: &mut egui::Ui, dark: bool) {
+        section_label(ui, "CLIPBOARD", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            setting_toggle(
+                ui,
+                &mut self.settings.clipboard_auto_clear,
+                "Auto-clear clipboard text",
+                "Zeroize plaintext and ciphertext in the clipboard tool after the timeout below.",
+                dark,
+            );
+            if self.settings.clipboard_auto_clear {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Clear after:")
+                            .size(13.0)
+                            .color(c_subtext(dark)),
+                    );
+                    let mut secs = self.settings.clipboard_clear_secs as i32;
+                    ui.add(
+                        egui::DragValue::new(&mut secs)
+                            .range(5..=3600)
+                            .speed(1.0)
+                            .suffix(" s"),
+                    );
+                    self.settings.clipboard_clear_secs = secs.max(5) as u32;
+                    ui.label(
+                        RichText::new(if secs < 60 {
+                            format!("({secs} seconds)")
+                        } else {
+                            format!("({:.0} minutes)", secs as f32 / 60.0)
+                        })
+                        .size(11.5)
+                        .color(c_subtext(dark)),
+                    );
+                });
+            }
+        });
+        ui.add_space(10.0);
+    }
+
+    // ── Danger zone ───────────────────────────────────────────────────────
 
     fn show_danger_zone_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "DANGER ZONE", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             ui.label(
-                RichText::new("Clear all loaded files and reset status messages.")
+                RichText::new("Destructive actions that cannot be undone.")
                     .size(12.0)
                     .color(c_subtext(dark)),
             );
-            ui.add_space(6.0);
-            if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new("Clear All Inputs")
-                            .size(13.0)
-                            .color(c_red(dark)),
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Clear All Inputs")
+                                .size(13.0)
+                                .color(c_red(dark)),
+                        )
+                        .fill(c_surface0(dark))
+                        .stroke(Stroke::new(1.0, c_red(dark))),
                     )
-                    .fill(c_surface0(dark))
-                    .stroke(Stroke::new(1.0, c_red(dark))),
-                )
-                .clicked()
-            {
-                self.clear_all_inputs();
-            }
+                    .on_hover_text(
+                        "Remove all loaded files and reset status messages in every tab.",
+                    )
+                    .clicked()
+                {
+                    self.clear_all_inputs();
+                }
+
+                ui.add_space(8.0);
+
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Clear Recent History")
+                                .size(13.0)
+                                .color(c_red(dark)),
+                        )
+                        .fill(c_surface0(dark))
+                        .stroke(Stroke::new(1.0, c_red(dark))),
+                    )
+                    .on_hover_text(
+                        "Clear the recent files list shown in the Encrypt and Decrypt tabs.",
+                    )
+                    .clicked()
+                {
+                    self.clear_recent_history();
+                }
+            });
         });
     }
 
@@ -196,4 +341,36 @@ impl PqfileApp {
         self.inspect_status = OpStatus::None;
         self.keygen_status = OpStatus::None;
     }
+
+    fn clear_recent_history(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.recent_encrypt_files.clear();
+            self.recent_decrypt_files.clear();
+            self.recent_privkeys.clear();
+            self.recent_pubkeys.clear();
+        }
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+/// Returns "YYYY-MM-DD" for today + `days` days, or None on overflow.
+pub(crate) fn days_from_now(days: u32) -> Option<String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now_days = (SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() / 86400) as i64;
+    let target = now_days + days as i64;
+    // Convert days-since-epoch back to Gregorian (reverse JDN).
+    // JDN = target + 2440588; then use the standard algorithm.
+    let jdn = target + 2_440_588;
+    let a = jdn + 32044;
+    let b = (4 * a + 3) / 146097;
+    let c = a - (146097 * b) / 4;
+    let d = (4 * c + 3) / 1461;
+    let e = c - (1461 * d) / 4;
+    let m = (5 * e + 2) / 153;
+    let day = e - (153 * m + 2) / 5 + 1;
+    let month = m + 3 - 12 * (m / 10);
+    let year = 100 * b + d - 4800 + m / 10;
+    Some(format!("{year:04}-{month:02}-{day:02}"))
 }

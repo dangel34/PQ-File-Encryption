@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 
 use hkdf::Hkdf;
 use sha2::Sha256;
+use sha3::{Digest, Sha3_256};
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
@@ -27,6 +28,13 @@ pub const VERSION_V7: u8 = 0x07;
 /// is exposed. Supersedes v7 for `--anonymous-recipients` in pqfile 4.0+.
 /// Format: MAGIC | 0x08 | COUNT(2) | [PADDED_CT(1568) | WRAPPED_KEY(48)]... | NONCE(12) | ORIGINAL_SIZE(8)
 pub const VERSION_V8: u8 = 0x08;
+/// Padded anonymous multi-recipient: identical wire format to v8 but the slot count
+/// is rounded up to the next power of two by inserting random dummy slots.
+/// An observer learns only that there are 1, 2, 4, 8, … slots but cannot determine
+/// how many are real. Dummy slots fail KEM decapsulation or AES-GCM tag verification
+/// and are silently skipped by the decryptor.
+/// Format: MAGIC | 0x09 | COUNT(2) | [PADDED_CT(1568) | WRAPPED_KEY(48)]... | NONCE(12) | ORIGINAL_SIZE(8)
+pub const VERSION_V9: u8 = 0x09;
 
 /// Maximum KEM ciphertext length across all supported variants (ML-KEM-1024).
 /// All v7 recipient entries use this fixed CT slot size.
@@ -70,6 +78,14 @@ pub const HYBRID_SEED_LEN_768: usize = X25519_SCALAR_LEN + 64;
 
 /// AES-256-GCM wrapped session key size: 32-byte key + 16-byte tag.
 pub const WRAPPED_KEY_LEN: usize = 48;
+
+/// Maximum number of recipients accepted in a v4/v7/v8 header.
+/// Files claiming more recipients are rejected before any unbounded allocation can occur.
+pub(crate) const MAX_RECIPIENTS: usize = 256;
+
+/// Maximum value accepted for the `original_size` header field (1 TiB).
+/// Values above this indicate a malformed or malicious header.
+pub(crate) const MAX_ORIGINAL_SIZE: u64 = 1u64 << 40;
 
 /// Full ChaCha20-Poly1305 nonce length (12 bytes = 8-byte base + 4-byte counter).
 pub const NONCE_LEN: usize = 12;
@@ -275,7 +291,6 @@ impl PqfHeaderV4 {
         let mut count_bytes = [0u8; 2];
         r.read_exact(&mut count_bytes)?;
         let count = u16::from_le_bytes(count_bytes) as usize;
-        const MAX_RECIPIENTS: usize = 1000;
         if count > MAX_RECIPIENTS {
             return Err(PqfileError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -356,7 +371,6 @@ impl PqfHeaderV7 {
         let mut count_bytes = [0u8; 2];
         r.read_exact(&mut count_bytes)?;
         let count = u16::from_le_bytes(count_bytes) as usize;
-        const MAX_RECIPIENTS: usize = 1000;
         if count > MAX_RECIPIENTS {
             return Err(PqfileError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -422,7 +436,16 @@ pub(crate) struct PqfHeaderV8 {
 impl PqfHeaderV8 {
     /// Serializes the v8 header to `w`.
     pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
-        write_multi_header_prefix(w, VERSION_V8, self.recipients.len())?;
+        self.write_with_version(w, VERSION_V8)
+    }
+
+    /// Serializes the header with the given version byte. Used by the v9 padded format.
+    pub(crate) fn write_with_version<W: Write + ?Sized>(
+        &self,
+        w: &mut W,
+        version: u8,
+    ) -> Result<(), std::io::Error> {
+        write_multi_header_prefix(w, version, self.recipients.len())?;
         for r in &self.recipients {
             w.write_all(&r.padded_ct)?;
             w.write_all(&r.wrapped_key)?;
@@ -435,7 +458,6 @@ impl PqfHeaderV8 {
         let mut count_bytes = [0u8; 2];
         r.read_exact(&mut count_bytes)?;
         let count = u16::from_le_bytes(count_bytes) as usize;
-        const MAX_RECIPIENTS: usize = 1000;
         if count > MAX_RECIPIENTS {
             return Err(PqfileError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -470,6 +492,28 @@ impl PqfHeaderV8 {
 /// Matches the upper bound enforced by the CLI `--chunk-size` flag.
 pub const MAX_CHUNK_SIZE: u32 = 256 * 1024 * 1024;
 
+/// Picks a chunk size appropriate for the given `file_size`.
+///
+/// | File size | Chosen chunk | Rationale |
+/// |-----------|-------------|-----------|
+/// | < 1 MiB   | 16 KiB      | Reduces per-file AEAD overhead for small files |
+/// | > 256 MiB | 256 KiB     | Amortises per-chunk cost for large files |
+/// | otherwise | 64 KiB      | Standard [`CHUNK_SIZE`] default |
+///
+/// The returned value always differs from [`CHUNK_SIZE`] for the small and large
+/// tiers, so the encoder writes v5 format (with the chunk size stored in the header)
+/// rather than the more compact v3 header.
+pub fn adaptive_chunk_size(file_size: u64) -> usize {
+    const MB: u64 = 1024 * 1024;
+    if file_size < MB {
+        16 * 1024
+    } else if file_size > 256 * MB {
+        256 * 1024
+    } else {
+        CHUNK_SIZE
+    }
+}
+
 fn validate_chunk_size(val: u32) -> Result<(), PqfileError> {
     if val == 0 || val > MAX_CHUNK_SIZE {
         return Err(PqfileError::Io(std::io::Error::new(
@@ -496,7 +540,14 @@ fn read_nonce_and_size<R: Read + ?Sized>(r: &mut R) -> Result<([u8; NONCE_LEN], 
     r.read_exact(&mut nonce)?;
     let mut size_bytes = [0u8; 8];
     r.read_exact(&mut size_bytes)?;
-    Ok((nonce, u64::from_le_bytes(size_bytes)))
+    let size = u64::from_le_bytes(size_bytes);
+    if size > MAX_ORIGINAL_SIZE {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("original_size {size} exceeds maximum ({MAX_ORIGINAL_SIZE})"),
+        )));
+    }
+    Ok((nonce, size))
 }
 
 /// Derives the per-chunk nonce for v3/v4 streaming: `base_nonce[0..8] || counter.to_be_bytes()`.
@@ -507,16 +558,67 @@ pub(crate) fn chunk_nonce(base_nonce: &[u8; BASE_NONCE_LEN], counter: u32) -> [u
     nonce
 }
 
-/// Builds the AAD for a v3/v4 stream chunk: `"pqfile" || counter.to_be_bytes() || is_last`.
+/// Domain separator for the session-key commitment hash (version 2).
+const KEY_COMMITMENT_CTX: &[u8] = b"pqfile-session-key-commitment-v2";
+
+/// SHA3-256 of `KEY_COMMITMENT_CTX || session_key || nonce || original_size`.
 ///
-/// The counter binds the chunk to its position (prevents reordering); `is_last` flags
-/// end-of-stream so truncated ciphertexts fail authentication.
-pub(crate) fn chunk_aad(counter: u32, is_last: bool) -> [u8; 11] {
-    let mut aad = [0u8; 11];
-    aad[..6].copy_from_slice(STREAM_AAD_PREFIX);
-    aad[6..10].copy_from_slice(&counter.to_be_bytes());
-    aad[10] = is_last as u8;
-    aad
+/// Including `nonce` and `original_size` authenticates the stable header fields:
+/// any tampering with the nonce or declared plaintext size causes chunk-0's AEAD
+/// tag to fail. The KEM ciphertext and recipient-slot fields are excluded because
+/// wrong-CT → wrong-ss → wrong-commitment already covers that attack vector, and
+/// excluding them keeps zero-copy operations (`add_recipient`, `rekey`) valid:
+/// both operations preserve the session key, nonce, and original_size intact.
+pub(crate) fn compute_key_commitment(
+    session_key: &[u8],
+    nonce: &[u8; NONCE_LEN],
+    original_size: u64,
+) -> [u8; 32] {
+    let mut h = Sha3_256::new();
+    h.update(KEY_COMMITMENT_CTX);
+    h.update(session_key);
+    h.update(nonce.as_ref());
+    h.update(original_size.to_le_bytes());
+    h.finalize().into()
+}
+
+/// Maximum AAD byte length across all chunk positions (first chunk is largest).
+pub(crate) const MAX_CHUNK_AAD_LEN: usize = 11 + 32; // 43 bytes
+
+/// Builds the chunk-specific AAD into a fixed-size buffer, returning the used length.
+///
+/// For `counter == 0` the AAD is 43 bytes:
+///   `"pqfile" || 0u32_be || is_last || key_commitment(32)`
+///
+/// The 32-byte `key_commitment` = `compute_key_commitment(session_key)` binds the
+/// first chunk's tag to the specific session key, preventing:
+///   • KEM ciphertext substitution (different CT → different ss → different commitment)
+///   • Multi-key attacks ("invisible salamanders") where a crafted ciphertext
+///     authenticates under two distinct ChaCha20 keys
+///
+/// The `nonce` and `original_size` fields are bound via the `key_commitment` value
+/// (see `compute_key_commitment`), so header tampering with those fields is detected
+/// by the chunk-0 tag without increasing the AAD length here.
+///
+/// For `counter > 0` the AAD is the standard 11 bytes:
+///   `"pqfile" || counter_be || is_last`
+///
+/// The caller slices `buf[..len]` when passing the AAD to the AEAD primitive.
+pub(crate) fn make_chunk_aad(
+    counter: u32,
+    is_last: bool,
+    key_commitment: &[u8; 32],
+) -> ([u8; MAX_CHUNK_AAD_LEN], usize) {
+    let mut buf = [0u8; MAX_CHUNK_AAD_LEN];
+    buf[..6].copy_from_slice(STREAM_AAD_PREFIX);
+    buf[6..10].copy_from_slice(&counter.to_be_bytes());
+    buf[10] = is_last as u8;
+    if counter == 0 {
+        buf[11..43].copy_from_slice(key_commitment);
+        (buf, MAX_CHUNK_AAD_LEN)
+    } else {
+        (buf, 11)
+    }
 }
 
 /// Fills `buf` from `reader`, returning the number of bytes read.
@@ -549,4 +651,29 @@ pub(crate) fn hybrid_hkdf(
     hk.expand(b"pqfile-hybrid-v1", okm.as_mut())
         .map_err(|_| PqfileError::EncryptionFailure)?;
     Ok(okm)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adaptive_chunk_size_small_file() {
+        assert_eq!(adaptive_chunk_size(0), 16 * 1024);
+        assert_eq!(adaptive_chunk_size(1), 16 * 1024);
+        assert_eq!(adaptive_chunk_size(1024 * 1024 - 1), 16 * 1024);
+    }
+
+    #[test]
+    fn adaptive_chunk_size_medium_file() {
+        assert_eq!(adaptive_chunk_size(1024 * 1024), CHUNK_SIZE);
+        assert_eq!(adaptive_chunk_size(10 * 1024 * 1024), CHUNK_SIZE);
+        assert_eq!(adaptive_chunk_size(256 * 1024 * 1024), CHUNK_SIZE);
+    }
+
+    #[test]
+    fn adaptive_chunk_size_large_file() {
+        assert_eq!(adaptive_chunk_size(256 * 1024 * 1024 + 1), 256 * 1024);
+        assert_eq!(adaptive_chunk_size(1024 * 1024 * 1024), 256 * 1024);
+    }
 }

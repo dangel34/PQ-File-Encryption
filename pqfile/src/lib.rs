@@ -56,7 +56,7 @@
 //! `pqfile::RecipientInfo`, and the typed key wrappers) are the stable, high-level surface.
 //!
 //! Operation functions (`encrypt_stream`, `decrypt_stream`, `signcrypt`, etc.) are always
-//! addressed via their module path — e.g. `pqfile::encrypt::encrypt_stream`.
+//! addressed via their module path - e.g. `pqfile::encrypt::encrypt_stream`.
 //!
 //! The typed wrappers in `pqfile::keys` (`PqfPublicKey`, `PqfPrivateKey`, `PqfSigningKey`,
 //! `PqfVerifyingKey`) are the recommended way to pass keys; they validate eagerly on
@@ -96,6 +96,9 @@ pub(crate) mod passphrase;
 
 /// Streaming decryptor: `PqfReader<R>` implements `std::io::Read`.
 pub mod reader;
+
+/// Streaming encryptor: `PqfWriter<W>` implements `std::io::Write`.
+pub mod writer;
 
 /// Rekey: transfer a v3/v5 file to a new recipient without re-encrypting.
 pub mod rekey;
@@ -141,3 +144,4 @@ pub use format::CHUNK_SIZE;
 pub use inspect::{inspect_stream, PqfHeaderInfo, RecipientInfo};
 pub use keys::{PqfPrivateKey, PqfPublicKey, PqfSigningKey, PqfVerifyingKey};
 pub use reader::{PqfInfo, PqfReader};
+pub use writer::PqfWriter;

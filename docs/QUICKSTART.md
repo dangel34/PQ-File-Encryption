@@ -123,14 +123,46 @@ pqfile inspect secret.txt.pqf
 
 ```
 Magic:              PQFL
-Version:            0x03
+Version:            0x05
 KEM variant:        768
 Nonce:              a3f09c12de87b64c01e5a920
 Original file size: 2048 bytes
-Chunk size:         65536
+Chunk size:         16384
 ```
 
-### 5. Pipe via stdin / stdout
+Small files (under 1 MiB) now use a 16 KiB chunk size automatically when no `--chunk-size` flag is given, producing v5 format. Pass `--chunk-size 65536` to force v3.
+
+### 5. Diagnose a key or ciphertext file
+
+```
+pqfile doctor ./keys/privkey.pem
+```
+
+```
+File:              ./keys/privkey.pem
+Type:              private key
+Encrypted:         false
+Hardware-backed:   false
+Legacy Argon2 p=1: false
+Revocation:        not_checked
+```
+
+```
+pqfile doctor secret.txt.pqf
+```
+
+```
+File:         secret.txt.pqf
+Type:         .pqf ciphertext
+Version:      0x05
+KEM info:     ML-KEM-768
+Orig size:    2048 bytes
+Header:       valid
+```
+
+Use `--json` for machine-readable output.
+
+### 6. Pipe via stdin / stdout
 
 Pass `-` as the input file to read from stdin, and omit `-o` (or pass `-o -`) to write to stdout. This enables composability with other tools:
 

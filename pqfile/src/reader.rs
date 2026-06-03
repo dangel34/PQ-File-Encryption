@@ -8,11 +8,11 @@ use chacha20poly1305::{
     aead::{AeadInPlace, Tag},
     ChaCha20Poly1305, Nonce,
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::decrypt::decapsulate_stream_init;
 use crate::error::PqfileError;
-use crate::format::{chunk_aad, chunk_nonce, fill_chunk, BASE_NONCE_LEN};
+use crate::format::{chunk_nonce, fill_chunk, make_chunk_aad, BASE_NONCE_LEN};
 
 /// Metadata read from the `.pqf` header.
 #[non_exhaustive]
@@ -35,11 +35,15 @@ enum ReaderState<R: Read> {
         base_nonce: [u8; BASE_NONCE_LEN],
         chunk_size: usize,
         counter: u32,
+        /// SHA3-256 key commitment bound into the chunk-0 AAD (see `compute_key_commitment`).
+        key_commitment: [u8; 32],
         current_ct: Vec<u8>,
         current_ct_len: usize,
         next_ct: Vec<u8>,
         next_ct_len: usize,
-        plaintext: Vec<u8>,
+        /// Decrypted plaintext buffer. Wrapped in Zeroizing so the bytes are overwritten
+        /// before the allocation is released, preventing plaintext lingering in heap memory.
+        plaintext: Zeroizing<Vec<u8>>,
         plaintext_pos: usize,
         done: bool,
     },
@@ -63,19 +67,19 @@ impl<R: Read> PqfReader<R> {
         privkey_pem: &str,
         passphrase: Option<&str>,
     ) -> Result<Self, PqfileError> {
-        let (version, kem_variant, original_size, chunk_size, cipher, nonce_bytes, plaintext_v2) =
-            decapsulate_stream_init(&mut reader, privkey_pem, passphrase)?;
+        let state_init = decapsulate_stream_init(&mut reader, privkey_pem, passphrase)?;
 
         let info = PqfInfo {
-            version,
-            kem_variant,
-            original_size,
-            chunk_size,
+            version: state_init.version,
+            kem_variant: state_init.kem_variant,
+            original_size: state_init.original_size,
+            chunk_size: state_init.chunk_size,
         };
 
-        let state = if let Some(data) = plaintext_v2 {
+        let state = if let Some(data) = state_init.v2_plaintext {
             ReaderState::WholeFile { data, pos: 0 }
         } else {
+            let chunk_size = state_init.chunk_size;
             let max_ct = chunk_size + 16;
             let mut current_ct = vec![0u8; max_ct];
             let current_ct_len = fill_chunk(&mut reader, &mut current_ct)?;
@@ -88,19 +92,20 @@ impl<R: Read> PqfReader<R> {
             let next_ct_len = fill_chunk(&mut reader, &mut next_ct)?;
 
             let base_nonce: [u8; BASE_NONCE_LEN] =
-                nonce_bytes[..BASE_NONCE_LEN].try_into().unwrap();
+                state_init.nonce[..BASE_NONCE_LEN].try_into().unwrap();
 
             ReaderState::Streaming {
                 inner: reader,
-                cipher,
+                cipher: state_init.cipher,
                 base_nonce,
                 chunk_size,
                 counter: 0,
+                key_commitment: state_init.key_commitment,
                 current_ct,
                 current_ct_len,
                 next_ct,
                 next_ct_len,
-                plaintext: Vec::new(),
+                plaintext: Zeroizing::new(Vec::new()),
                 plaintext_pos: 0,
                 done: false,
             }
@@ -139,6 +144,7 @@ impl<R: Read> Read for PqfReader<R> {
                 base_nonce,
                 chunk_size,
                 counter,
+                key_commitment,
                 current_ct,
                 current_ct_len,
                 next_ct,
@@ -163,7 +169,7 @@ impl<R: Read> Read for PqfReader<R> {
                 // Decrypt current chunk.
                 let is_last = *next_ct_len == 0;
                 let cn = chunk_nonce(base_nonce, *counter);
-                let aad = chunk_aad(*counter, is_last);
+                let (aad_buf, aad_len) = make_chunk_aad(*counter, is_last, key_commitment);
 
                 if *current_ct_len < 16 {
                     return Err(io::Error::new(
@@ -174,19 +180,33 @@ impl<R: Read> Read for PqfReader<R> {
                 let ct_len = *current_ct_len - 16;
                 let tag =
                     Tag::<ChaCha20Poly1305>::clone_from_slice(&current_ct[ct_len..*current_ct_len]);
-                cipher
+                if cipher
                     .decrypt_in_place_detached(
                         Nonce::from_slice(&cn),
-                        &aad,
+                        &aad_buf[..aad_len],
                         &mut current_ct[..ct_len],
                         &tag,
                     )
-                    .map_err(|_| {
+                    .is_err()
+                {
+                    return Err(if is_last && *counter > 0 {
+                        io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            crate::error::PqfileError::Truncated,
+                        )
+                    } else {
                         io::Error::new(io::ErrorKind::InvalidData, "authentication failed")
-                    })?;
+                    });
+                }
 
-                plaintext.clear();
+                // Zeroize overwrites the previous chunk's plaintext so it does not linger
+                // in heap memory between reads.
+                plaintext.zeroize();
                 plaintext.extend_from_slice(&current_ct[..ct_len]);
+                // Zero the in-place decryption buffer: current_ct[..ct_len] still holds
+                // plaintext bytes after the in-place AEAD decrypt above.  Clear them now
+                // so the window before swap/overwrite does not expose plaintext.
+                current_ct[..ct_len].fill(0);
                 *plaintext_pos = 0;
 
                 if is_last {
@@ -313,6 +333,33 @@ mod tests {
         let r = PqfReader::new(enc.as_slice(), &priv_pem, None).unwrap();
         assert_eq!(r.info().original_size, plaintext.len() as u64);
         assert_eq!(r.info().chunk_size, CHUNK_SIZE);
+    }
+
+    #[test]
+    fn reader_truncated_mid_stream_returns_unexpected_eof() {
+        use crate::format::HEADER_LEN_768;
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext: Vec<u8> = vec![0u8; 2 * CHUNK_SIZE + 100];
+        let mut enc = Vec::new();
+        encrypt_stream(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut enc,
+        )
+        .unwrap();
+        // Keep header + first two complete ciphertext chunks; drop the third.
+        let keep = HEADER_LEN_768 + 2 * (CHUNK_SIZE + 16);
+        let truncated = enc[..keep].to_vec();
+        let mut r = PqfReader::new(truncated.as_slice(), &priv_pem, None).unwrap();
+        let mut out = Vec::new();
+        let err = r.read_to_end(&mut out).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+        let source = err
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<crate::error::PqfileError>());
+        assert!(matches!(source, Some(crate::error::PqfileError::Truncated)));
     }
 
     #[test]

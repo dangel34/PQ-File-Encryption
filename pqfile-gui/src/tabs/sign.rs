@@ -2,11 +2,13 @@ use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::colors::{c_overlay, c_surface0, c_text};
+use crate::types::SignSubTab;
 use crate::types::{OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::reveal_in_explorer;
 use crate::widgets::{
-    card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading_help,
+    card, file_row, passphrase_row, save_result, section_label, seg_tabs, show_status,
+    tab_heading_help,
 };
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::sign;
@@ -26,13 +28,24 @@ impl PqfileApp {
             .size(13.0)
             .color(c_subtext(dark)),
         );
-        ui.add_space(14.0);
+        ui.add_space(10.0);
 
-        self.show_sign_keygen_section(ui, dark);
-        ui.add_space(20.0);
-        self.show_sign_file_section(ui, dark);
-        ui.add_space(20.0);
-        self.show_verify_section(ui, dark);
+        seg_tabs(
+            ui,
+            &mut self.sign_sub_tab,
+            &[
+                ("Key Generation", SignSubTab::KeyGen),
+                ("Sign File", SignSubTab::Sign),
+                ("Verify Signature", SignSubTab::Verify),
+            ],
+            dark,
+        );
+
+        match self.sign_sub_tab {
+            SignSubTab::KeyGen => self.show_sign_keygen_section(ui, dark),
+            SignSubTab::Sign => self.show_sign_file_section(ui, dark),
+            SignSubTab::Verify => self.show_verify_section(ui, dark),
+        }
     }
 
     // ── Key generation ─────────────────────────────────────────────────────

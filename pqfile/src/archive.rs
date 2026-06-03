@@ -188,12 +188,22 @@ pub fn create_from_memory(
     let total_size =
         header_bytes.len() as u64 + entries.iter().map(|(_, d)| d.len() as u64).sum::<u64>();
 
-    let mut chain: Box<dyn Read> = Box::new(Cursor::new(header_bytes));
+    // Build a single contiguous payload buffer (header + all file data) so that
+    // encrypt_stream receives a plain slice rather than a boxed chain of cloned Cursors.
+    // This avoids one heap allocation per entry without increasing total memory use.
+    let mut payload = Vec::with_capacity(total_size.min(256 * 1024 * 1024) as usize);
+    payload.extend_from_slice(&header_bytes);
     for (_, data) in entries {
-        chain = Box::new(chain.chain(Cursor::new(data.clone())));
+        payload.extend_from_slice(data);
     }
 
-    crate::encrypt::encrypt_stream(pubkey_pem, total_size, CHUNK_SIZE, &mut chain, writer)
+    crate::encrypt::encrypt_stream(
+        pubkey_pem,
+        total_size,
+        CHUNK_SIZE,
+        &mut payload.as_slice(),
+        writer,
+    )
 }
 
 // ── Manifest serialization ────────────────────────────────────────────────────
@@ -255,6 +265,15 @@ fn read_manifest<R: Read>(reader: &mut R) -> Result<Vec<ArchiveEntry>, PqfileErr
         let mut size_bytes = [0u8; 8];
         reader.read_exact(&mut size_bytes).map_err(io_err)?;
         let file_size = u64::from_le_bytes(size_bytes);
+        if file_size > crate::format::MAX_ORIGINAL_SIZE {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "archive entry file_size {file_size} exceeds maximum ({})",
+                    crate::format::MAX_ORIGINAL_SIZE
+                ),
+            )));
+        }
 
         let mut mtime_bytes = [0u8; 8];
         reader.read_exact(&mut mtime_bytes).map_err(io_err)?;
@@ -276,13 +295,45 @@ fn read_manifest<R: Read>(reader: &mut R) -> Result<Vec<ArchiveEntry>, PqfileErr
 
 // ── Path safety ───────────────────────────────────────────────────────────────
 
-/// Resolve `archive_path` inside `base`, rejecting path traversal attempts.
+/// Returns `true` if `name` is a Windows reserved device name (CON, NUL, AUX, PRN,
+/// COM1-COM9, LPT1-LPT9). On Windows, creating files with these names causes I/O to
+/// be redirected to system devices rather than regular files.
+fn is_windows_device_name(name: &std::ffi::OsStr) -> bool {
+    let s = match name.to_str() {
+        Some(s) => s.to_ascii_uppercase(),
+        None => return false,
+    };
+    // Strip any extension (e.g. "NUL.txt" is still a device on Windows).
+    let base = s.split('.').next().unwrap_or(&s);
+    match base {
+        "CON" | "PRN" | "AUX" | "NUL" => true,
+        s if s.len() == 4 => {
+            let (prefix, digit) = s.split_at(3);
+            let d = digit
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit() && c != '0');
+            matches!(prefix, "COM" | "LPT") && d
+        }
+        _ => false,
+    }
+}
+
+/// Resolve `archive_path` inside `base`, rejecting path traversal attempts and
+/// Windows reserved device names.
 fn safe_dest(base: &Path, archive_path: &str) -> Result<PathBuf, PqfileError> {
     // Strip leading slashes and reject ".." components
     let mut dest = base.to_path_buf();
     for component in Path::new(archive_path).components() {
         match component {
-            std::path::Component::Normal(c) => dest.push(c),
+            std::path::Component::Normal(c) => {
+                if is_windows_device_name(c) {
+                    return Err(bad_arg(&format!(
+                        "archive entry '{archive_path}' contains a Windows reserved device name"
+                    )));
+                }
+                dest.push(c);
+            }
             std::path::Component::CurDir => {}
             _ => {
                 return Err(bad_arg(&format!(
@@ -467,5 +518,71 @@ mod tests {
         let out_dir = tempdir().unwrap();
         let paths = extract(&priv_pem, archive_bytes.as_slice(), out_dir.path(), None).unwrap();
         assert_eq!(std::fs::read(&paths[0]).unwrap(), big);
+    }
+
+    #[test]
+    fn archive_rejects_oversized_file_size_entry() {
+        // Craft a manifest with file_size > MAX_ORIGINAL_SIZE (1 TiB).
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let oversized: u64 = crate::format::MAX_ORIGINAL_SIZE + 1;
+
+        // Build a raw PQFA payload with the bad file_size field.
+        let mut manifest = Vec::new();
+        manifest.extend_from_slice(b"PQFA"); // magic
+        manifest.push(1u8); // version
+        manifest.extend_from_slice(&1u32.to_le_bytes()); // 1 entry
+                                                         // entry: path_len=8, path="evil.txt", file_size=oversized, mtime=0, mode=0
+        manifest.extend_from_slice(&8u16.to_le_bytes());
+        manifest.extend_from_slice(b"evil.txt");
+        manifest.extend_from_slice(&oversized.to_le_bytes());
+        manifest.extend_from_slice(&0i64.to_le_bytes());
+        manifest.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut archive_bytes = Vec::new();
+        crate::encrypt::encrypt_stream(
+            &pub_pem,
+            manifest.len() as u64,
+            CHUNK_SIZE,
+            &mut manifest.as_slice(),
+            &mut archive_bytes,
+        )
+        .unwrap();
+
+        let out_dir = tempdir().unwrap();
+        let result = extract(&priv_pem, archive_bytes.as_slice(), out_dir.path(), None);
+        assert!(result.is_err(), "oversized file_size should be rejected");
+    }
+
+    #[test]
+    fn is_windows_device_name_detects_reserved_names() {
+        use super::is_windows_device_name;
+        use std::ffi::OsStr;
+        for name in &["CON", "NUL", "AUX", "PRN", "COM1", "COM9", "LPT1", "LPT9"] {
+            assert!(
+                is_windows_device_name(OsStr::new(name)),
+                "{name} should be detected"
+            );
+        }
+        for name in &["file.txt", "data", "COM0", "LPT0", "CONSOLE", "NULL"] {
+            assert!(
+                !is_windows_device_name(OsStr::new(name)),
+                "{name} should not be detected"
+            );
+        }
+    }
+
+    #[test]
+    fn archive_rejects_windows_device_name_in_path() {
+        // safe_dest should reject Windows device names regardless of platform.
+        use super::safe_dest;
+        use std::path::Path;
+        let base = Path::new("/tmp/out");
+        assert!(safe_dest(base, "NUL").is_err());
+        assert!(safe_dest(base, "CON").is_err());
+        assert!(safe_dest(base, "COM1").is_err());
+        assert!(safe_dest(base, "subdir/NUL").is_err());
+        // Normal names are still allowed.
+        assert!(safe_dest(base, "normal.txt").is_ok());
+        assert!(safe_dest(base, "subdir/file.dat").is_ok());
     }
 }

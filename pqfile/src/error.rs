@@ -102,4 +102,11 @@ pub enum PqfileError {
     /// Shamir share fingerprints did not agree; shares may be from different keys.
     #[error("key share reconstruction failed: fingerprint mismatch, ensure you have the correct shares for this key")]
     ShareVerificationFailed,
+
+    /// The `.pqf` stream ended without a terminal chunk (is_last flag never seen).
+    /// The file was most likely truncated during download or transfer; re-downloading
+    /// is the appropriate recovery action. Distinguished from [`DecryptionFailure`]
+    /// which indicates bytes are present but the authentication tag is wrong.
+    #[error("stream truncated: file ended before the final authenticated chunk was seen; re-download and try again")]
+    Truncated,
 }

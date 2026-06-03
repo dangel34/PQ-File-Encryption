@@ -1,5 +1,5 @@
 use crate::app::PqfileApp;
-use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
+use crate::colors::{c_accent, c_card, c_chrome, c_green, c_overlay, c_subtext, c_surface1};
 use crate::types::{OpStatus, Tab};
 use crate::widgets::{
     card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading_help,
@@ -18,9 +18,11 @@ impl PqfileApp {
             self.help_modal_open = Some(Tab::Tools);
         }
         ui.label(
-            RichText::new("Key revocation, file rekeying, and passphrase management.")
-                .size(13.0)
-                .color(c_subtext(dark)),
+            RichText::new(
+                "Key revocation, file rekeying, passphrase management, and clipboard encrypt/decrypt.",
+            )
+            .size(13.0)
+            .color(c_subtext(dark)),
         );
         ui.add_space(14.0);
 
@@ -29,6 +31,8 @@ impl PqfileApp {
         self.show_revoke_section(ui, dark);
         ui.add_space(20.0);
         self.show_rekey_section(ui, dark);
+        ui.add_space(20.0);
+        self.show_clipboard_section(ui, dark);
     }
 
     // ── Repassphrase ──────────────────────────────────────────────────────
@@ -444,4 +448,213 @@ impl PqfileApp {
             }
         }
     }
+
+    // ── Clipboard encrypt / decrypt ───────────────────────────────────────
+
+    fn show_clipboard_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        section_label(ui, "CLIPBOARD ENCRYPT / DECRYPT", dark);
+        ui.label(
+            RichText::new(
+                "Type or paste short plaintext, encrypt for a recipient, and copy the \
+                 result to the clipboard. Reverse path for decrypt. Useful for encrypting \
+                 secrets in messaging apps without writing files to disk.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(8.0);
+
+        // ── Encrypt plain → cipher ────────────────────────────────────────
+        section_label(ui, "ENCRYPT TEXT", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            file_row(
+                ui,
+                "Recipient public key",
+                &mut self.clipboard_pubkey,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("Plaintext:")
+                    .size(13.0)
+                    .color(c_subtext(dark)),
+            );
+            ui.add(
+                egui::TextEdit::multiline(&mut *self.clipboard_plain)
+                    .hint_text("Type or paste your secret text here…")
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(4),
+            );
+        });
+        ui.add_space(6.0);
+
+        let enc_ready = self.clipboard_pubkey.loaded() && !self.clipboard_plain.is_empty();
+        if ui
+            .add_enabled(
+                enc_ready,
+                egui::Button::new(
+                    RichText::new("🔒  Encrypt & Copy")
+                        .size(14.0)
+                        .color(c_chrome(dark))
+                        .strong(),
+                )
+                .fill(c_accent(dark))
+                .min_size(Vec2::new(160.0, 32.0)),
+            )
+            .clicked()
+        {
+            self.do_clipboard_encrypt(ui.ctx());
+        }
+        show_status(ui, &self.clipboard_enc_status, dark);
+
+        ui.add_space(14.0);
+
+        // ── Decrypt cipher → plain ────────────────────────────────────────
+        section_label(ui, "DECRYPT TEXT", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            file_row(
+                ui,
+                "Your private key",
+                &mut self.clipboard_privkey,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            passphrase_row(
+                ui,
+                "Key passphrase:",
+                &mut self.clipboard_passphrase,
+                &mut self.clipboard_passphrase_visible,
+                "Leave empty for an unencrypted key",
+                dark,
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("PEM ciphertext (paste here):")
+                    .size(13.0)
+                    .color(c_subtext(dark)),
+            );
+            ui.add(
+                egui::TextEdit::multiline(&mut self.clipboard_cipher)
+                    .hint_text(
+                        "-----BEGIN PQFILE CIPHERTEXT-----\n…\n-----END PQFILE CIPHERTEXT-----",
+                    )
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(4),
+            );
+        });
+        ui.add_space(6.0);
+
+        let dec_ready = self.clipboard_privkey.loaded() && !self.clipboard_cipher.is_empty();
+        if ui
+            .add_enabled(
+                dec_ready,
+                egui::Button::new(
+                    RichText::new("🔓  Decrypt")
+                        .size(14.0)
+                        .color(c_chrome(dark))
+                        .strong(),
+                )
+                .fill(c_accent(dark))
+                .min_size(Vec2::new(140.0, 32.0)),
+            )
+            .clicked()
+        {
+            self.do_clipboard_decrypt();
+        }
+        show_status(ui, &self.clipboard_dec_status, dark);
+    }
+
+    fn do_clipboard_encrypt(&mut self, ctx: &egui::Context) {
+        self.clipboard_last_used = Some(std::time::Instant::now());
+        let pub_pem = match self.clipboard_pubkey.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.clipboard_enc_status =
+                    OpStatus::Err("Load a recipient public key first.".to_owned());
+                return;
+            }
+        };
+        let data = self.clipboard_plain.as_bytes().to_vec();
+        let original_size = data.len() as u64;
+        let mut output = Vec::new();
+        match pqfile::encrypt::encrypt_stream(
+            &pub_pem,
+            original_size,
+            pqfile::format::CHUNK_SIZE,
+            &mut Cursor::new(data),
+            &mut output,
+        ) {
+            Ok(()) => {
+                let cipher_pem = pem::encode(&pem::Pem::new("PQFILE CIPHERTEXT", output));
+                ctx.copy_text(cipher_pem.clone());
+                self.clipboard_cipher = cipher_pem;
+                self.clipboard_enc_status =
+                    OpStatus::Ok("Encrypted and copied to clipboard.".to_owned());
+            }
+            Err(e) => {
+                self.clipboard_enc_status = OpStatus::Err(e.to_string());
+            }
+        }
+    }
+
+    fn do_clipboard_decrypt(&mut self) {
+        self.clipboard_last_used = Some(std::time::Instant::now());
+        let priv_pem = match self.clipboard_privkey.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.clipboard_dec_status = OpStatus::Err("Load a private key first.".to_owned());
+                return;
+            }
+        };
+        let passphrase = if self.clipboard_passphrase.is_empty() {
+            None
+        } else {
+            Some((*self.clipboard_passphrase).clone())
+        };
+
+        // Decode PEM wrapper to get raw .pqf bytes.
+        let cipher_bytes = match pem::parse(self.clipboard_cipher.trim()) {
+            Ok(p) => p.into_contents(),
+            Err(e) => {
+                self.clipboard_dec_status = OpStatus::Err(format!("Invalid PEM ciphertext: {e}"));
+                return;
+            }
+        };
+
+        let mut out = Vec::new();
+        match pqfile::decrypt::decrypt_stream(
+            &priv_pem,
+            &mut Cursor::new(&cipher_bytes),
+            &mut out,
+            passphrase.as_deref(),
+        ) {
+            Ok(()) => {
+                match String::from_utf8(out) {
+                    Ok(plain) => {
+                        *self.clipboard_plain = plain.clone();
+                        self.clipboard_dec_status =
+                            OpStatus::Ok("Decrypted successfully.".to_owned());
+                        let _ = plain; // plaintext is shown in the encrypt text area
+                    }
+                    Err(e) => {
+                        self.clipboard_dec_status =
+                            OpStatus::Err(format!("Decrypted but content is not valid UTF-8: {e}"));
+                    }
+                }
+            }
+            Err(e) => {
+                self.clipboard_dec_status = OpStatus::Err(e.to_string());
+            }
+        }
+    }
 }
+
+// Keep the `c_green` and `c_overlay` color references used by the clipboard status display.
+const _: () = {
+    let _ = c_green;
+    let _ = c_overlay;
+};

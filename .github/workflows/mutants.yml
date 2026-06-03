@@ -1,0 +1,78 @@
+name: Mutation Testing
+
+# Run nightly and on manual dispatch. Not run on every push/PR because
+# cargo-mutants is CPU-intensive (can take 20–40 minutes on the full set).
+#
+# Scope is intentionally limited to the four crypto-critical modules where a
+# surviving mutant is a genuine test gap. Any survivor should result in a new
+# regression test before the next release.
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # 03:00 UTC every Monday
+  workflow_dispatch:
+    inputs:
+      extra_flags:
+        description: 'Extra cargo-mutants flags (e.g. "--timeout 30")'
+        required: false
+        default: ''
+
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutants:
+    name: cargo-mutants (crypto-critical paths)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-mutants-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-mutants-
+
+      # No GUI system deps needed: mutation scope is pqfile (core library only),
+      # which has no GTK/XCB dependencies.
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-mutants
+
+      # Run mutations on the four crypto-critical modules only.
+      # --jobs 4: run 4 mutations concurrently.
+      # --timeout 60: kill any mutant test run that exceeds 60 seconds.
+      # --no-shuffle: stable ordering for reproducible logs.
+      - name: Run cargo-mutants on crypto-critical paths
+        run: |
+          cargo mutants \
+            --package pqfile \
+            --file pqfile/src/decrypt.rs \
+            --file pqfile/src/format.rs \
+            --file pqfile/src/shamir.rs \
+            --file pqfile/src/passphrase.rs \
+            --jobs 4 \
+            --timeout 60 \
+            --no-shuffle \
+            ${{ github.event.inputs.extra_flags }}
+        env:
+          CARGO_INCREMENTAL: '0'
+
+      - name: Upload mutants log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-log
+          path: mutants.out/
+          if-no-files-found: ignore

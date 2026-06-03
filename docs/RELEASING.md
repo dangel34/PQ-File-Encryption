@@ -95,7 +95,7 @@ If the automated workflow fails and a manual publish is needed:
 
 ### What not to publish
 
-Do **not** publish `pqfile-gui` or `pqfile-desktop` — they require system GUI libraries and are not useful as library crates. The WASM web app is deployed via the release workflow.
+Do **not** publish `pqfile-gui` or `pqfile-desktop`. They require system GUI libraries and are not useful as library crates. The WASM web app is deployed via the release workflow.
 
 ### Verifying the publish
 

@@ -1,296 +1,263 @@
 # pqfile Roadmap
 
-This document tracks planned improvements, new features, and security work across future releases. Items are grouped by milestone. Breaking changes to the `.pqf` format or public API always require a major version bump.
+This document tracks planned improvements, new features, and security work across future releases. Breaking changes to the `.pqf` format or public API always require a major version bump.
 
 ---
 
-## v2.x - Incremental improvements (no breaking changes)
+## v4.0.0 through v4.1.1 (fully released)
 
-### Security
+All features from v2.x through v4.1.1 are complete and shipped. A full history is available in `docs/CHANGELOG.md`. The highlights:
 
-- **Passphrase-protected private keys** ✓ _released_
-  `pqfile keygen --passphrase` derives an AES-256-GCM key from the passphrase using Argon2id (m=64 MiB, t=3, p=1) and encrypts the 64-byte seed before writing the PEM file. Decrypt auto-detects the `ML-KEM-768 ENCRYPTED PRIVATE KEY` label and prompts for the passphrase. Unencrypted keys remain fully supported.
-
-- **Key fingerprint display** ✓ _released_
-  SHA3-256 fingerprint (first 16 bytes, colon-separated hex) printed by `pqfile keygen` and shown in the GUI Keygen success message.
-
-- **Supply-chain vetting (cargo-deny + cargo-vet)** ✓ _released_
-  `cargo-deny` enforces license policy (MIT, Apache-2.0, BSL-1.0, OFL-1.1, and font licenses from egui), blocks banned crates (openssl-sys), and restricts sources to crates.io. `cargo-vet` records an explicit exemption (safe-to-deploy or safe-to-run) for every dependency in the tree. Both tools run in `.github/workflows/ci.yml` on every push and PR to main.
-
-- **Signed releases via sigstore/cosign** ✓ _released_
-  Automatically sign release binaries and checksums in CI using cosign keyless signing. Publish a `checksums.txt.sig` alongside each GitHub release.
-
-- **Secret scanning (gitleaks)** ✓ _released_
-  `.gitleaks.toml` with an allowlist for test passphrases and packaging metadata. Runs in `.github/workflows/ci.yml` alongside cargo-deny on every push and PR to main.
-
-### CLI
-
-- **Output path flag (`-o / --output`)** ✓ _released_
-  `pqfile encrypt ... -o /tmp/out.pqf` and `pqfile decrypt ... -o recovered.txt`.
-
-- **Stdin / stdout pipe support** ✓ _released_
-  Accept `-` as the input file to read from stdin and write to stdout. Enables composability: `cat secret.txt | pqfile encrypt -r pubkey.pem - > out.pqf`.
-
-- **Shell completions** ✓ _released_
-  `pqfile completions <shell>` prints a ready-to-install script for bash, zsh, fish, PowerShell, or elvish.
-
-- **`pqfile keygen --force` flag** ✓ _released_
-  Without `--force`, keygen refuses to overwrite an existing `pubkey.pem` or `privkey.pem`.
-
-### GUI
-
-- **Drag-and-drop file loading** ✓ _released_
-  Accept files dropped onto the Encrypt, Decrypt, and Inspect panels in both the native and web builds.
-
-- **Key fingerprint in Inspect tab** ✓ _released_
-  SHA3-256 fingerprint displayed in the Inspect output. Lets the recipient confirm which key was used before attempting decryption.
-
-- **Multi-file encrypt** ✓ _released_
-  "+ Add Files..." button, drag-and-drop support, per-row status (ok / error), and "Encrypt All (N)" button. Works on native and web.
-
-- **GUI keygen: confirm before overwriting existing keys** ✓ _released_
-  Native GUI routes through `keygen::keygen()` with `force = !settings.confirm_overwrite`.
-
-- **Persist settings across sessions** ✓ _released_
-  Save `Settings` (theme, auto-clear, confirm-overwrite) to disk via `eframe`'s `Storage` API.
-
-### Packaging and Distribution
-
-- **Automated release workflow** ✓ _released_
-  `.github/workflows/release.yml` triggered by a version tag (`v*`). Builds CLI and desktop GUI binaries for all four platforms, the Windows installer via Inno Setup, the WASM web app, generates `checksums.txt`, and creates a draft GitHub release.
-
-- **SBOM generation** ✓ _released_
-  CycloneDX software bill of materials generated in CI and attached to each release.
+- ML-KEM (512 / 768 / 1024) and hybrid X25519+ML-KEM-768 key encapsulation (FIPS 203)
+- ML-DSA-65 digital signatures and signcrypt (FIPS 204)
+- Multi-recipient encryption, Shamir M-of-N threshold key splitting, key revocation
+- v8 anonymous recipient format (uniform slot size, no per-slot variant field)
+- v9 padded-recipient format (slot count rounded to next power of two with random dummy slots)
+- Hardware-backed private keys via OS credential store (Windows, macOS, Linux)
+- Streaming AEAD with chunk authentication, parallel processing, zstd compression
+- `PqfWriter<W: Write>` streaming encryptor, `PqfReader<R: Read>` streaming decryptor
+- `AsyncPqfWriter` and async decrypt backed by Tokio (`pqfile` feature `"async"`)
+- `encrypt_stream_pipelined` (I/O and AEAD overlap), `encrypt_mmap` (zero-copy mmap)
+- Adaptive chunk sizing: auto-tunes to 16 KiB / 64 KiB / 256 KiB based on file size
+- Atomic output writes: all CLI file writes use temp-file-then-rename with directory fsync on Unix
+- Structured JSON error codes (`docs/ERROR_CODES.md`)
+- `pqfile doctor` diagnostic subcommand for key and ciphertext health checks (legacy p=1 detection fixed in v4.1.1)
+- Cross-version compatibility matrix in `pqfile/tests/compat/` covering v2-v8
+- Property-based tests (`proptest`) and mutation testing CI (`cargo-mutants`)
+- Branchless GF(256) arithmetic in Shamir: constant-time `gf_mul` (v4.1.0) and constant-time `gf_inv` via fixed 7-squaring chain (v4.1.1)
+- Key commitment in chunk-0 AAD: SHA3-256(session_key) bound into first AEAD tag
+- `PqfileError::Truncated`: distinguishes clean truncation from authentication failure; parallel decrypt path matches serial behavior (v4.1.1)
+- Header validation: `original_size` capped at 1 TiB, recipient count capped at 256
+- Encrypted archive format (PQFA), rekey, add-recipient, secure file shredding
+- Native GUI (egui), CLI, and WASM web app sharing one core library; zero compiler warnings across all three targets
+- Typed key API, `inspect_stream`, formal stability promise in `STABILITY.md`
+- Security hardening pass (v4.1.1): `find_session_key` timing oracle closed, `signdecrypt` CLI stdout buffered before ML-DSA verification, Shamir polynomial coefficients and `PqfReader` streaming plaintext both wrapped in `Zeroizing`, decompression bomb protection for v6 files via `LimitedWriter`, `PqfWriter` drop panics in debug builds when `finish()` not called
+- Published to crates.io as `pqfile = "4.0.0"`; v4.1.x patch series complete
 
 ---
 
-## v3.0 - Format and feature expansion (breaking .pqf format changes)
+## v4.x - Depth and hardening (no breaking format changes)
 
 ### Security
 
-- **ML-KEM-1024 support** ✓ _released_
-  `pqfile keygen --level 1024` generates ML-KEM-1024 keys (EK 1568 bytes, CT 1568 bytes). The header `kem_variant` field (u16) distinguishes variants. Decryption auto-detects the variant from the file header; mismatched keys produce a clear error.
+- ~~**Authenticated header (nonce + size binding)**~~  **DONE (v4.x)**
+  The `nonce` and `original_size` fields are now bound into the session-key commitment: `compute_key_commitment` hashes `session_key || nonce || original_size` (domain separator `"pqfile-session-key-commitment-v2"`), so any tampering with those header fields causes chunk-0's AEAD tag to fail. The KEM ciphertext and recipient slots are excluded because wrong-CT → wrong-ss already covers that attack vector, and excluding them preserves zero-copy operations (`add_recipient`, `rekey`): both operations preserve the session key, nonce, and original_size. This is a breaking wire change for existing files - they must be re-encrypted; static and compat test vectors were regenerated.
+  > **Note:** Full binding of every header byte (including KEM ciphertexts and recipient slots) is reserved for v5.0 with a version bump, where `add_recipient` and `rekey` can be updated to re-tag chunk-0.
 
-- **Digital signatures with ML-DSA (NIST FIPS 204)** ✓ _released_
-  `pqfile sign-keygen --out <dir>` generates an ML-DSA-65 key pair. `pqfile sign -k sign_privkey.pem <file>` produces a detached PEM `.sig` file (3309-byte signature). `pqfile verify` verifies. All commands support `--json`.
+- ~~**Key commitment check**~~  **DONE (v4.x)**
+  The first AEAD chunk now includes a 32-byte SHA3-256 commitment to the session key in its Additional Authenticated Data (`"pqfile" || 0u32_be || is_last || key_commitment`). This binds each file to the specific session key that encrypted it, preventing KEM ciphertext substitution attacks and "invisible salamander" multi-key collisions where a crafted ciphertext authenticates under two distinct ChaCha20 keys. Implementation note: the commitment is placed in chunk AAD (not stored per-recipient-slot as originally planned), and uses SHA3-256 (not BLAKE3). Header bytes are excluded so `add_recipient` and `rekey` remain valid without re-encrypting payload chunks. This is a breaking wire-format change; static test vectors were regenerated accordingly.
 
-- **Hybrid classical + post-quantum key exchange** ✓ _released_
-  `pqfile keygen --hybrid` generates an X25519+ML-KEM-768 hybrid key pair (KEM variant `0x0301`). Session key derived via `HKDF-SHA256(IKM = x25519_ss || mlkem_ss, info = "pqfile-hybrid-v1")`.
+- ~~**Full constant-time audit**~~  **DONE (v4.1.0 / v4.1.1)**
+  Both GF(256) arithmetic primitives used in Lagrange interpolation are now branchless. `gf_mul` had data-dependent branching on the `a` (secret) argument; both conditionals were replaced with mask idioms (`0u8.wrapping_sub(bit)`) in v4.1.0. `gf_inv` previously computed `x^254` via a data-dependent exponentiation loop; it was replaced in v4.1.1 with a fixed 7-squaring chain that runs identically for all non-zero inputs. A standalone `dudect` benchmark (`pqfile/examples/ct_shamir.rs`) and a `--features timing-tests` unit test cover both primitives. The passphrase and key-comparison paths were reviewed and found to rely on constant-time primitives from the `aes-gcm` and `argon2` crates.
 
-- **Multiple recipients** ✓ _released_
-  Encrypt a single file to N public keys (v4 format) by repeating `-r` on the CLI. A random 32-byte session key K encrypts the payload; each recipient's KEM shared secret wraps K under AES-256-GCM. Mixed variants (768/1024/hybrid) are supported in a single file.
+- ~~**Security hardening pass**~~  **DONE (v4.1.1)**
+  Twelve findings from a pre-publish security audit were addressed. Critical: `pqfile doctor` legacy key detection now prompts for the actual passphrase before probing, so p=1 keys are reliably identified; `signdecrypt` CLI stdout path buffers into `Zeroizing<Vec<u8>>` so plaintext only reaches stdout after ML-DSA verification succeeds. High: `find_session_key` (v4/v7) now iterates all same-variant entries without early return, closing a timing oracle that revealed which slot matched; Shamir polynomial coefficients (`coeff_buf`) wrapped in `Zeroizing` so random coefficients are overwritten after splitting; v6 (compressed) decompression capped via `LimitedWriter` at `original_size` to prevent decompression bomb attacks; `PqfReader` per-chunk plaintext buffer changed to `Zeroizing<Vec<u8>>` with explicit `zeroize()` before each reuse; parallel decrypt now returns `PqfileError::Truncated` for truncated streams, matching the serial path. Additional: `PqfWriter::drop` panics in debug builds when `finish()` was not called; `encrypt_mmap` calls `madvise(Sequential)` on Unix; `AtomicOutput::commit` fsyncs the parent directory on Unix after rename; `json_escape` escapes all control characters 0x00-0x1F.
 
-### CLI
+- ~~**Recipient count padding (v9 format)**~~  **DONE (v4.1.0)**
+  `encrypt_stream_multi_anon_padded` pads the slot count to the next power of two with random dummy entries before shuffling. Version byte `0x09`. The decryptor handles v9 identically to v8. CLI flag `--pad-recipients`. Three format vector tests added.
 
-- **Streaming encryption for large files** ✓ _released_
-  Chunked AEAD stream using the STREAM construction: each 64 KiB chunk uses an independent nonce and AAD that prevents truncation and reordering attacks.
+### Library
 
-- **Batch / recursive directory encryption** ✓ _released_
-  `pqfile encrypt -r pubkey.pem --recursive /path/to/dir/` encrypts every file in a directory tree, writing `.pqf` files alongside originals.
+- ~~**`PqfWriter<W: Write>` streaming encryptor**~~  **DONE (v4.1.0)**
+  Implemented in `pqfile::writer`. Buffers plaintext into chunks and encrypts on write. `finish()` seals the final partial chunk and returns the inner writer. Drop attempts a best-effort seal. Nine tests including interop with `PqfReader`.
 
-- **Structured JSON output (`--json`)** ✓ _released_
-  Machine-readable output mode for all commands. All commands emit `{"status":"ok",...}` on success; errors go to stderr as `{"status":"error","message":"..."}`.
+- ~~**`PqfWriter` async counterpart**~~  **DONE (v4.1.0)**
+  `AsyncPqfWriter<W: AsyncWrite + Unpin>` in `pqfile::async_io`. Buffers plaintext in `poll_write`, seals on `finish()` or `poll_shutdown()` via a Buffering/Flushing/Done state machine. Six tokio tests.
 
-### GUI
+- ~~**Partial truncation detection in streaming decrypt**~~  **DONE (v4.1.0)**
+  `PqfileError::Truncated` returned when `is_last && counter > 0` (at least one chunk succeeded before the stream ended unexpectedly). `PqfReader` surfaces it as `io::ErrorKind::UnexpectedEof` wrapping `PqfileError::Truncated`.
 
-- **Progress bar for large files** ✓ _released_
-  Encrypt and decrypt operations run on a background thread (native). A per-file-count progress bar is shown during batch encrypt; a spinner is shown during decrypt. The UI stays responsive throughout.
+### Testing
 
-- **Key management panel** ✓ _released_
-  Dedicated "Keys" tab. Remembered key pairs (label, fingerprint, directory path) persist across sessions. Encrypt / Decrypt buttons quick-load keys into the respective tabs.
+- ~~**Property-based testing with proptest**~~  **DONE (v4.1.0)**
+  `pqfile/tests/property.rs` with five proptest tests: encrypt/decrypt roundtrip for arbitrary lengths, single-byte flip always fails auth, Shamir split/reconstruct recovers the original key, and insufficient shares do not recover it.
 
----
+- ~~**Mutation testing with cargo-mutants**~~  **DONE (v4.1.0)**
+  `.github/workflows/mutants.yml` runs weekly and on manual dispatch, scoped to `decrypt.rs`, `format.rs`, `shamir.rs`, `passphrase.rs`. Any surviving mutant in those paths requires a new test.
 
-## Future / Long-term
-
-### Security
-
-- **ML-KEM-512 support** ✓ _released_
-  `pqfile keygen --level 512` generates an ML-KEM-512 key pair. Completes FIPS 203 parameter set coverage (512 / 768 / 1024).
-
-- **Anonymous recipients** ✓ _released_
-  `--anonymous-recipients` flag (v7 format) pads all recipient KEM ciphertext entries to the maximum variant size and randomizes their serialization order. An eavesdropper cannot determine the number of recipients or which key types are in use.
-
-- **Signcrypt (combined authenticate and encrypt)** ✓ _released_
-  `pqfile signcrypt -k sign_privkey.pem -r pubkey.pem <file>` signs the plaintext under ML-DSA-65 and embeds the detached signature inside the encrypted payload. `pqfile signdecrypt` decrypts and verifies in one step. The signature lives inside the AEAD-authenticated ciphertext and cannot be stripped or substituted after the fact. `signcrypt_bytes` added for non-seekable (in-memory) inputs.
-
-- **Key revocation** ✓ _released_
-  `pqfile revoke --key pubkey.pem --reason "..."` writes a `pubkey.pem.revoked` JSON sidecar containing the key fingerprint and reason. `pqfile encrypt` checks for a `.revoked` sidecar and aborts if one is found.
-
-- **Passphrase-protected signing keys** ✓ _released_
-  `pqfile sign-keygen --passphrase` encrypts the 32-byte ML-DSA-65 seed using Argon2id + AES-256-GCM. PEM label: `ML-DSA-65 ENCRYPTED SIGNING KEY`. Auto-detected on load.
-
-- **Threshold decryption (M-of-N)** ✓ _released_
-  Split a private key seed across N shareholders using Shamir's Secret Sharing (GF(2^8) polynomial interpolation over the 64-byte seed). `pqfile split-key --threshold M --shares N privkey.pem` produces N share PEM files. `pqfile reconstruct-key` reassembles the seed from any M shares.
-
-### CLI and Library
-
-- **Typed public key API** ✓ _released_
-  `pqfile::keys` exposes `PqfPublicKey`, `PqfPrivateKey`, `PqfSigningKey`, and `PqfVerifyingKey` -- typed wrapper structs that parse and validate PEM on construction, cache the KEM variant and fingerprint, and re-expose the PEM string for use with the existing encrypt/decrypt/sign functions. Downstream crates can work with structured key values instead of raw PEM strings.
-
-- **File header inspection API** ✓ _released_
-  `pqfile::inspect::inspect_stream` reads and parses a `.pqf` header without decrypting the payload. Returns a typed `PqfHeaderInfo` enum covering all format versions (v2 through v7), exposing version, KEM variant, nonce, original size, chunk size, and per-recipient slot info.
-
-- **Add recipient without re-encryption** ✓ _released_
-  `pqfile add-recipient -k existing_privkey.pem -r new_pubkey.pem file.pqf` decapsulates the session key using an existing recipient's private key, re-encapsulates it under the new public key, and appends a new recipient entry to the header without touching the payload ciphertext. Works for v4 and v7 files.
-
-- **Secure file shredding** ✓ _released_
-  `pqfile shred <file>` overwrites the file content with random bytes before deleting it, reducing the chance of plaintext recovery via file system forensics. CLI `--shred` flag on encrypt deletes the original after successful encryption.
-
-- **Stable public Rust API with semver guarantees** _(audit complete; v4.0 release remains)_
-  The public API surface audit is complete: `#[non_exhaustive]` on all public structs and enums, `#[must_use]` on all fallible functions, internal helpers moved to `pub(crate)`, passphrase parameters standardized to the last position, file-path wrappers removed. A written stability promise (STABILITY.md) and the crates.io 1.0 release are the remaining v4.0 steps.
-
-- **Streaming decryptor type implementing Read** ✓ _released_
-  `PqfReader<R: Read>` wraps a source reader and implements `Read`, yielding decrypted plaintext bytes incrementally. Each 64 KiB chunk is yielded only after its AEAD tag passes verification.
-
-- **Encrypted archive (multi-file bundle)** ✓ _released_
-  `pqfile archive -r pubkey.pem -o bundle.pqf [files...]` packs multiple files into a single encrypted authenticated archive (PQFA format). `pqfile extract bundle.pqf -k privkey.pem` restores the original layout. All authentication happens before any file is written to disk on extraction.
-
-- **Re-encryption without payload decryption (rekey)** ✓ _released_
-  `pqfile rekey -k old_privkey.pem -r new_pubkey.pem file.pqf` decapsulates the session key using the old private key, re-encapsulates it under the new public key, and rewrites only the file header. The payload ciphertext bytes are streamed through unchanged.
-
-- **Compress-then-encrypt (zstd)** ✓ _released_
-  `--compress` flag on `pqfile encrypt`. Plaintext is compressed with zstd before encryption. Decompression happens automatically after AEAD verification on decrypt.
-
-- **Format specification (docs/FORMAT.md)** ✓ _released_
-  Byte-level specification of all `.pqf` and `.pqfa` format versions (v2 through v7), covering the exact field layout, sizes, byte order, and invariants for each header and payload structure. Includes reference test vectors for each version and KEM variant combination.
+- ~~**Cross-version compatibility matrix**~~  **DONE (v4.1.0)**
+  Golden ciphertext files for v2 through v8 (all format variants) committed to `pqfile/tests/compat/`. Eleven roundtrip tests in `pqfile/tests/compat.rs` run on every CI push via `cargo test --workspace`.
 
 ### Performance
 
-- **Parallel chunk processing with rayon** ✓ _released_
-  `--parallel` flag on `pqfile encrypt` and `pqfile decrypt`. Chunks are processed concurrently across available cores using a rayon work-stealing thread pool. Not supported with multiple recipients or compression.
+- ~~**`PqfWriter` zero-copy path with memory-mapped I/O**~~  **DONE (v4.1.0)**
+  `encrypt_mmap(pubkey_pem, path, chunk_size, writer)` in `pqfile::encrypt` (native only, `memmap2 = "0.9"`). CLI `--mmap` flag for single-recipient file inputs. Three tests. The intermediate read buffer is eliminated; kernel pages map directly into the AEAD path.
 
-- **Configurable chunk size** ✓ _released_
-  `--chunk-size <bytes>` flag on `pqfile encrypt`. Default 64 KiB (v3 format). Non-default values emit v5 format which stores the chunk size in the header so the decryptor reads it automatically. Supported range: 1 to 268435456 bytes.
+- ~~**Adaptive chunk sizing**~~  **DONE (v4.1.0)**
+  `format::adaptive_chunk_size(file_size) -> usize` returns 16 KiB for files under 1 MiB, 256 KiB for files over 256 MiB, and 64 KiB otherwise. CLI `--chunk-size 0` (the new default) triggers auto-tune. The chosen size is stored in v5 format.
 
-- **In-place AEAD to eliminate per-chunk allocation** ✓ _released_
-  `encrypt_stream` uses `encrypt_in_place_detached`; `decrypt_v3_chunks` uses `decrypt_in_place_detached`. Zero heap allocations per chunk in the streaming hot path.
+- ~~**Chunk pipeline (I/O and AEAD overlap)**~~  **DONE (v4.1.0)**
+  `encrypt_stream_pipelined<R: Read + Send + 'static>` uses a bounded `mpsc::sync_channel(2)` to read ahead one full chunk while the current chunk is being encrypted. CLI `--pipeline` flag (file inputs only; stdin unsupported). Four tests.
 
-- **Benchmark regression detection in CI** ✓ _released_
-  `bench` job in CI runs criterion benchmarks and compares against the stored baseline. PRs that regress any benchmark by more than 10% receive an alert comment.
+### Robustness
 
-### Infrastructure
+- ~~**Atomic output writes**~~  **DONE (v4.1.0)**
+  `AtomicOutput` struct writes to a temp file in the same directory and renames on `commit()` (with `sync_all()` before rename). All seven CLI file-write paths now go through `AtomicOutput` or `CliOutput` (which wraps stdout or `AtomicOutput`). A killed process leaves no partial artifact.
 
-- **OSS-Fuzz continuous fuzzing** ✓ _released_
-  `oss-fuzz/project.yaml`, `Dockerfile`, and `build.sh` provide the integration files. Fuzz targets: `fuzz_header_read` (format parsing), `fuzz_decrypt_bytes` (malformed ciphertext), and `fuzz_pem_parsing` (PEM parsing and key type detection). Nightly CI job runs each target for 120 seconds and uploads crash artifacts on failure.
+- ~~**Input header validation hardening**~~  **DONE (v4.1.0)**
+  `MAX_RECIPIENTS = 256` and `MAX_ORIGINAL_SIZE = 1 TiB` added as module-level constants in `format.rs`. `read_nonce_and_size` rejects `original_size > MAX_ORIGINAL_SIZE` with a clear I/O error. The three inline `MAX_RECIPIENTS = 1000` guards were replaced with the new constant.
 
-- **Dependabot** ✓ _released_
-  `.github/dependabot.yml` enables weekly PRs for Cargo and GitHub Actions dependencies.
+- ~~**`pqfile doctor` diagnostic command**~~  **DONE (v4.1.0)**
+  `pqfile doctor <file>` inspects a PEM key or `.pqf` ciphertext. For keys: reports encrypted/hardware/legacy-p1 status and optionally checks the revocation sidecar. For `.pqf` files: reports version, KEM info, original size, and header validity without decrypting. JSON output supported. Two CLI integration tests.
 
-- **Benchmark suite** ✓ _released_
-  Criterion benchmarks in `pqfile/benches/crypto.rs` cover `encrypt_bytes`, `decrypt_bytes`, `encrypt_stream`, `decrypt_stream`, and `keygen` at 1 KB, 1 MB, and 100 MB.
+- ~~**Structured error codes in JSON output**~~  **DONE (v4.1.0)**
+  All JSON error responses now include `"code": N`. `docs/ERROR_CODES.md` defines a 21-entry stable code table treated as part of the public API. The CLI integration test for JSON error output was updated to assert the `code` field is present.
+
+### GUI
+
+**UX polish**
+
+- ~~**Pre-flight validation**~~  **DONE**
+  All action buttons are disabled with an inline hint when requirements are unmet (Encrypt: "Add at least one recipient key and one file to continue.", Decrypt: "Load a private key and add at least one .pqf file to continue."). Validation is proactive, not post-hoc.
+
+- ~~**Output path preview**~~  **DONE**
+  The Encrypt tab now shows the derived output path (first file + output directory setting + `.pqf`) as a grey subtext line under the action button before it is clicked, along with "…and N more" when multiple files are selected.
+
+- ~~**Batch operation summary**~~  **DONE**
+  After a multi-file encrypt or decrypt run a one-line summary ("3 files encrypted successfully." / "2 succeeded, 1 failed.") appears below the progress bar. Individual per-file results remain visible in the list.
+
+- ~~**Copy-to-clipboard on fingerprints**~~  **DONE**
+  The Keys tab now shows a small `⎘` clipboard button beside each key fingerprint. Clicking it calls `ctx.copy_text()`.
+
+- ~~**Clear-all on file and recipient lists**~~  **DONE**
+  "Clear all" buttons added to the Encrypt recipients header, Encrypt files header, and Decrypt files header (Archive and Shamir already had them). Buttons appear only when the list is non-empty and no job is running.
+
+- ~~**Scroll indicators on long lists**~~  **DONE**
+  The Encrypt recipients list, Encrypt files list, Decrypt files list, Shamir shares list, and Archive files list are now wrapped in a `ScrollArea::vertical().max_height(154.0)`. When content overflows a mesh-gradient fade (transparent → card background colour) is painted at the bottom using `egui::Shape::mesh`. The helper `scrollable_list()` in `widgets.rs` handles this for all lists.
+
+- ~~**Eye icon for passphrase visibility toggle**~~  **DONE**
+  The ●/○ toggle was replaced with `"👁 show"` / `"hide"` text labels, with tooltip text "Show passphrase" / "Hide passphrase". The button is sized to fit.
+
+- ~~**Sub-tab segmented controls**~~  **DONE**
+  Sign (Key Generation / Sign File / Verify Signature), Signcrypt (Sign + Encrypt / Decrypt + Verify), Archive (Create / Extract), and Shamir (Split Key / Reconstruct Key) all now show a pill-style segmented control (`seg_tabs` widget in `widgets.rs`) that switches between their two or three modes. Only the active mode is rendered.
+
+- ~~**Compression tooltip when grayed out**~~  **DONE**
+  The "Compress before encrypting" label now shows a hover tooltip explaining the restriction when multiple recipients are selected: "Compression is disabled for multi-recipient files because content length leaks information about the plaintext across independently keyed slots."
+
+- ~~**Tools tab section grouping**~~  **DONE**
+  Each utility (Repassphrase, Revoke, Rekey) already has its own `section_label` + `card()` scope.
+
+**Features**
+
+- ~~**Key label propagation to recipient slots**~~  **DONE**
+  `apply_load_pub` in the Keys tab now uses `self.keys[i].label` (the human-readable name) instead of `pubkey.pem` as the recipient display name when loading a key into the Encrypt tab.
+
+- ~~**`pqfile doctor` in the Inspect tab**~~  **DONE**
+  The Inspect tab now accepts both `.pqf` and `.pem` files. For `.pqf` files it shows the existing header info plus "Header validity: OK". For `.pem` key files it shows type, variant, passphrase-protected status, hardware-backed status, and usage tips (passphrase upgrade path, revocation hint). The section label was updated from "FILE" to "FILE OR KEY".
+
+- ~~**Drag-and-drop from Keys tab into recipient slots**~~  **DONE**
+  Each key entry row in the Keys panel is wrapped in `ui.dnd_drag_source(id, Arc<KeyDragPayload>, ...)`. The Encrypt recipients card has a `dnd_drop_zone` that accepts a dropped `KeyDragPayload` and adds the key's label + PEM to the recipient list. The Decrypt private key section has a `dnd_drop_zone` that loads the private key path. `KeyDragPayload { label, pub_pem, priv_path }` is defined in `types.rs`.
+
+- ~~**Recent files list**~~  **DONE**
+  The last 5 encrypt source files and decrypt `.pqf` files are tracked per operation and persisted to `AppStorage` via `save_recent`/`load_recent`. When the respective file list is empty a "Recent:" row of click-to-load filename buttons appears in the list card (native only).
+
+- ~~**Passphrase strength meter during key generation**~~  **DONE**
+  The Keygen tab now shows a narrow colour bar (red / amber / green) below the passphrase field when the passphrase is non-empty, scored on length (≥8 / ≥12 / ≥16) and character diversity (lower, upper, digit, symbol). Label: "Weak" / "Fair" / "Strong". Feedback only; no minimum enforced.
+
+- ~~**Inline WASM file size guard**~~  **DONE**
+  `tick_encrypt_wasm` now checks `data.len() > u32::MAX` before starting encryption and sets `OpStatus::Err("File too large for browser (N GiB). Use the desktop app (limit: 4 GiB).")` instead of panicking.
+
+- ~~**Clipboard encrypt / decrypt**~~  **DONE**
+  A "Clipboard Encrypt / Decrypt" section in the Tools tab lets users type or paste short plaintext, choose a recipient public key, click "Encrypt & Copy" to encrypt and write the PEM-wrapped ciphertext to the clipboard. The reverse path pastes the ciphertext, loads a private key, and decrypts back into the text area. Uses a `-----BEGIN PQFILE CIPHERTEXT-----` PEM wrapper via the `pem = "3"` crate dependency.
+
+- ~~**QR code export for public keys and Shamir shares**~~  **DONE**
+  A "📷 Show QR code" button appears on the Keygen tab after successful key generation (native) and "📷 QR share N" buttons appear after a Shamir split. Clicking generates a QR code via `qrcode = "0.14"`, loads it as an egui texture, and shows a modal window with the image and a "Close" button. `PqfileApp::open_qr()` / `show_qr_window()` in `app.rs` handle the generation and modal lifecycle. `qr_modal: Option<QrModal>` is stored on the app state.
+
+**Import**
+
+- ~~**Import from SSH ed25519 keys**~~  **DONE (SSH ed25519 only)**
+  `pqfile import-key --from <ssh-key.pem> --out <dir> [--passphrase] [--force]` parses an unencrypted OpenSSH ed25519 private key, expands the 32-byte seed to 64 bytes via HKDF-SHA256 (info `"pqfile-import-from-ssh-ed25519"`), and calls `keygen_bytes_from_seed` to produce an ML-KEM-768 key pair. The GUI adds an "Import SSH key…" button to the Keygen tab. The new library functions `keygen_bytes_from_seed` and `import_key_from_ssh` are in `pqfile::keygen`. Manual OpenSSH binary format parser in `extract_ssh_ed25519_seed` / `ssh_read_u32` / `ssh_read_string`. 5 new library tests. Import from age and minisign remains future work.
+
+**Automation**
+
+- ~~**Watchfolder / auto-encrypt mode**~~  **DONE**
+  A "Watch Folder (Auto-Encrypt)" section in the Encrypt tab shows a folder path input, a Browse button, a start/stop toggle, and a scrollable activity log. When active, a background thread uses `notify = "7"` (`recommended_watcher`) to receive `Create` events from the OS and encrypts each new non-`.pqf` file for the currently loaded recipients using `encrypt_stream` or `encrypt_stream_multi_anon`. Results (✓ success / ✗ error / ⚠ skipped) stream into `watch_log` and are rendered in a scrollable card. The watcher stops cleanly via an `AtomicBool` stop flag. `WatchHandle { log_rx, stop_flag }` held in app state. Shred-after-encrypt remains an option for a future iteration.
+
+- ~~**Key expiry and renewal workflow**~~  **DONE**
+  An optional `# Expires: YYYY-MM-DD` comment line is prepended to both PEM files at key generation time (new "Expiry" section in the Keygen tab, applies to native and WASM). The Keys tab reads the comment and shows a colour badge: green (>30 days), amber (≤30 days), red (expired). A "↺ Renew" button appears on expired/near-expiry entries and switches to the Keygen tab pre-filled with the key's label. The Inspect tab's doctor output also displays the expiry with days remaining. Utility functions `read_pem_expiry` and `expiry_days_remaining` live in `types.rs` and use exact Gregorian JDN arithmetic.
 
 ---
 
-## v4.0 - Format, hardware, and API stability release ✓ _released_
+## v5.0 - Next major (breaking format changes)
 
-The v4.0 release is a major version increment covering three areas of breaking change: a passphrase key format upgrade, a new anonymous-recipient wire format, and the first stable crates.io publish.
+These items require a new major version because they change the wire format or public API in a backward-incompatible way.
 
-### Breaking format changes
+- **Authenticated header across all format versions**
+  Roll the header-AAD binding (from the v4.x hardening work above) into every new file written, and bump the version byte. Old files remain readable but new files are protected against header tampering without any opt-in flag.
 
-- **Argon2id p=4 — hard break** ✓ _released_
-  Change `ARGON2_P_COST` from 1 to 4. All new passphrase-protected keys (ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, ML-DSA-65) are encrypted with p=4. Attempting to load a p=1 key through any normal path (`decrypt`, `sign`, `signdecrypt`, etc.) returns the new `PqfileError::LegacyKeyFormat` variant with a message directing the user to run `repassphrase --from-legacy`. The `--from-legacy` flag must be passed explicitly; there is no silent fallback. Motivated by OWASP 2023 guidance: p=4 forces each brute-force attempt to occupy 4× the memory bandwidth, hampering parallel GPU attacks.
+- **Per-file entry AEAD in archives (PQFA v2)**
+  The current `.pqfa` format authenticates the entire archive before any file is extracted, which requires buffering the full ciphertext in memory for in-memory extractions. A PQFA v2 layout gives each file entry its own AEAD tag derived from the session key and the entry index, so individual files can be extracted and verified without loading the whole archive.
 
-- **v8 anonymous format — variant-blind recipient entries** ✓ _released_
-  The v7 anonymous format still wrote `kem_variant: u16` per slot in the clear, leaking which KEM family each recipient uses. v8 drops the per-slot variant field entirely. All slots are a uniform 1616-byte entry (`PADDED_CT(1568) | WRAPPED_KEY(48)`). The decryptor uses its own key's CT length to extract the relevant prefix and attempt decapsulation. An observer learns only the recipient count, nothing about key types. 4.0 reads v7 for backward compatibility but drops v7 write entirely — `--anonymous-recipients` always emits v8. There is no flag to request v7 output; anyone needing to send to a 3.x receiver uses the 3.x CLI.
+- **`PqfileError` refinement**
+  Break `DecryptionFailure` into specific variants: `AuthenticationFailure` (tag mismatch), `Truncated` (clean truncation), `UnsupportedVersion` (unknown format version), `RecipientNotFound` (none of the recipient slots matched). This is an API break but gives callers the precision they need for good error messages.
 
-- **Hardware-backed private keys (OS credential store + PKCS#11 stub)** ✓ _released_
-  `pqfile keygen --hardware [--label <name>]` and `pqfile sign-keygen --hardware [--label <name>]` generate key material inside a hardware security module; the seed never enters process memory. Supported backends:
+- **Misuse-resistant nonces (nonce-SIV construction)**
+  Replace random nonces with synthetic nonces derived from a hash of the session key and plaintext chunk (a simplified SIV mode). With random nonces, a nonce collision is possible if the same key encrypts a very large number of chunks; SIV derivation makes collision probability zero regardless of how many files are encrypted under a given session key. This is a format break because the nonce field changes meaning in the chunk header.
 
-  | Platform | Backend |
-  |----------|---------|
-  | Windows | CNG with TPM Key Storage Provider |
-  | macOS | Secure Enclave (SecKeyCreateRandomKey) |
-  | Linux | TPM2 via tpm2-tss or p11-kit |
-  | Any platform | YubiKey or any PKCS#11 token via the `pkcs11` crate |
-
-  Hardware encryption keys are stored as a PEM stub (`ML-KEM-768 HARDWARE KEY REFERENCE`); hardware signing keys as `ML-DSA-65 HARDWARE SIGNING KEY REFERENCE`. Both stubs contain a platform-specific handle/URI rather than raw seed bytes. `decrypt`, `sign`, `signdecrypt`, and `signcrypt` auto-detect hardware stubs and route to the correct backend. Hardware keys cannot be passphrase-protected (the hardware provides that protection).
-
-### New commands
-
-- **`pqfile repassphrase`** ✓ _released_
-  Change or upgrade the passphrase on any key type. `--from-legacy` must be passed explicitly when migrating a p=1 key; omitting it on a p=1 key returns `LegacyKeyFormat` rather than silently retrying. Without `--from-legacy`, reads with p=4 and re-encrypts with p=4 (ordinary passphrase change on an already-upgraded key). Covers all five key types: ML-KEM-512, ML-KEM-768, ML-KEM-1024, hybrid X25519+ML-KEM-768, and ML-DSA-65.
-
-### API stability
-
-- **Async I/O** ✓ _released_
-  `pqfile::async_io::encrypt_stream_async` and `decrypt_stream_async` accept
-  `tokio::io::AsyncRead + AsyncWrite + Unpin`. Enabled via `pqfile = { features = ["async"] }`.
-  The ciphertext format is identical to the synchronous API; files are interoperable
-  between async and sync callers.
-
-- **Formal 1.0 stability promise** ✓ _released_
-  Publish `STABILITY.md` documenting the guaranteed stable surface: `pqfile::encrypt`, `pqfile::decrypt`, `pqfile::sign`, `pqfile::keygen`, `pqfile::keys`, `pqfile::inspect`, and `PqfileError`. `PqfileError` gains a new `LegacyKeyFormat` variant in 4.0 (returned when a p=1 encrypted key is loaded outside of `repassphrase --from-legacy`). Any future change that removes or renames a public item in these modules requires a new major version. Published to crates.io as `pqfile = "4.0.0"`, sharing the same version sequence as the CLI and GUI binaries.
-
-- **Passphrase parameter position standardized** ✓ _shipped in v3.3.x_
-  The `passphrase: Option<&str>` parameter has been moved to the last position across all signing and rekeying functions (`sign_bytes`, `sign_file`, `rekey_stream`, `add_recipient_stream`, `signcrypt`, `signcrypt_bytes`). This is the primary breaking API change from the v3.x surface audit.
-
-- **Remove file-path wrapper functions** ✓ _shipped in v3.3.x_
-  The `encrypt::encrypt(pubkey_path, input_path, output_path)` and `decrypt::decrypt(privkey_path, input_path, output_path, passphrase)` convenience wrappers have been removed. Callers open files themselves and pass `Read`/`Write` impls to the streaming API.
-
----
-
-## Deferred / Under Consideration
-
-These features are understood well enough to implement but are not tied to a specific release milestone. They will be revisited once the v4.0 stability baseline is established.
-
-### C FFI bindings
-
-Expose a `pqfile.h` C header via `cbindgen` so the crypto core can be used from C, Python (via `ctypes` / `cffi`), Go (`cgo`), or any language with C interop. Deferred pending a concrete consumer driving the stable ABI shape.
-
-### Python bindings (PyO3)
-
-A thin `pqfile-py` crate wrapping the core with `#[pymodule]`, published to PyPI. Deferred until the C FFI vs direct PyO3 approach is decided.
-
-### npm / WASM package
-
-Package the WASM build as an npm module so browser and Node.js applications can call `encrypt`, `decrypt`, and `keygen` directly as JavaScript functions without loading the full egui app. Deferred until there is a clear downstream consumer defining the API shape.
-
-### Right-click / context-menu OS integration
-
-Add "Encrypt with pqfile" and "Decrypt with pqfile" to the OS file manager without needing a terminal. On Windows a lightweight shell extension or registry entry pointing at the CLI covers Explorer. On macOS a Quick Action in Automator. On Linux a Nautilus script and KDE Dolphin service menu entry. All crypto stays in the existing CLI process — purely a discoverability layer. Deferred as it adds no cryptographic value and varies significantly per platform.
-
-### Browser-native encrypted file vault (OPFS)
-
-Extend the web GUI with a persistent encrypted file vault backed by the Web Origin Private File System API. Files are stored as `.pqf` blobs in OPFS and browsable through a file-manager panel. The session key lives in memory only while the vault is unlocked; an idle timeout or tab close locks it automatically. Deferred pending OPFS API stabilization across browsers and a clear UX model for key management in that context.
+- **Magic-free output mode**
+  Currently all `.pqf` files begin with the four-byte magic `PQFL`, which immediately identifies them as pqfile output to any observer. A `--stealth` flag omits the magic bytes and version header, producing output that is indistinguishable from random bytes. The decryptor uses `--stealth` as a hint to skip magic validation and attempt raw decryption. Useful when revealing that a file is encrypted at all is itself sensitive.
 
 ---
 
 ## New Directions
 
-These are ideas not yet implemented in any pqfile release. Many are uncommon or absent from other file encryption tools.
+These are ideas not yet implemented. All are focused on cryptographic depth rather than ecosystem expansion.
 
-### Time-locked encryption
+### Sealed sender
 
-Integrate with the drand League of Entropy randomness beacon to support "decrypt after time T" semantics. The file is encrypted using a key derived from a future beacon round output. Before that round fires, the key material does not exist anywhere. The decryptor polls the beacon automatically and decrypts once the round is published, with no trusted server holding a pre-generated key. Useful for sealed bids, embargoed document releases, future-dated disclosures, and dead-man switch archives.
+Encrypt without revealing the sender's identity in the ciphertext. The sender derives a one-time signing key pair via HKDF from their long-term signing key and the KEM ciphertext, signs the payload with the ephemeral key, and discards it. The recipient can verify authenticity using the sender's long-term verifying key, but no third party observing the ciphertext can link it to the sender. Useful when the existence of a communication relationship is itself sensitive.
 
 ### Deniable encryption
 
-Produce a `.pqf` file that yields two valid, indistinguishable plaintexts: a real one under the primary key and a decoy under a second duress key. Both decrypt without error and leave no detectable marker distinguishing which is real. VeraCrypt offers this for full-disk volumes but no post-quantum file encryptor provides it. The primary design challenge is accommodating two independently valid ML-KEM shared secrets that each map to a distinct AEAD layer, with an outer header that reveals nothing about which layer is authoritative.
+Produce a `.pqf` file that yields two valid, indistinguishable plaintexts: a real one under the primary key and a decoy under a duress key. Both decrypt without error and leave no detectable marker distinguishing which is real. VeraCrypt offers this for full-disk volumes but no post-quantum file encryptor provides it. The design challenge is two independently valid ML-KEM shared secrets each mapping to a distinct AEAD layer, with a header that reveals nothing about which layer is authoritative.
 
-### Attribute-based access control policies
+### Time-locked encryption
 
-Go beyond M-of-N threshold decryption to support Boolean access policies: for example, "decrypt if holder of key A AND key B, OR key C." Each policy node is an encrypted share of the session key. Evaluation is a small tree walk using Shamir recombination at AND nodes and branch selection at OR nodes. Useful for organizational workflows where decryption requires both a department head key and a security officer key, with a fallback escrow key as an alternative.
+Integrate with the drand League of Entropy randomness beacon to support "decrypt after time T" semantics. The file is encrypted using a key derived from a future beacon round output. Before that round fires, the key material does not exist anywhere. The decryptor polls the beacon and decrypts once the round is published. Useful for sealed bids, embargoed releases, and dead-man switch archives.
 
 ### Forward-secret file exchange protocol
 
-A stateful protocol built on pqfile that provides forward secrecy for an ongoing file exchange session between two parties. Each exchange ratchets a shared root secret forward using a new ML-KEM encapsulation, so compromise of the current session key does not expose previously exchanged files. Similar in spirit to the Signal Double Ratchet but adapted for file payloads rather than messages. State is stored in a small JSON ratchet file alongside the key pair.
+A stateful protocol built on pqfile that provides forward secrecy for an ongoing file exchange session between two parties. Each exchange ratchets a shared root secret forward using a new ML-KEM encapsulation, so compromise of the current session key does not expose previously exchanged files. State lives in a small JSON ratchet file alongside the key pair.
 
-### Zero-knowledge proof of correct encryption
+### Attribute-based access control policies
 
-Allow the encryptor to produce a non-interactive proof that a specific plaintext was encrypted for a specific public key, without revealing the plaintext. A verifier can check the proof against the ciphertext without decrypting. Useful for compliance workflows where an auditor must confirm a regulated document was encrypted for the authorized recipient before leaving the sender's system. The proof is a Sigma protocol (commit-challenge-response) over the KEM ciphertext and a plaintext hash commitment.
-
-### Key ceremony tooling
-
-An interactive guided ceremony mode for high-assurance key generation. Multiple participants each contribute entropy (typed input or hardware-generated) combined via SHA3-256 before seeding key generation, so no single participant can bias the result. The ceremony log records each participant's entropy hash, the combined seed hash, and the resulting public key fingerprint. A quorum can verify the log offline. Targeted at organizations generating long-lived escrow or signing keys in an audited environment, analogous to root CA key ceremonies but built into the tool with no external dependencies.
+Go beyond M-of-N threshold decryption to support Boolean access policies: "decrypt if holder of key A AND key B, OR key C." Each policy node is an encrypted share of the session key. Evaluation is a tree walk using Shamir recombination at AND nodes and branch selection at OR nodes.
 
 ### Encrypted audit log
 
-An append-only log of encryption and decryption events, stored as a chain of signed and encrypted records. Each record contains the timestamp, command, file fingerprint, and key fingerprint, signed with the operator's ML-DSA signing key and encrypted for an auditor public key. The chaining structure makes silent deletion detectable. Useful for compliance-regulated environments (HIPAA, PCI-DSS) that require evidence of who encrypted or decrypted what and when.
+An append-only log of encryption and decryption events stored as a chain of signed and encrypted records. Each record contains the timestamp, command, file fingerprint, and key fingerprint, signed with the operator's ML-DSA key and encrypted for an auditor public key. The chaining structure makes silent deletion detectable.
+
+### Key ceremony tooling
+
+An interactive guided ceremony mode for high-assurance key generation. Multiple participants each contribute entropy combined via SHA3-256 before seeding key generation so no single participant can bias the result. The ceremony log records each participant's entropy hash, the combined seed hash, and the resulting public key fingerprint.
+
+### Signable public key certificates
+
+A lightweight certificate format where a CA signing key (ML-DSA-65) signs a public key (ML-KEM) along with metadata: a label, a validity window, and an allowed-use bitmask (encrypt-only, sign-only, or both). `pqfile issue-cert` creates the certificate; `pqfile verify-cert` checks the chain. `pqfile encrypt` optionally accepts a certificate instead of a raw public key and validates expiry and allowed-use before encapsulating. This is a minimal PKI layer built entirely from the existing primitives with no external dependencies.
+
+### Split ciphertext storage
+
+A mode where the raw ciphertext bytes are split across N output files using a secret sharing scheme (or simpler XOR splitting for K=N), requiring any K files to reconstruct. Different from key splitting: the key stays intact and the payload itself is distributed. Useful for backup scenarios where the ciphertext is spread across cloud providers that are mutually untrusted -- no single provider has a usable ciphertext.
+
+### Timing consistency test harness
+
+~~Implemented in v4.1.0 / v4.1.1.~~ `pqfile/examples/ct_shamir.rs` is a standalone `dudect-bencher` binary covering the Shamir GF(256) reconstruction path, including both `gf_mul` and the `gf_inv` 7-squaring chain added in v4.1.1. `cargo test --features timing-tests` runs a fast sanity check that measures the mean timing for two secret classes and asserts the relative difference stays under 10%. Full rigorous `dudect` analysis requires a quiet machine (`cargo run --example ct_shamir -p pqfile`). Extension to the decryption error path and passphrase path remains future work.
+
+### Proxy re-encryption
+
+Generate a re-encryption key `rk(A -> B)` from private key A and public key B. A proxy holding only `rk` can transform a ciphertext encrypted for A into one encrypted for B, without ever seeing the plaintext or either private key. Useful for delegated access: a file server can re-encrypt stored files on behalf of a new recipient without the sender needing to re-encrypt manually. The construction uses a KEM-based proxy scheme: `rk = HKDF(dkA, ekB)` combined with a blinding factor so the proxy cannot decapsulate either the original or the transformed ciphertext on its own.
+
+### Shell integration
+
+Right-click → "Encrypt with pqfile" on Windows (Explorer context menu via registry entry pointing to the CLI binary), macOS (Quick Action via an Automator `.workflow` bundle or `LaunchServices` registration), and Linux (`.desktop` file with a broad `MimeType=*` registration). The integration invokes the CLI with the last-used recipient key and writes the output alongside the original. On Windows this requires a small registry shim under `HKCU\Software\Classes\*\shell\`; no COM server is needed if the CLI handles its own argument quoting. High discoverability impact: users encounter the feature in their normal file workflow rather than needing to open the GUI.
+
+### Web extension / browser integration
+
+A browser extension (Chrome / Firefox) that embeds the existing WASM core and adds an "Encrypt" action to file-attachment dialogs and an "Encrypt text" context menu item for any selected text on a web page. Encryption runs entirely in the browser process via the WASM module - no data is sent to a server. The extension's key store persists to `browser.storage.local`, itself encrypted under a passphrase at rest. This is differentiated from existing tools: no other post-quantum file encryptor offers browser-native encryption that operates on arbitrary page content without a round-trip to a backend.
 
 ---
 
-## Security considerations that will not change
+## Security invariants
 
 The following properties are invariants, not roadmap items. Any proposal that weakens them requires explicit justification and a major version bump:
 

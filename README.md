@@ -7,6 +7,8 @@ Digital signatures use ML-DSA-65 (NIST FIPS 204).
 
 **[docs/QUICKSTART.md](docs/QUICKSTART.md)**: build, install, common CLI commands, GUI overview, deploying.
 
+**Service status**: [status.nappi.work/status/pqfile](https://status.nappi.work/status/pqfile)
+
 ---
 
 ## Background
@@ -31,7 +33,7 @@ The optional **hybrid mode** (`--hybrid`) adds X25519 Diffie-Hellman to the key 
 | Symmetric cipher                 | ChaCha20-Poly1305, RFC 8439                             |
 | Session key wrapping (v4)        | AES-256-GCM                                             |
 | Randomness                       | OS CSPRNG via `getrandom`                               |
-| Key derivation (passphrase)      | Argon2id (m=64 MiB, t=3, p=1)                          |
+| Key derivation (passphrase)      | Argon2id (m=64 MiB, t=3, p=4)                          |
 | Key wrapping (passphrase)        | AES-256-GCM                                             |
 | Digital signatures               | ML-DSA-65, NIST FIPS 204                                |
 | Key fingerprints                 | SHA3-256 (first 8 bytes, colon-separated hex)           |
@@ -52,13 +54,15 @@ PQ-File-Encryption/
 │   ├── src/
 │   │   ├── lib.rs          Public library re-exports
 │   │   ├── keygen.rs       Key pair generation and PEM serialization
-│   │   ├── encrypt.rs      Hybrid encryption pipeline (v2 through v7 formats)
-│   │   ├── decrypt.rs      Hybrid decryption pipeline (v2 through v7 auto-detect)
+│   │   ├── encrypt.rs      Hybrid encryption pipeline (v2 through v9 formats)
+│   │   ├── decrypt.rs      Hybrid decryption pipeline (v2 through v9 auto-detect)
 │   │   ├── format.rs       .pqf binary file format definitions
 │   │   ├── passphrase.rs   Argon2id wrapping for passphrase-protected keys
 │   │   ├── sign.rs         ML-DSA-65 signing and verification
 │   │   ├── signcrypt.rs    Combined sign-then-encrypt and signdecrypt
 │   │   ├── reader.rs       PqfReader<R: Read> streaming decryptor type
+│   │   ├── writer.rs       PqfWriter<W: Write> streaming encryptor type
+│   │   ├── async_io.rs     Async encrypt/decrypt/PqfWriter (tokio, feature "async")
 │   │   ├── archive.rs      Encrypted multi-file archive (PQFA format)
 │   │   ├── rekey.rs        Re-encryption without payload decryption
 │   │   ├── revoke.rs       Key revocation sidecar (.revoked) support
@@ -138,16 +142,26 @@ pqfile encrypt -r pubkey.pem --compress --compress-level 3 secret.txt
 pqfile encrypt -r pubkey.pem --parallel large_file.bin
 
 # Custom chunk size in bytes (single recipient, produces v5 format)
+# Omit --chunk-size to auto-tune: 16 KiB for small files, 64 KiB default, 256 KiB for large files
 pqfile encrypt -r pubkey.pem --chunk-size 131072 large_file.bin
 
-# Hide recipient count and key types (multiple recipients required, produces v7 format)
+# Hide key types (multiple recipients, produces v8 format)
 pqfile encrypt -r alice/pubkey.pem -r bob/pubkey.pem --anonymous-recipients secret.txt
+
+# Hide key types AND recipient count (pads slots to next power of two, produces v9 format)
+pqfile encrypt -r alice/pubkey.pem -r bob/pubkey.pem --pad-recipients secret.txt
+
+# Overlap I/O and AEAD for large files on spinning disk or network storage
+pqfile encrypt -r pubkey.pem --pipeline large_file.bin
+
+# Memory-mapped zero-copy encrypt (native only, best for files >= 100 MiB)
+pqfile encrypt -r pubkey.pem --mmap huge_file.bin
 
 # Read from stdin, write to stdout
 cat secret.txt | pqfile encrypt -r pubkey.pem - > secret.txt.pqf
 ```
 
-Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--anonymous-recipients` upgrades to v7 format, padding all ciphertexts to a uniform size and randomizing their order. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3. `--parallel` uses rayon for concurrent chunk processing and requires a single recipient.
+Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--anonymous-recipients` upgrades to v8 format, dropping the per-slot KEM variant field so key types are hidden. `--pad-recipients` upgrades to v9 format, which additionally pads the slot count to the next power of two with random dummy entries. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3. `--parallel` uses rayon for concurrent chunk processing and requires a single recipient.
 
 ### Decryption
 
@@ -162,7 +176,7 @@ pqfile decrypt -k privkey.pem secret.txt.pqf -o recovered.txt
 cat secret.txt.pqf | pqfile decrypt -k privkey.pem - -o -
 ```
 
-If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v7 files (all single-recipient variants) and v4/v7 (multi-recipient).
+If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v9 files (all single-recipient variants) and v4/v7/v8/v9 (multi-recipient).
 
 ### Rekey
 
@@ -277,6 +291,19 @@ pqfile reconstruct-key shares/share_1.pem shares/share_3.pem --out ./recovered/
 
 Uses GF(256) Shamir secret sharing over the 64-byte private key seed. Any `threshold` shares reconstruct the key; fewer than `threshold` shares reveal nothing about the seed. Useful for key escrow, disaster recovery, or organizational workflows requiring multi-party approval to access protected data.
 
+### Diagnostics
+
+```bash
+# Inspect a private key file (passphrase status, hardware, legacy p=1, revocation)
+pqfile doctor privkey.pem
+
+# Inspect a .pqf file (version, KEM info, header sanity, no decryption needed)
+pqfile doctor secret.txt.pqf
+
+# JSON output for scripting
+pqfile --json doctor privkey.pem
+```
+
 ### Shell completions
 
 ```bash
@@ -301,7 +328,7 @@ pqfile --json sign -k sign_privkey.pem file.txt
 pqfile --json verify -k sign_pubkey.pem -s file.txt.sig file.txt
 ```
 
-Errors go to stderr as `{"status":"error","message":"..."}`. Exit code is always 1 on error.
+Errors go to stderr as `{"status":"error","code":N,"message":"..."}`. The numeric `code` field maps to `PqfileError` variants; see `docs/ERROR_CODES.md` for the stable code table. Exit code is always 1 on error.
 
 ---
 
@@ -311,7 +338,7 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 
 - **Keygen tab**: generates key pairs (ML-KEM-768, ML-KEM-1024, or Hybrid), with optional passphrase protection
 - **Encrypt tab**: multi-recipient list, multi-file batch encrypt with per-file status and progress bar
-- **Decrypt tab**: loads any v2 through v7 `.pqf` file; shows passphrase field only when needed
+- **Decrypt tab**: loads any v2 through v9 `.pqf` file; shows passphrase field only when needed
 - **Inspect tab**: displays header metadata for v2/v3/v4 `.pqf` files without decrypting
 - **Keys tab**: persistent key-pair registry with fingerprints and quick-load buttons
 - **Settings tab**: theme, auto-clear, confirm-overwrite preferences
@@ -322,7 +349,7 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 
 ## The .pqf file format
 
-There are four format versions. The version byte at offset 4 selects the layout.
+There are eight format versions (v2 through v9). The version byte at offset 4 selects the layout.
 
 ### v2: single-recipient, whole-file AEAD
 
@@ -417,6 +444,46 @@ Offset   Length    Field
 
 The decryptor reads 1568 bytes per entry and truncates to the actual ciphertext length for the declared variant before decapsulation. Entries are shuffled before writing so an observer cannot determine recipient count, order, or key types in use.
 
+### v8: variant-blind anonymous multi-recipient
+
+Like v7 but the per-slot KEM variant field is removed entirely. All entries are a uniform 1616 bytes (1568 KEM ciphertext + 48 wrapped session key). An observer cannot infer the key type from the ciphertext length.
+
+```
+Offset   Length    Field
+------   ------    -----
+0        4         Magic: "PQFL"
+4        1         Version: 0x08
+5        2         Recipient count N (u16 little-endian)
+--- Per recipient (repeated N times) ----------------------------
+         1568      KEM ciphertext padded to 1568 bytes (no variant field)
+         48        AES-256-GCM wrapped session key
+--- Shared tail -------------------------------------------------
+         12        Base nonce
+         8         Original plaintext size (u64 little-endian)
+--- Payload -----------------------------------------------------
+         ...       Chunked STREAM identical to v4
+```
+
+### v9: padded anonymous multi-recipient
+
+Like v8 but the slot count is rounded up to the next power of two (1, 2, 4, 8, ...) by appending random dummy entries. The decryptor tries each slot and skips failures silently. An observer learns only that there are a power-of-two number of slots.
+
+```
+Offset   Length    Field
+------   ------    -----
+0        4         Magic: "PQFL"
+4        1         Version: 0x09
+5        2         Padded slot count N (u16 little-endian, next power of two)
+--- Per slot (repeated N times; some are random dummy entries) ---
+         1568      KEM ciphertext or random bytes
+         48        Wrapped session key or random bytes
+--- Shared tail -------------------------------------------------
+         12        Base nonce
+         8         Original plaintext size (u64 little-endian)
+--- Payload -----------------------------------------------------
+         ...       Chunked STREAM identical to v8
+```
+
 ### KEM variant field
 
 | Value    | Algorithm               | CT bytes | EK bytes |
@@ -470,9 +537,9 @@ The decryptor reads 1568 bytes per entry and truncates to the actual ciphertext 
 -----BEGIN ML-DSA-65 SIGNATURE-----      (3309 bytes raw)
 ```
 
-Signing keys are not passphrase-protected. Protect `sign_privkey.pem` with filesystem permissions or store it on encrypted storage.
+Signing keys can be passphrase-protected: `pqfile sign-keygen --passphrase`. Use `pqfile sign -k sign_privkey.pem` and the passphrase is prompted interactively. Without passphrase protection, protect `sign_privkey.pem` with filesystem permissions or store it on encrypted storage.
 
-Passphrase-protected private keys derive their AES-256-GCM wrapping key via Argon2id (m=64 MiB, t=3, p=1, 16-byte random salt). The private key stores only the seed (64 bytes for ML-KEM, 96 bytes for hybrid); the full decapsulation key is re-derived on load.
+Passphrase-protected private keys derive their AES-256-GCM wrapping key via Argon2id (m=64 MiB, t=3, p=4, 16-byte random salt). The private key stores only the seed (64 bytes for ML-KEM, 96 bytes for hybrid); the full decapsulation key is re-derived on load. Keys encrypted with older p=1 parameters (pre-4.0) can be migrated with `pqfile repassphrase --from-legacy`.
 
 ---
 
@@ -484,7 +551,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 |------------------------|---------------------------------------------------------------------------|
 | `Io`                   | File system or I/O failure                                                |
 | `InvalidMagic`         | File does not start with "PQFL"                                           |
-| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x07)                         |
+| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x09)                         |
 | `UnsupportedKem`       | KEM variant field is not a recognised value                               |
 | `EncryptionFailure`    | AEAD encryption or nonce generation failed                                |
 | `DecryptionFailure`    | Authentication tag mismatch (file tampered or wrong key)                  |
@@ -497,6 +564,10 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 | `InvalidSignature`     | Signature bytes are malformed                                             |
 | `SignatureVerificationFailed` | ML-DSA-65 signature does not match the file                        |
 | `NoMatchingRecipient`  | v4 file: no recipient entry matched the provided private key              |
+| `KemVariantMismatch`   | Private key KEM variant does not match the variant in the file header     |
+| `LegacyKeyFormat`      | Key was encrypted with Argon2id p=1 (pre-4.0); run `repassphrase --from-legacy` |
+| `ShareVerificationFailed` | Reconstructed Shamir key fingerprint does not match the share fingerprint |
+| `Truncated`            | Stream ended without a final authenticated chunk; file was truncated      |
 
 ---
 
@@ -506,7 +577,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 cargo test --workspace
 ```
 
-216 tests across all crates (149 unit + 45 integration + 22 GUI). Run benchmarks with:
+365 tests across all crates (236 unit + 58 integration + 32 GUI + 19 doc-tests). Run benchmarks with:
 
 ```
 cargo bench -p pqfile
@@ -541,13 +612,15 @@ Key integration tests in `pqfile/tests/roundtrip.rs`:
 | chacha20poly1305 | 0.10    | ChaCha20-Poly1305 authenticated encryption                    |
 | aes-gcm          | 0.10    | AES-256-GCM (passphrase key wrapping, v4 session key wrapping)|
 | x25519-dalek     | 2       | X25519 Diffie-Hellman (hybrid mode)                           |
-| hkdf             | 0.12    | HKDF-SHA256 key derivation (hybrid mode)                      |
-| sha2             | 0.10    | SHA-256 (HKDF input)                                          |
+| hkdf             | 0.13    | HKDF-SHA256 key derivation (hybrid mode)                      |
+| sha2             | 0.11    | SHA-256 (HKDF input)                                          |
 | getrandom        | 0.4     | OS CSPRNG for nonces and key generation                       |
 | zeroize          | 1       | Overwrite secret bytes on drop                                |
 | argon2           | 0.5     | Argon2id KDF for passphrase-protected keys                    |
 | pem              | 3       | PEM encoding/decoding for key files                           |
-| sha3             | 0.12    | SHA3-256 (FIPS 202) for key fingerprints                      |
+| sha3             | 0.12    | SHA3-256 (FIPS 202) for key fingerprints and key commitment   |
+| rayon            | 1       | Parallel chunk processing (`--parallel`)                      |
+| memmap2          | 0.9     | Memory-mapped I/O for zero-copy encrypt (`--mmap`, native only)|
 | clap             | 4       | CLI argument parsing                                          |
 | clap_complete    | 4       | Shell completion script generation                            |
 | thiserror        | 2       | Custom error type derivation                                  |

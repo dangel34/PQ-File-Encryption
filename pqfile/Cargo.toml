@@ -31,6 +31,8 @@ rayon = "1"
 zstd = "0.13.3"
 # Core types for hardware-backed key credential storage.
 keyring-core = "1"
+# Memory-mapped I/O for zero-copy file encryption.
+memmap2 = "0.9"
 
 # Platform-specific credential store backends (no sqlite/tantivy bloat).
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -45,6 +47,10 @@ linux-keyutils-keyring-store = "1"
 [features]
 # Enable async encrypt/decrypt API backed by Tokio.
 async = ["tokio"]
+# Enable statistical constant-time tests (requires a quiet machine; not for CI).
+# The dudect-bencher crate is always compiled as a dev-dep; this flag just gates
+# whether the expensive timing tests are actually run.
+timing-tests = []
 
 [dependencies.tokio]
 version = "1"
@@ -56,6 +62,8 @@ tempfile = { workspace = true }
 serde_json = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 tokio = { version = "1", features = ["rt", "macros"] }
+proptest = "1"
+dudect-bencher = "0.7"
 
 [[bench]]
 name = "crypto"

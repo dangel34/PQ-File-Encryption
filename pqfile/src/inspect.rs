@@ -7,7 +7,7 @@ use std::io::Read;
 use crate::error::PqfileError;
 use crate::format::{
     PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, NONCE_LEN, VERSION, VERSION_V3, VERSION_V4,
-    VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8,
+    VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8, VERSION_V9,
 };
 
 /// KEM variant information for a single recipient slot.
@@ -20,7 +20,7 @@ pub struct RecipientInfo {
 
 /// Parsed header information from a `.pqf` file.
 ///
-/// Returned by [`inspect_stream`]. The enum is `#[non_exhaustive]` — new format
+/// Returned by [`inspect_stream`]. The enum is `#[non_exhaustive]` - new format
 /// versions may add variants in future releases.
 ///
 /// The named fields of the existing variants (`Single`, `Multi`, `AnonMulti`,
@@ -68,10 +68,13 @@ pub enum PqfHeaderInfo {
         /// Uncompressed plaintext size in bytes.
         original_size: u64,
     },
-    /// Variant-blind anonymous multi-recipient format (v8): all slots are a uniform
+    /// Variant-blind anonymous multi-recipient format (v8/v9): all slots are a uniform
     /// 1616-byte entry with no KEM variant field. Only the slot count is observable.
+    /// v9 additionally pads the count to the next power of two with random dummy slots.
     AnonMultiV8 {
-        /// Number of recipient slots.
+        /// Format version byte: `0x08` for standard or `0x09` for padded.
+        version: u8,
+        /// Number of recipient slots (includes dummy slots in v9).
         slot_count: usize,
         /// Base nonce for the STREAM payload.
         nonce: [u8; NONCE_LEN],
@@ -131,9 +134,11 @@ pub fn inspect_stream<R: Read>(reader: &mut R) -> Result<PqfHeaderInfo, PqfileEr
                 original_size: h.original_size,
             })
         }
-        VERSION_V8 => {
+        // v9 uses the same wire format as v8; only the version byte differs.
+        VERSION_V8 | VERSION_V9 => {
             let h = PqfHeaderV8::read_body(reader)?;
             Ok(PqfHeaderInfo::AnonMultiV8 {
+                version,
                 slot_count: h.recipients.len(),
                 nonce: h.nonce,
                 original_size: h.original_size,

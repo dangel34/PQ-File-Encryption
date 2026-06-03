@@ -58,22 +58,21 @@ pub(crate) fn tab_heading_help(ui: &mut egui::Ui, text: &str, dark: bool) -> boo
     let mut clicked = false;
     ui.horizontal(|ui| {
         ui.label(RichText::new(text).size(18.0).strong().color(c_text(dark)));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new("Learn more...")
-                            .size(12.0)
-                            .color(c_subtext(dark)),
-                    )
-                    .fill(c_surface0(dark))
-                    .min_size(egui::vec2(0.0, 22.0)),
+        ui.add_space(8.0);
+        if ui
+            .add(
+                egui::Button::new(
+                    RichText::new("Learn more...")
+                        .size(12.0)
+                        .color(c_subtext(dark)),
                 )
-                .clicked()
-            {
-                clicked = true;
-            }
-        });
+                .fill(c_surface0(dark))
+                .min_size(egui::vec2(0.0, 22.0)),
+            )
+            .clicked()
+        {
+            clicked = true;
+        }
     });
     ui.add_space(4.0);
     clicked
@@ -470,7 +469,7 @@ fn walk_dir_recursive(root: &std::path::Path, dir: &std::path::Path, out: &mut V
     }
 }
 
-/// A single-row passphrase input with a show/hide toggle.
+/// A single-row passphrase input with a show/hide toggle (eye icon).
 pub(crate) fn passphrase_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -484,14 +483,24 @@ pub(crate) fn passphrase_row(
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.label(RichText::new(label).size(13.0).color(c_subtext(dark)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let eye = if *visible { "●" } else { "○" };
+                // Eye icon: "👁" = currently hidden (click to show); "🙈" would be silly,
+                // so we use text labels that are universally readable.
+                let toggle_label = if *visible { "hide" } else { "👁 show" };
                 if ui
                     .add(
-                        egui::Button::new(RichText::new(eye).size(12.0).color(c_subtext(dark)))
-                            .fill(c_surface0(dark))
-                            .min_size(egui::vec2(22.0, 22.0)),
+                        egui::Button::new(
+                            RichText::new(toggle_label)
+                                .size(11.0)
+                                .color(c_subtext(dark)),
+                        )
+                        .fill(c_surface0(dark))
+                        .min_size(egui::vec2(42.0, 22.0)),
                     )
-                    .on_hover_text(if *visible { "Hide" } else { "Show" })
+                    .on_hover_text(if *visible {
+                        "Hide passphrase"
+                    } else {
+                        "Show passphrase"
+                    })
                     .clicked()
                 {
                     *visible = !*visible;
@@ -606,6 +615,111 @@ fn try_download_bytes(filename: &str, data: &[u8]) -> Result<(), JsValue> {
     // Always revoke the object URL, even if DOM operations failed.
     let _ = web_sys::Url::revoke_object_url(&url);
     result
+}
+
+/// Wraps `content` in a `ScrollArea` capped at `max_h` pixels.
+/// When the content overflows, paints a fade gradient at the bottom of the
+/// scroll area to signal that more items exist below.
+pub(crate) fn scrollable_list<R>(
+    ui: &mut egui::Ui,
+    max_h: f32,
+    card_fill: egui::Color32,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let output = egui::ScrollArea::vertical()
+        .max_height(max_h)
+        .auto_shrink([false, true])
+        .show(ui, content);
+
+    let overflows = output.content_size.y > output.inner_rect.height() + 1.0;
+    if overflows {
+        let r = output.inner_rect;
+        let grad_h = 22.0_f32;
+        // Paint a mesh gradient: transparent → card_fill from (bottom-grad_h) → bottom.
+        let mut mesh = egui::epaint::Mesh::default();
+        let transp =
+            egui::Color32::from_rgba_premultiplied(card_fill.r(), card_fill.g(), card_fill.b(), 0);
+        let opaque = egui::Color32::from_rgba_premultiplied(
+            card_fill.r(),
+            card_fill.g(),
+            card_fill.b(),
+            220,
+        );
+        let y0 = r.bottom() - grad_h;
+        let y1 = r.bottom();
+        let v = mesh.vertices.len() as u32;
+        mesh.colored_vertex(egui::pos2(r.left(), y0), transp);
+        mesh.colored_vertex(egui::pos2(r.right(), y0), transp);
+        mesh.colored_vertex(egui::pos2(r.right(), y1), opaque);
+        mesh.colored_vertex(egui::pos2(r.left(), y1), opaque);
+        mesh.indices
+            .extend_from_slice(&[v, v + 1, v + 2, v, v + 2, v + 3]);
+        ui.painter().add(egui::Shape::mesh(mesh));
+    }
+
+    output.inner
+}
+
+/// Pill-style segmented control. `options` is a slice of `(label, value)` pairs.
+/// Sets `*current` to the clicked option's value.
+pub(crate) fn seg_tabs<T: PartialEq + Clone>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    options: &[(&str, T)],
+    dark: bool,
+) {
+    use crate::colors::{c_accent, c_surface0, c_surface1};
+    egui::Frame::NONE
+        .fill(c_surface0(dark))
+        .corner_radius(egui::CornerRadius::same(7))
+        .inner_margin(egui::Margin::same(2))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (label, value) in options {
+                    let active = current == value;
+                    let text_col = if active {
+                        c_accent(dark)
+                    } else {
+                        c_subtext(dark)
+                    };
+                    let fill = if active {
+                        c_surface1(dark)
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(*label).size(12.5).color(text_col))
+                                .fill(fill)
+                                .stroke(egui::Stroke::NONE)
+                                .corner_radius(egui::CornerRadius::same(5)),
+                        )
+                        .clicked()
+                    {
+                        *current = value.clone();
+                    }
+                }
+            });
+        });
+    ui.add_space(10.0);
+}
+
+/// Small clipboard-copy button. Shows "⎘" and copies `text` on click.
+/// Returns `true` if clicked this frame.
+pub(crate) fn copy_text_btn(ui: &mut egui::Ui, text: &str, dark: bool) -> bool {
+    ui.add(
+        egui::Button::new(RichText::new("⎘").size(11.0).color(c_subtext(dark)))
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::NONE)
+            .min_size(egui::vec2(20.0, 20.0)),
+    )
+    .on_hover_text("Copy to clipboard")
+    .clicked()
+    .then(|| {
+        ui.ctx().copy_text(text.to_owned());
+    })
+    .is_some()
 }
 
 pub(crate) fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {

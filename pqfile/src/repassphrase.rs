@@ -16,10 +16,10 @@ pub struct RepassphraseResult {
 ///
 /// # Parameters
 ///
-/// - `privkey_pem` — The current (encrypted) private key PEM.
-/// - `old_passphrase` — The passphrase currently protecting the key.
-/// - `new_passphrase` — The passphrase to apply after re-encryption.
-/// - `from_legacy` — When `true`, reads the key using legacy Argon2id p=1
+/// - `privkey_pem` - The current (encrypted) private key PEM.
+/// - `old_passphrase` - The passphrase currently protecting the key.
+/// - `new_passphrase` - The passphrase to apply after re-encryption.
+/// - `from_legacy` - When `true`, reads the key using legacy Argon2id p=1
 ///   parameters (pqfile < 4.0). **Must** be set when migrating an old key;
 ///   omitting it on a p=1 key returns `PqfileError::LegacyKeyFormat`.
 ///
@@ -31,9 +31,9 @@ pub struct RepassphraseResult {
 ///
 /// # Errors
 ///
-/// - `LegacyKeyFormat` — key is p=1 and `from_legacy` was not set.
-/// - `WrongPassphrase` — `old_passphrase` is incorrect.
-/// - `InvalidPem` — not an encrypted private key.
+/// - `LegacyKeyFormat` - key is p=1 and `from_legacy` was not set.
+/// - `WrongPassphrase` - `old_passphrase` is incorrect.
+/// - `InvalidPem` - not an encrypted private key.
 #[must_use = "repassphrase result must be saved or the re-encrypted key is lost"]
 pub fn repassphrase(
     privkey_pem: &str,

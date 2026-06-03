@@ -108,6 +108,58 @@ pub(crate) struct RecipientEntry {
     pub(crate) variant_name: String,
 }
 
+/// Extracts the `# Expires: YYYY-MM-DD` comment from a PEM string, if present.
+/// Lines before the first `-----BEGIN` line are searched.
+pub(crate) fn read_pem_expiry(pem_str: &str) -> Option<String> {
+    for line in pem_str.lines() {
+        if let Some(date) = line.strip_prefix("# Expires: ") {
+            return Some(date.trim().to_owned());
+        }
+        if line.starts_with("-----BEGIN") {
+            break;
+        }
+    }
+    None
+}
+
+/// Returns days until expiry for a "YYYY-MM-DD" date string.
+/// Positive = days remaining; 0 = expires today; negative = expired N days ago.
+/// Returns `None` if `date_str` is empty, malformed, or system time is unavailable.
+pub(crate) fn expiry_days_remaining(date_str: &str) -> Option<i64> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now_days = (SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() / 86400) as i64;
+    let parts: Vec<i64> = date_str.split('-').filter_map(|p| p.parse().ok()).collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let (year, month, day) = (parts[0], parts[1], parts[2]);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let target_days = gregorian_days_since_epoch(year, month, day)?;
+    Some(target_days - now_days)
+}
+
+/// Gregorian calendar date → days since Unix epoch (1970-01-01), using JDN arithmetic.
+fn gregorian_days_since_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
+    let (y, m) = if month <= 2 {
+        (year - 1, month + 12)
+    } else {
+        (year, month)
+    };
+    if y < -4716 {
+        return None;
+    }
+    let a = y / 100;
+    let b = 2 - a + a / 4;
+    let jdn = ((365.25_f64 * (y + 4716) as f64) as i64)
+        + ((30.6001_f64 * (m + 1) as f64) as i64)
+        + day
+        + b
+        - 1524;
+    Some(jdn - 2_440_588)
+}
+
 /// Detect the KEM variant display name from a public key PEM string.
 pub(crate) fn pem_variant_name(pem_str: &str) -> String {
     if pem_str.contains("ML-KEM-1024") {
@@ -164,10 +216,59 @@ impl FileInput {
     }
 }
 
+/// Drag-and-drop payload when dragging a key from the Keys panel.
+/// Used with egui's `dnd_drag_source` / `dnd_drop_zone` API.
+#[derive(Clone)]
+pub(crate) struct KeyDragPayload {
+    pub(crate) label: String,
+    pub(crate) pub_pem: String,
+    pub(crate) priv_path: Option<std::path::PathBuf>,
+}
+
+/// Which sub-section is active in the Sign tab.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum SignSubTab {
+    KeyGen,
+    #[default]
+    Sign,
+    Verify,
+}
+
+/// Which mode is active in the Signcrypt tab.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum SigncryptSubTab {
+    #[default]
+    Encrypt,
+    Decrypt,
+}
+
+/// Which mode is active in the Archive tab.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum ArchiveSubTab {
+    #[default]
+    Create,
+    Extract,
+}
+
+/// Which mode is active in the Shamir tab.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum ShamirSubTab {
+    #[default]
+    Split,
+    Reconstruct,
+}
+
 pub(crate) struct Settings {
     pub(crate) dark_mode: bool,
     pub(crate) auto_clear: bool,
     pub(crate) confirm_overwrite: bool,
+    /// Default KEM algorithm selected in the Keygen tab on startup.
+    pub(crate) default_algorithm: KeygenAlgorithm,
+    /// If non-zero, the Keygen tab pre-fills the expiry date this many days from today.
+    pub(crate) default_expiry_days: u32,
+    /// When true, clipboard plaintext is zeroized after `clipboard_clear_secs` seconds.
+    pub(crate) clipboard_auto_clear: bool,
+    pub(crate) clipboard_clear_secs: u32,
     /// Default output directory for keygen, encrypt, and decrypt (native only).
     /// Empty string means "same folder as the source file / chosen at keygen time".
     #[cfg(not(target_arch = "wasm32"))]
@@ -180,6 +281,10 @@ impl Default for Settings {
             dark_mode: true,
             auto_clear: false,
             confirm_overwrite: false,
+            default_algorithm: KeygenAlgorithm::default(),
+            default_expiry_days: 0,
+            clipboard_auto_clear: false,
+            clipboard_clear_secs: 60,
             #[cfg(not(target_arch = "wasm32"))]
             output_dir: String::new(),
         }
@@ -200,12 +305,38 @@ impl Settings {
             .get_string("confirm_overwrite")
             .and_then(|s| s.parse().ok())
             .unwrap_or(false);
+        let default_algorithm = match storage
+            .get_string("default_algorithm")
+            .as_deref()
+            .unwrap_or("")
+        {
+            "512" => KeygenAlgorithm::MlKem512,
+            "1024" => KeygenAlgorithm::MlKem1024,
+            "hybrid768" => KeygenAlgorithm::HybridX25519MlKem768,
+            _ => KeygenAlgorithm::MlKem768,
+        };
+        let default_expiry_days = storage
+            .get_string("default_expiry_days")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0u32);
+        let clipboard_auto_clear = storage
+            .get_string("clipboard_auto_clear")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(false);
+        let clipboard_clear_secs = storage
+            .get_string("clipboard_clear_secs")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60u32);
         #[cfg(not(target_arch = "wasm32"))]
         let output_dir = storage.get_string("output_dir").unwrap_or_default();
         Self {
             dark_mode,
             auto_clear,
             confirm_overwrite,
+            default_algorithm,
+            default_expiry_days,
+            clipboard_auto_clear,
+            clipboard_clear_secs,
             #[cfg(not(target_arch = "wasm32"))]
             output_dir,
         }
@@ -215,6 +346,22 @@ impl Settings {
         storage.set_string("dark_mode", self.dark_mode.to_string());
         storage.set_string("auto_clear", self.auto_clear.to_string());
         storage.set_string("confirm_overwrite", self.confirm_overwrite.to_string());
+        let alg_str = match self.default_algorithm {
+            KeygenAlgorithm::MlKem512 => "512",
+            KeygenAlgorithm::MlKem768 => "768",
+            KeygenAlgorithm::MlKem1024 => "1024",
+            KeygenAlgorithm::HybridX25519MlKem768 => "hybrid768",
+        };
+        storage.set_string("default_algorithm", alg_str.to_owned());
+        storage.set_string("default_expiry_days", self.default_expiry_days.to_string());
+        storage.set_string(
+            "clipboard_auto_clear",
+            self.clipboard_auto_clear.to_string(),
+        );
+        storage.set_string(
+            "clipboard_clear_secs",
+            self.clipboard_clear_secs.to_string(),
+        );
         #[cfg(not(target_arch = "wasm32"))]
         storage.set_string("output_dir", self.output_dir.clone());
     }

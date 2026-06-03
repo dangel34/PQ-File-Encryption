@@ -131,5 +131,5 @@ Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed.
 
 ```powershell
 # Updates version in all Cargo.toml files + setup.iss
-.\bump-version.ps1 -Version 3.3.0
+.\bump-version.ps1 -Version 4.0.0
 ```

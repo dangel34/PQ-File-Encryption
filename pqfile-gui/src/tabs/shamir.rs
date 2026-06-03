@@ -2,10 +2,11 @@ use crate::app::PqfileApp;
 use crate::colors::{
     c_accent, c_card, c_chrome, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text,
 };
+use crate::types::ShamirSubTab;
 use crate::types::{OpStatus, Tab};
 use crate::widgets::{
-    card, file_row, passphrase_row, pick_files, save_result, section_label, show_status,
-    tab_heading_help,
+    card, file_row, passphrase_row, pick_files, save_result, scrollable_list, section_label,
+    seg_tabs, show_status, tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::shamir;
@@ -23,11 +24,22 @@ impl PqfileApp {
             .size(13.0)
             .color(c_subtext(dark)),
         );
-        ui.add_space(14.0);
+        ui.add_space(10.0);
 
-        self.show_shamir_split_section(ui, dark);
-        ui.add_space(20.0);
-        self.show_shamir_reconstruct_section(ui, dark);
+        seg_tabs(
+            ui,
+            &mut self.shamir_sub_tab,
+            &[
+                ("Split Key", ShamirSubTab::Split),
+                ("Reconstruct Key", ShamirSubTab::Reconstruct),
+            ],
+            dark,
+        );
+
+        match self.shamir_sub_tab {
+            ShamirSubTab::Split => self.show_shamir_split_section(ui, dark),
+            ShamirSubTab::Reconstruct => self.show_shamir_reconstruct_section(ui, dark),
+        }
     }
 
     // ── Split ──────────────────────────────────────────────────────────────
@@ -114,6 +126,46 @@ impl PqfileApp {
         }
 
         show_status(ui, &self.shamir_split_status, dark);
+
+        // "Show QR" buttons for each saved share (native only).
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(&self.shamir_split_status, crate::types::OpStatus::Ok(_)) {
+            let out_dir = if self.settings.output_dir.is_empty() {
+                self.shamir_split_privkey
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_owned())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+            } else {
+                std::path::PathBuf::from(&self.settings.output_dir)
+            };
+            let n = self.shamir_split_shares;
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                for i in 1..=n {
+                    let share_path = out_dir.join(format!("share_{i}.pem"));
+                    if share_path.exists()
+                        && ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(format!("📷 QR share {i}"))
+                                        .size(12.0)
+                                        .color(c_subtext(dark)),
+                                )
+                                .fill(c_surface0(dark)),
+                            )
+                            .on_hover_text(format!("Show share {i} as QR code"))
+                            .clicked()
+                    {
+                        if let Ok(pem_str) = std::fs::read_to_string(&share_path) {
+                            let title = format!("Shamir Share {i} QR Code");
+                            self.open_qr(ui.ctx(), title, &pem_str);
+                        }
+                    }
+                }
+            });
+        }
     }
 
     fn do_shamir_split(&mut self) {
@@ -201,28 +253,35 @@ impl PqfileApp {
                 );
             } else {
                 let mut remove_idx: Option<usize> = None;
-                for (i, entry) in self.shamir_shares.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&entry.name).size(12.5).color(c_text(dark)));
-                        if let OpStatus::Err(ref e) = entry.status {
-                            ui.label(RichText::new(e).size(11.5).color(c_red(dark)));
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new("✕").size(11.0).color(c_subtext(dark)),
-                                    )
-                                    .fill(Color32::TRANSPARENT)
-                                    .stroke(Stroke::NONE),
-                                )
-                                .clicked()
-                            {
-                                remove_idx = Some(i);
+                scrollable_list(ui, 154.0, c_card(dark), |ui| {
+                    for (i, entry) in self.shamir_shares.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&entry.name).size(12.5).color(c_text(dark)));
+                            if let OpStatus::Err(ref e) = entry.status {
+                                ui.label(RichText::new(e).size(11.5).color(c_red(dark)));
                             }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                RichText::new("✕")
+                                                    .size(11.0)
+                                                    .color(c_subtext(dark)),
+                                            )
+                                            .fill(Color32::TRANSPARENT)
+                                            .stroke(Stroke::NONE),
+                                        )
+                                        .clicked()
+                                    {
+                                        remove_idx = Some(i);
+                                    }
+                                },
+                            );
                         });
-                    });
-                }
+                    }
+                });
                 if let Some(i) = remove_idx {
                     self.shamir_shares.remove(i);
                 }

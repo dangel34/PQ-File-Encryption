@@ -169,7 +169,7 @@ mod tests {
         let mut app = PqfileApp::default();
         app.encrypt_files
             .push(file_entry("test.txt", b"hello".to_vec(), None));
-        app.handle_encrypt_all(&test_ctx()); // no pubkey loaded — should return early without panicking
+        app.handle_encrypt_all(&test_ctx()); // no pubkey loaded; should return early without panicking
         assert!(
             matches!(app.encrypt_files[0].status, OpStatus::None),
             "status should remain None"
@@ -343,6 +343,7 @@ mod tests {
             confirm_overwrite: true,
             #[cfg(not(target_arch = "wasm32"))]
             output_dir: "/tmp/test_out".to_owned(),
+            ..Settings::default()
         };
         original.save(&mut storage);
         let loaded = Settings::load(&storage);

@@ -169,6 +169,7 @@ fn dispatch_delete(backend_id: u8, key_ref: &stub::HardwareKeyRef) -> Result<(),
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn unknown_backend(id: u8) -> PqfileError {
     PqfileError::Io(std::io::Error::other(format!(
         "unknown hardware key backend: {id:#04x}"

@@ -3,8 +3,8 @@ use crate::colors::{
 };
 use crate::theme::apply_theme;
 use crate::types::{
-    pem_variant_name, BatchPending, FileInput, KeygenAlgorithm, MultiFileEntry, OpStatus,
-    PickedFile, RecipientEntry, Settings, Tab,
+    pem_variant_name, ArchiveSubTab, BatchPending, FileInput, KeygenAlgorithm, MultiFileEntry,
+    OpStatus, PickedFile, RecipientEntry, Settings, ShamirSubTab, SignSubTab, SigncryptSubTab, Tab,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry};
@@ -13,6 +13,21 @@ use crate::APP_VERSION;
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
 use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
+
+/// Handle to a running watchfolder thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct WatchHandle {
+    /// New encrypted-file paths written by the watcher (populated by the bg thread).
+    pub(crate) log_rx: std::sync::mpsc::Receiver<String>,
+    /// Set to `true` by the UI thread to request the watcher stop.
+    pub(crate) stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// State for the QR code modal window.
+pub(crate) struct QrModal {
+    pub(crate) title: String,
+    pub(crate) texture: egui::TextureHandle,
+}
 
 pub struct PqfileApp {
     pub(crate) tab: Tab,
@@ -32,6 +47,8 @@ pub struct PqfileApp {
     pub(crate) encrypt_recipients: Vec<RecipientEntry>,
     pub(crate) encrypt_files: Vec<MultiFileEntry>,
     pub(crate) encrypt_batch_pending: BatchPending,
+    /// Pad recipient count to the next power of two with random dummy slots (v9 format).
+    pub(crate) encrypt_pad_recipients: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) encrypt_compress: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -119,12 +136,14 @@ pub struct PqfileApp {
     pub(crate) shamir_shares_pending: BatchPending,
     pub(crate) shamir_reconstruct_status: OpStatus,
 
-    // ── Keygen — hardware key fields ──────────────────────────────────────
+    // ── Keygen hardware key fields ────────────────────────────────────────
     pub(crate) keygen_use_hardware: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keygen_hardware_label: String,
 
-    // ── Sign — hardware signing key fields ────────────────────────────────
+    // ── Sign hardware signing key fields ──────────────────────────────────
     pub(crate) sign_keygen_use_hardware: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) sign_keygen_hardware_label: String,
 
     // ── Tools tab (Revoke + Rekey + Repassphrase) ─────────────────────────
@@ -149,6 +168,56 @@ pub struct PqfileApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keys: Vec<KeyEntry>,
+
+    // ── Sub-tab selection ─────────────────────────────────────────────────
+    pub(crate) sign_sub_tab: SignSubTab,
+    pub(crate) signcrypt_sub_tab: SigncryptSubTab,
+    pub(crate) archive_sub_tab: ArchiveSubTab,
+    pub(crate) shamir_sub_tab: ShamirSubTab,
+
+    // ── Batch operation summaries ─────────────────────────────────────────
+    pub(crate) encrypt_batch_summary: Option<String>,
+    pub(crate) decrypt_batch_summary: Option<String>,
+
+    // ── Key expiry fields (keygen tab) ────────────────────────────────────
+    pub(crate) keygen_use_expiry: bool,
+    pub(crate) keygen_expiry_date: String,
+
+    // ── Recent file paths per operation (native only, last 5) ─────────────
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recent_encrypt_files: Vec<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recent_decrypt_files: Vec<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recent_privkeys: Vec<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recent_pubkeys: Vec<String>,
+
+    // ── Watchfolder state (native only) ──────────────────────────────────
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) watch_dir: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) watch_active: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) watch_handle: Option<WatchHandle>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) watch_log: Vec<String>,
+
+    // ── QR code modal ────────────────────────────────────────────────────
+    /// When Some, a QR window is open showing the encoded PEM data.
+    pub(crate) qr_modal: Option<QrModal>,
+
+    // ── Clipboard encrypt / decrypt (Tools tab) ───────────────────────────
+    pub(crate) clipboard_plain: Zeroizing<String>,
+    pub(crate) clipboard_cipher: String,
+    pub(crate) clipboard_pubkey: FileInput,
+    pub(crate) clipboard_privkey: FileInput,
+    pub(crate) clipboard_passphrase: Zeroizing<String>,
+    pub(crate) clipboard_passphrase_visible: bool,
+    pub(crate) clipboard_enc_status: OpStatus,
+    pub(crate) clipboard_dec_status: OpStatus,
+    /// Timestamp of the last clipboard encrypt/decrypt operation; used for auto-clear timer.
+    pub(crate) clipboard_last_used: Option<std::time::Instant>,
 }
 
 impl Default for PqfileApp {
@@ -168,6 +237,7 @@ impl Default for PqfileApp {
             encrypt_recipients: Vec::new(),
             encrypt_files: Vec::new(),
             encrypt_batch_pending: Arc::new(Mutex::new(None)),
+            encrypt_pad_recipients: false,
             #[cfg(not(target_arch = "wasm32"))]
             encrypt_compress: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -233,8 +303,10 @@ impl Default for PqfileApp {
             shamir_shares_pending: Arc::new(Mutex::new(None)),
             shamir_reconstruct_status: OpStatus::None,
             keygen_use_hardware: false,
+            #[cfg(not(target_arch = "wasm32"))]
             keygen_hardware_label: String::new(),
             sign_keygen_use_hardware: false,
+            #[cfg(not(target_arch = "wasm32"))]
             sign_keygen_hardware_label: String::new(),
             repassphrase_key: FileInput::default(),
             repassphrase_old_passphrase: Zeroizing::new(String::new()),
@@ -255,6 +327,40 @@ impl Default for PqfileApp {
             rekey_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
             keys: Vec::new(),
+            sign_sub_tab: SignSubTab::default(),
+            signcrypt_sub_tab: SigncryptSubTab::default(),
+            archive_sub_tab: ArchiveSubTab::default(),
+            shamir_sub_tab: ShamirSubTab::default(),
+            encrypt_batch_summary: None,
+            decrypt_batch_summary: None,
+            keygen_use_expiry: false,
+            keygen_expiry_date: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            watch_dir: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            watch_active: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            watch_handle: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            watch_log: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_encrypt_files: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_decrypt_files: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_privkeys: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_pubkeys: Vec::new(),
+            clipboard_plain: Zeroizing::new(String::new()),
+            clipboard_cipher: String::new(),
+            clipboard_pubkey: FileInput::default(),
+            clipboard_privkey: FileInput::default(),
+            clipboard_passphrase: Zeroizing::new(String::new()),
+            clipboard_passphrase_visible: false,
+            clipboard_enc_status: OpStatus::None,
+            clipboard_dec_status: OpStatus::None,
+            clipboard_last_used: None,
+            qr_modal: None,
             #[cfg(target_arch = "wasm32")]
             encrypt_wasm_queue: Vec::new(),
             #[cfg(target_arch = "wasm32")]
@@ -273,6 +379,16 @@ impl PqfileApp {
         apply_theme(&cc.egui_ctx, settings.dark_mode);
         #[cfg(not(target_arch = "wasm32"))]
         let keys = cc.storage.map(load_keys).unwrap_or_default();
+        #[cfg(not(target_arch = "wasm32"))]
+        let (recent_encrypt_files, recent_decrypt_files, recent_privkeys, recent_pubkeys) = {
+            let s = cc.storage;
+            (
+                s.map(|s| load_recent(s, "recent_enc")).unwrap_or_default(),
+                s.map(|s| load_recent(s, "recent_dec")).unwrap_or_default(),
+                s.map(|s| load_recent(s, "recent_priv")).unwrap_or_default(),
+                s.map(|s| load_recent(s, "recent_pub")).unwrap_or_default(),
+            )
+        };
         let app_icon = image::load_from_memory(include_bytes!("../icon.png"))
             .ok()
             .map(|img| {
@@ -287,11 +403,21 @@ impl PqfileApp {
                     egui::TextureOptions::LINEAR,
                 )
             });
+        let default_algorithm = settings.default_algorithm;
         Self {
             settings,
             app_icon,
+            keygen_algorithm: default_algorithm,
             #[cfg(not(target_arch = "wasm32"))]
             keys,
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_encrypt_files,
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_decrypt_files,
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_privkeys,
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_pubkeys,
             ..Default::default()
         }
     }
@@ -304,6 +430,13 @@ impl eframe::App for PqfileApp {
         self.settings.save(storage);
         #[cfg(not(target_arch = "wasm32"))]
         save_keys(&self.keys, storage);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            save_recent(storage, "recent_enc", &self.recent_encrypt_files);
+            save_recent(storage, "recent_dec", &self.recent_decrypt_files);
+            save_recent(storage, "recent_priv", &self.recent_privkeys);
+            save_recent(storage, "recent_pub", &self.recent_pubkeys);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -315,7 +448,23 @@ impl eframe::App for PqfileApp {
         self.tick_encrypt_wasm(&ctx);
         self.handle_dropped_files(&ctx);
 
-        // Drag-over overlay — paint above everything else when files are hovering
+        // Clipboard auto-clear timer.
+        if self.settings.clipboard_auto_clear {
+            if let Some(t) = self.clipboard_last_used {
+                let elapsed = t.elapsed().as_secs();
+                let timeout = self.settings.clipboard_clear_secs as u64;
+                if elapsed >= timeout {
+                    *self.clipboard_plain = String::new();
+                    self.clipboard_cipher.clear();
+                    self.clipboard_last_used = None;
+                    ctx.request_repaint();
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_secs(timeout - elapsed));
+                }
+            }
+        }
+
+        // Drag-over overlay: paint above everything else when files are hovering
         let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
         if hovering {
             let dark = self.settings.dark_mode;
@@ -422,6 +571,11 @@ impl eframe::App for PqfileApp {
             self.show_about_window(&ctx, dark);
         }
 
+        // ── QR code modal ──────────────────────────────────────────────────
+        if self.qr_modal.is_some() {
+            self.show_qr_window(&ctx, dark);
+        }
+
         // ── Tab help modal ─────────────────────────────────────────────────
         if self.help_modal_open.is_some() {
             self.show_tab_help_window(&ctx, dark);
@@ -509,7 +663,7 @@ impl PqfileApp {
     }
 
     /// Route a dropped file into the correct slot based on the active tab and
-    /// the file's extension. Pure logic with no egui dependency — testable directly.
+    /// the file's extension. Pure logic with no egui dependency; testable directly.
     pub(crate) fn route_drop(
         &mut self,
         name: String,
@@ -652,14 +806,42 @@ impl PqfileApp {
         };
         apply_job_results(results, &mut self.encrypt_files);
         if finished {
-            let all_ok = self.settings.auto_clear
-                && self
-                    .encrypt_files
-                    .iter()
-                    .all(|e| matches!(e.status, OpStatus::Ok(_)));
+            let ok = self
+                .encrypt_files
+                .iter()
+                .filter(|e| matches!(e.status, OpStatus::Ok(_)))
+                .count();
+            let err = self
+                .encrypt_files
+                .iter()
+                .filter(|e| matches!(e.status, OpStatus::Err(_)))
+                .count();
+            if ok + err > 1 {
+                self.encrypt_batch_summary = Some(if err == 0 {
+                    format!(
+                        "{ok} file{} encrypted successfully.",
+                        if ok == 1 { "" } else { "s" }
+                    )
+                } else {
+                    format!("{ok} succeeded, {err} failed.")
+                });
+            }
+            // Record successfully encrypted source files as recent.
+            for e in &self.encrypt_files {
+                if matches!(e.status, OpStatus::Ok(_)) {
+                    if let Some(ref p) = e.path {
+                        push_recent(
+                            &mut self.recent_encrypt_files,
+                            p.to_string_lossy().into_owned(),
+                        );
+                    }
+                }
+            }
+            let all_ok = self.settings.auto_clear && err == 0 && ok > 0;
             if all_ok {
                 self.encrypt_recipients.clear();
                 self.encrypt_files.clear();
+                self.encrypt_batch_summary = None;
             }
             self.encrypt_job = None;
         }
@@ -679,15 +861,47 @@ impl PqfileApp {
         };
         apply_job_results(results, &mut self.decrypt_files);
         if finished {
-            let all_ok = self.settings.auto_clear
-                && self
-                    .decrypt_files
-                    .iter()
-                    .all(|e| matches!(e.status, OpStatus::Ok(_)));
+            let ok = self
+                .decrypt_files
+                .iter()
+                .filter(|e| matches!(e.status, OpStatus::Ok(_)))
+                .count();
+            let err = self
+                .decrypt_files
+                .iter()
+                .filter(|e| matches!(e.status, OpStatus::Err(_)))
+                .count();
+            if ok + err > 1 {
+                self.decrypt_batch_summary = Some(if err == 0 {
+                    format!(
+                        "{ok} file{} decrypted successfully.",
+                        if ok == 1 { "" } else { "s" }
+                    )
+                } else {
+                    format!("{ok} succeeded, {err} failed.")
+                });
+            }
+            // Record successfully decrypted source files as recent.
+            for e in &self.decrypt_files {
+                if matches!(e.status, OpStatus::Ok(_)) {
+                    if let Some(ref p) = e.path {
+                        push_recent(
+                            &mut self.recent_decrypt_files,
+                            p.to_string_lossy().into_owned(),
+                        );
+                    }
+                }
+            }
+            // Record the private key used as recent.
+            if let Some(ref p) = self.decrypt_privkey.path {
+                push_recent(&mut self.recent_privkeys, p.to_string_lossy().into_owned());
+            }
+            let all_ok = self.settings.auto_clear && err == 0 && ok > 0;
             if all_ok {
                 self.decrypt_privkey.clear();
                 self.decrypt_files.clear();
                 self.decrypt_passphrase.clear();
+                self.decrypt_batch_summary = None;
             }
             self.decrypt_batch_job = None;
         }
@@ -749,6 +963,21 @@ impl PqfileApp {
         #[cfg(target_arch = "wasm32")]
         let dec_update = false;
 
+        // Clipboard tool file slots
+        self.clipboard_pubkey.poll();
+        self.clipboard_privkey.poll();
+
+        // Drain watchfolder log messages.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref handle) = self.watch_handle {
+            while let Ok(msg) = handle.log_rx.try_recv() {
+                self.watch_log.push(msg);
+                if self.watch_log.len() > 200 {
+                    self.watch_log.drain(..100);
+                }
+            }
+        }
+
         let singles_pending = [
             &self.encrypt_pubkey,
             &self.decrypt_privkey,
@@ -772,6 +1001,8 @@ impl PqfileApp {
             &self.rekey_privkey,
             &self.rekey_new_pubkey,
             &self.rekey_input,
+            &self.clipboard_pubkey,
+            &self.clipboard_privkey,
         ]
         .iter()
         .any(|f| f.pending.try_lock().map(|g| g.is_some()).unwrap_or(false));
@@ -1277,4 +1508,275 @@ pub(crate) fn load_keys(storage: &dyn eframe::Storage) -> Vec<KeyEntry> {
         });
     }
     out
+}
+
+// ── QR code helpers ────────────────────────────────────────────────────────
+
+impl PqfileApp {
+    /// Generate a QR texture and open the QR modal.
+    pub(crate) fn open_qr(&mut self, ctx: &egui::Context, title: String, data: &str) {
+        use image::Rgba;
+        use qrcode::QrCode;
+
+        let code = match QrCode::new(data.as_bytes()) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let qr_img = code
+            .render::<Rgba<u8>>()
+            .dark_color(Rgba([0, 0, 0, 255]))
+            .light_color(Rgba([255, 255, 255, 255]))
+            .min_dimensions(200, 200)
+            .max_dimensions(360, 360)
+            .build();
+        let (w, h) = (qr_img.width() as usize, qr_img.height() as usize);
+        let pixels: Vec<u8> = qr_img.into_raw();
+        let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &pixels);
+        let texture = ctx.load_texture("qr_code", color_image, egui::TextureOptions::NEAREST);
+        self.qr_modal = Some(QrModal { title, texture });
+    }
+
+    /// Render the QR modal window if open.
+    pub(crate) fn show_qr_window(&mut self, ctx: &egui::Context, dark: bool) {
+        use crate::colors::{c_bg, c_subtext, c_surface0, c_text};
+        use eframe::egui::{CornerRadius, Stroke, Vec2};
+
+        let modal = match self.qr_modal.take() {
+            Some(m) => m,
+            None => return,
+        };
+        let mut keep_open = true;
+
+        egui::Window::new(
+            RichText::new(&modal.title)
+                .size(14.0)
+                .strong()
+                .color(c_text(dark)),
+        )
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .frame(
+            egui::Frame::window(&ctx.global_style())
+                .fill(c_bg(dark))
+                .stroke(Stroke::new(2.0, c_subtext(dark)))
+                .corner_radius(CornerRadius::same(10)),
+        )
+        .show(ctx, |ui| {
+            ui.add_space(6.0);
+            ui.vertical_centered(|ui| {
+                let sz = modal.texture.size_vec2();
+                let (img_rect, _) = ui.allocate_exact_size(sz, egui::Sense::hover());
+                egui::Image::new(&modal.texture)
+                    .fit_to_exact_size(sz)
+                    .paint_at(ui, img_rect);
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Scan to load this key on another device.")
+                        .size(12.0)
+                        .color(c_subtext(dark)),
+                );
+                ui.add_space(8.0);
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("Close").size(13.0).color(c_text(dark)))
+                            .fill(c_surface0(dark))
+                            .min_size(Vec2::new(80.0, 28.0)),
+                    )
+                    .clicked()
+                {
+                    keep_open = false;
+                }
+                ui.add_space(4.0);
+            });
+        });
+
+        if keep_open {
+            self.qr_modal = Some(modal);
+        }
+    }
+}
+
+// ── Watchfolder helpers ────────────────────────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PqfileApp {
+    /// Start watching `dir`, encrypting new files for the current encrypt recipients.
+    pub(crate) fn start_watch(&mut self, ctx: &egui::Context) {
+        use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::mpsc;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let dir = self.watch_dir.clone();
+        if dir.is_empty() {
+            return;
+        }
+        let pub_pems: Vec<String> = self
+            .encrypt_recipients
+            .iter()
+            .map(|r| r.pem.clone())
+            .collect();
+        if pub_pems.is_empty() {
+            return;
+        }
+        let output_dir = if self.settings.output_dir.is_empty() {
+            dir.clone()
+        } else {
+            self.settings.output_dir.clone()
+        };
+        let confirm = self.settings.confirm_overwrite;
+
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let stop_clone = Arc::clone(&stop_flag);
+        let ctx = ctx.clone();
+
+        std::thread::spawn(move || {
+            let (ev_tx, ev_rx) = mpsc::channel();
+            let mut watcher =
+                match recommended_watcher(move |res: notify::Result<notify::Event>| {
+                    if let Ok(ev) = res {
+                        let _ = ev_tx.send(ev);
+                    }
+                }) {
+                    Ok(w) => w,
+                    Err(_) => return,
+                };
+            if watcher
+                .watch(std::path::Path::new(&dir), RecursiveMode::NonRecursive)
+                .is_err()
+            {
+                return;
+            }
+
+            while !stop_clone.load(Ordering::Relaxed) {
+                match ev_rx.recv_timeout(Duration::from_millis(300)) {
+                    Ok(ev) => {
+                        if matches!(ev.kind, EventKind::Create(_)) {
+                            for path in ev.paths {
+                                // Skip already-encrypted files and dotfiles.
+                                let ext = path
+                                    .extension()
+                                    .map(|e| e.to_ascii_lowercase().to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                if ext == "pqf"
+                                    || path
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .map(|n| n.starts_with('.'))
+                                        .unwrap_or(false)
+                                {
+                                    continue;
+                                }
+                                if let Ok(data) = std::fs::read(&path) {
+                                    let name = path
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    let out_name = format!("{name}.pqf");
+                                    let out_path =
+                                        std::path::PathBuf::from(&output_dir).join(&out_name);
+                                    let original_size = data.len() as u64;
+                                    use pqfile::encrypt;
+                                    use pqfile::format::adaptive_chunk_size;
+                                    let chunk_size = adaptive_chunk_size(original_size);
+                                    let result = if pub_pems.len() == 1 {
+                                        let mut r = std::io::Cursor::new(&data);
+                                        let mut out = Vec::new();
+                                        encrypt::encrypt_stream(
+                                            &pub_pems[0],
+                                            original_size,
+                                            chunk_size,
+                                            &mut r,
+                                            &mut out,
+                                        )
+                                        .map(|_| out)
+                                    } else {
+                                        let pem_refs: Vec<&str> =
+                                            pub_pems.iter().map(|s| s.as_str()).collect();
+                                        let mut r = std::io::Cursor::new(&data);
+                                        let mut out = Vec::new();
+                                        encrypt::encrypt_stream_multi_anon(
+                                            &pem_refs,
+                                            original_size,
+                                            &mut r,
+                                            &mut out,
+                                        )
+                                        .map(|_| out)
+                                    };
+                                    let msg = match result {
+                                        Ok(ct) => {
+                                            if !confirm || !out_path.exists() {
+                                                match std::fs::write(&out_path, &ct) {
+                                                    Ok(()) => format!("✓ {out_name}"),
+                                                    Err(e) => format!("✗ {name}: {e}"),
+                                                }
+                                            } else {
+                                                format!("⚠ skipped {name} (output exists)")
+                                            }
+                                        }
+                                        Err(e) => format!("✗ {name}: {e}"),
+                                    };
+                                    let _ = tx.send(msg);
+                                    ctx.request_repaint();
+                                }
+                            }
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+
+        self.watch_handle = Some(WatchHandle {
+            log_rx: rx,
+            stop_flag,
+        });
+        self.watch_active = true;
+        self.watch_log.clear();
+    }
+
+    pub(crate) fn stop_watch(&mut self) {
+        if let Some(ref handle) = self.watch_handle {
+            handle
+                .stop_flag
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.watch_handle = None;
+        self.watch_active = false;
+    }
+}
+
+// ── Recent file persistence ────────────────────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn save_recent(storage: &mut dyn eframe::Storage, key: &str, list: &[String]) {
+    storage.set_string(&format!("{key}.len"), list.len().to_string());
+    for (i, s) in list.iter().enumerate() {
+        storage.set_string(&format!("{key}.{i}"), s.clone());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn load_recent(storage: &dyn eframe::Storage, key: &str) -> Vec<String> {
+    let n: usize = storage
+        .get_string(&format!("{key}.len"))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+        .min(10);
+    (0..n)
+        .filter_map(|i| storage.get_string(&format!("{key}.{i}")))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Push a file path to the front of a recent list (dedup + cap at 5).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn push_recent(list: &mut Vec<String>, path: String) {
+    list.retain(|p| p != &path);
+    list.insert(0, path);
+    list.truncate(5);
 }

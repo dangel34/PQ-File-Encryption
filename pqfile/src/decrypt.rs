@@ -1,4 +1,6 @@
 use rayon::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io;
 use std::io::{Cursor, Read, Write};
 
 use chacha20poly1305::{
@@ -14,12 +16,12 @@ use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 use crate::format::{
-    chunk_aad, chunk_nonce, ct_len_for_variant, fill_chunk, hybrid_hkdf, PqfHeader, PqfHeaderV4,
-    PqfHeaderV7, PqfHeaderV8, RecipientEntryV8, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE,
-    COMPRESSION_ZSTD, HYBRID_CT_LEN_768, HYBRID_SEED_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512,
-    KEM_CT_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
-    NONCE_LEN, VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8,
-    WRAPPED_KEY_LEN,
+    chunk_nonce, compute_key_commitment, ct_len_for_variant, fill_chunk, hybrid_hkdf,
+    make_chunk_aad, PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, RecipientEntryV8,
+    BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD, HYBRID_CT_LEN_768,
+    HYBRID_SEED_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512, KEM_CT_LEN_768, KEM_VARIANT_1024,
+    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V3,
+    VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8, VERSION_V9, WRAPPED_KEY_LEN,
 };
 use crate::hardware;
 use crate::keygen::{
@@ -47,6 +49,61 @@ impl DkVariant {
             DkVariant::HybridKem768 { .. } => KEM_VARIANT_HYBRID_768,
         }
     }
+}
+
+/// A `Write` adapter that returns an error once more than `limit` bytes have been written.
+///
+/// Used to cap decompressed output for v6 (compressed) files so that an authenticated
+/// but adversarially crafted compression bomb cannot cause unbounded memory allocation.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct LimitedWriter<'a> {
+    inner: &'a mut dyn Write,
+    remaining: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<'a> LimitedWriter<'a> {
+    fn new(inner: &'a mut dyn Write, limit: u64) -> Self {
+        Self {
+            inner,
+            remaining: limit,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<'a> Write for LimitedWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if (buf.len() as u64) > self.remaining {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "decompressed data exceeds declared original_size limit",
+            ));
+        }
+        let n = self.inner.write(buf)?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Return value of [`decapsulate_stream_init`], used by [`PqfReader`].
+pub(crate) struct StreamDecryptState {
+    pub version: u8,
+    pub kem_variant: u16,
+    pub original_size: u64,
+    pub chunk_size: usize,
+    pub cipher: ChaCha20Poly1305,
+    pub nonce: [u8; NONCE_LEN],
+    pub v2_plaintext: Option<Zeroizing<Vec<u8>>>,
+    /// SHA3-256 key commitment bound into the first chunk AAD (see `compute_key_commitment`).
+    pub key_commitment: [u8; 32],
 }
 
 /// Decrypts a v2 (whole-file) `.pqf` payload. Kept for library consumers and
@@ -120,26 +177,81 @@ pub fn decrypt_stream(
                     header.write(&mut header_bytes).unwrap();
                     decrypt_v2_payload(&cipher, &header.nonce, &header_bytes, reader, writer)
                 }
-                _ => decrypt_v3_chunks(
-                    &cipher,
-                    &header.nonce,
-                    header.chunk_size as usize,
-                    reader,
-                    writer,
-                ),
+                _ => {
+                    let key_commitment = compute_key_commitment(
+                        ss_bytes.as_ref(),
+                        &header.nonce,
+                        header.original_size,
+                    );
+                    decrypt_v3_chunks(
+                        &cipher,
+                        &header.nonce,
+                        header.chunk_size as usize,
+                        &key_commitment,
+                        reader,
+                        writer,
+                    )
+                }
             }
         }
         VERSION_V4 => {
             let header = PqfHeaderV4::read_body(reader)?;
-            decrypt_v4(&dk, header, reader, writer)
+            let entries: Vec<(u16, &[u8], &[u8; WRAPPED_KEY_LEN])> = header
+                .recipients
+                .iter()
+                .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
+                .collect();
+            let session_key = find_session_key(&dk, &entries)?;
+            let key_commitment =
+                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key = Key::from_slice(session_key.as_ref());
+            let cipher = ChaCha20Poly1305::new(key);
+            decrypt_v3_chunks(
+                &cipher,
+                &header.nonce,
+                CHUNK_SIZE,
+                &key_commitment,
+                reader,
+                writer,
+            )
         }
         VERSION_V7 => {
             let header = PqfHeaderV7::read_body(reader)?;
-            decrypt_v7(&dk, header, reader, writer)
+            let entries: Vec<(u16, &[u8], &[u8; WRAPPED_KEY_LEN])> = header
+                .recipients
+                .iter()
+                .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
+                .collect();
+            let session_key = find_session_key(&dk, &entries)?;
+            let key_commitment =
+                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key = Key::from_slice(session_key.as_ref());
+            let cipher = ChaCha20Poly1305::new(key);
+            decrypt_v3_chunks(
+                &cipher,
+                &header.nonce,
+                CHUNK_SIZE,
+                &key_commitment,
+                reader,
+                writer,
+            )
         }
-        VERSION_V8 => {
+        // v9 uses the same wire format as v8; the decryptor path is identical.
+        VERSION_V8 | VERSION_V9 => {
             let header = PqfHeaderV8::read_body(reader)?;
-            decrypt_v8(&dk, header, reader, writer)
+            let session_key = find_session_key_v8(&dk, &header.recipients)?;
+            let key_commitment =
+                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key = Key::from_slice(session_key.as_ref());
+            let cipher = ChaCha20Poly1305::new(key);
+            decrypt_v3_chunks(
+                &cipher,
+                &header.nonce,
+                CHUNK_SIZE,
+                &key_commitment,
+                reader,
+                writer,
+            )
         }
         VERSION_V6 => {
             let header = PqfHeader::read_body(reader, VERSION_V6)?;
@@ -147,7 +259,53 @@ pub fn decrypt_stream(
             let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
             let key = Key::from_slice(ss_bytes.as_ref());
             let cipher = ChaCha20Poly1305::new(key);
-            decrypt_v6(&cipher, &header, reader, writer)
+            let key_commitment =
+                compute_key_commitment(ss_bytes.as_ref(), &header.nonce, header.original_size);
+            match header.compression_algo {
+                COMPRESSION_NONE => {
+                    // No compression: pipe authenticated chunks directly to writer.
+                    decrypt_v3_chunks(
+                        &cipher,
+                        &header.nonce,
+                        header.chunk_size as usize,
+                        &key_commitment,
+                        reader,
+                        writer,
+                    )
+                }
+                COMPRESSION_ZSTD => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        // Stream authenticated chunks directly into the zstd decoder so that
+                        // we never hold the entire compressed payload in memory.  The
+                        // LimitedWriter cap prevents authenticated compression-bomb expansion
+                        // beyond the declared original_size.
+                        let limit = if header.original_size > 0 {
+                            header.original_size
+                        } else {
+                            crate::format::MAX_ORIGINAL_SIZE
+                        };
+                        let mut limited = LimitedWriter::new(writer, limit);
+                        let mut decoder = zstd::stream::write::Decoder::new(&mut limited)
+                            .map_err(PqfileError::Io)?;
+                        decrypt_v3_chunks(
+                            &cipher,
+                            &header.nonce,
+                            header.chunk_size as usize,
+                            &key_commitment,
+                            reader,
+                            &mut decoder,
+                        )?;
+                        decoder.flush().map_err(PqfileError::Io)
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        let _ = (reader, writer);
+                        Err(PqfileError::CompressionNotSupported)
+                    }
+                }
+                _ => Err(PqfileError::CompressionNotSupported),
+            }
         }
         v => Err(PqfileError::UnsupportedVersion(v)),
     }
@@ -158,84 +316,51 @@ fn find_session_key(
     entries: &[(u16, &[u8], &[u8; WRAPPED_KEY_LEN])],
 ) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     let dk_variant = dk.kem_variant();
+    let mut found: Option<Zeroizing<[u8; 32]>> = None;
+    // Iterate every same-variant entry without early return so that timing does
+    // not reveal which slot index matched (mirrors find_session_key_v8).
     for (kem_variant, kem_ciphertext, wrapped_key) in entries {
         if *kem_variant != dk_variant {
             continue;
         }
         let ss = decapsulate_shared_secret(dk, kem_ciphertext)?;
         if let Ok(k) = unwrap_session_key(wrapped_key, &ss) {
-            return Ok(k);
+            if found.is_none() {
+                found = Some(k);
+            }
         }
     }
-    Err(PqfileError::NoMatchingRecipient)
-}
-
-fn decrypt_v4(
-    dk: &DkVariant,
-    header: PqfHeaderV4,
-    reader: &mut dyn Read,
-    writer: &mut dyn Write,
-) -> Result<(), PqfileError> {
-    let entries: Vec<(u16, &[u8], &[u8; WRAPPED_KEY_LEN])> = header
-        .recipients
-        .iter()
-        .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
-        .collect();
-    let session_key = find_session_key(dk, &entries)?;
-    let key = Key::from_slice(session_key.as_ref());
-    let cipher = ChaCha20Poly1305::new(key);
-    decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
-}
-
-fn decrypt_v7(
-    dk: &DkVariant,
-    header: PqfHeaderV7,
-    reader: &mut dyn Read,
-    writer: &mut dyn Write,
-) -> Result<(), PqfileError> {
-    let entries: Vec<(u16, &[u8], &[u8; WRAPPED_KEY_LEN])> = header
-        .recipients
-        .iter()
-        .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
-        .collect();
-    let session_key = find_session_key(dk, &entries)?;
-    let key = Key::from_slice(session_key.as_ref());
-    let cipher = ChaCha20Poly1305::new(key);
-    decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
+    found.ok_or(PqfileError::NoMatchingRecipient)
 }
 
 /// Searches v8 entries for one whose wrapped session key is recoverable with `dk`.
 ///
 /// Since v8 entries carry no `kem_variant` field, every slot is tried: the
 /// decryptor takes the first `ct_len_for_variant(dk.kem_variant())` bytes of
-/// each padded CT, attempts ML-KEM decapsulation (which always produces a value —
+/// each padded CT, attempts ML-KEM decapsulation (which always produces a value  -
 /// implicit rejection returns a pseudorandom key), then verifies the AES-GCM tag.
 /// A matching tag identifies the correct slot with probability ≈ 1 − 2^{−128}.
+/// Always tries every slot so timing does not reveal which slot matched.
+/// ML-KEM decapsulation uses implicit rejection (always produces a value), and
+/// AES-GCM tag verification is constant-time; iterating all entries before
+/// returning prevents a timing side-channel that would reveal the matching
+/// slot index in the anonymised v8 format.
 fn find_session_key_v8(
     dk: &DkVariant,
     entries: &[RecipientEntryV8],
 ) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     let ct_len = ct_len_for_variant(dk.kem_variant())?;
+    let mut found: Option<Zeroizing<[u8; 32]>> = None;
     for entry in entries {
         let kem_ct = &entry.padded_ct[..ct_len];
         let ss = decapsulate_shared_secret(dk, kem_ct)?;
         if let Ok(k) = unwrap_session_key(&entry.wrapped_key, &ss) {
-            return Ok(k);
+            if found.is_none() {
+                found = Some(k);
+            }
         }
     }
-    Err(PqfileError::NoMatchingRecipient)
-}
-
-fn decrypt_v8(
-    dk: &DkVariant,
-    header: PqfHeaderV8,
-    reader: &mut dyn Read,
-    writer: &mut dyn Write,
-) -> Result<(), PqfileError> {
-    let session_key = find_session_key_v8(dk, &header.recipients)?;
-    let key = Key::from_slice(session_key.as_ref());
-    let cipher = ChaCha20Poly1305::new(key);
-    decrypt_v3_chunks(&cipher, &header.nonce, CHUNK_SIZE, reader, writer)
+    found.ok_or(PqfileError::NoMatchingRecipient)
 }
 
 fn unwrap_session_key(
@@ -259,68 +384,19 @@ fn unwrap_session_key(
     Ok(key)
 }
 
-fn decrypt_v6(
-    cipher: &ChaCha20Poly1305,
-    header: &PqfHeader,
-    reader: &mut dyn Read,
-    writer: &mut dyn Write,
-) -> Result<(), PqfileError> {
-    let mut compressed = Vec::new();
-    decrypt_v3_chunks(
-        cipher,
-        &header.nonce,
-        header.chunk_size as usize,
-        reader,
-        &mut compressed,
-    )?;
-
-    match header.compression_algo {
-        COMPRESSION_NONE => {
-            writer.write_all(&compressed)?;
-            Ok(())
-        }
-        COMPRESSION_ZSTD => {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                zstd::stream::copy_decode(compressed.as_slice(), writer).map_err(PqfileError::Io)
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = compressed;
-                Err(PqfileError::CompressionNotSupported)
-            }
-        }
-        _ => Err(PqfileError::CompressionNotSupported),
-    }
-}
-
-/// Initialises decryption state from a `.pqf` stream for use by `PqfReader`.
+/// Initialises decryption state from a `.pqf` stream for use by [`PqfReader`].
 ///
-/// Returns `(version, kem_variant, original_size, chunk_size, cipher, nonce, v2_plaintext)`.
-/// For v2 files, `v2_plaintext` contains the fully-decrypted payload.
-/// For streaming formats, it is `None` and the caller must consume chunks from the reader.
+/// For v2 files, `v2_plaintext` in the returned state contains the fully-decrypted
+/// payload. For streaming formats it is `None`; the caller consumes chunks via the reader.
 ///
-/// **v6 (compressed) files are not supported** — this function returns
-/// `PqfileError::CompressionNotSupported` for `VERSION_V6`. Use
-/// [`decrypt_stream`] instead, which decompresses the payload after decryption.
+/// **v6 (compressed) files are not supported** - returns
+/// `PqfileError::CompressionNotSupported`. Use [`decrypt_stream`] instead.
 #[allow(dead_code)] // used by lib target (reader.rs) but not by the binary
-#[allow(clippy::type_complexity)]
 pub(crate) fn decapsulate_stream_init(
     reader: &mut dyn Read,
     privkey_pem: &str,
     passphrase: Option<&str>,
-) -> Result<
-    (
-        u8,
-        u16,
-        u64,
-        usize,
-        ChaCha20Poly1305,
-        [u8; NONCE_LEN],
-        Option<Zeroizing<Vec<u8>>>,
-    ),
-    PqfileError,
-> {
+) -> Result<StreamDecryptState, PqfileError> {
     let dk = derive_dk(privkey_pem, passphrase)?;
     let version = PqfHeader::read_magic_version(reader)?;
 
@@ -333,7 +409,7 @@ pub(crate) fn decapsulate_stream_init(
             let cipher = ChaCha20Poly1305::new(key);
 
             if version == VERSION {
-                // Decrypt the whole v2 payload upfront.
+                // v2: whole-file AEAD - header bytes needed as AAD.
                 let mut header_bytes = Vec::with_capacity(header.header_len());
                 header.write(&mut header_bytes).unwrap();
                 let mut payload = Vec::new();
@@ -353,25 +429,29 @@ pub(crate) fn decapsulate_stream_init(
                         )
                         .map_err(|_| PqfileError::DecryptionFailure)?,
                 );
-                Ok((
+                Ok(StreamDecryptState {
                     version,
-                    header.kem_variant,
-                    header.original_size,
-                    header.chunk_size as usize,
+                    kem_variant: header.kem_variant,
+                    original_size: header.original_size,
+                    chunk_size: header.chunk_size as usize,
                     cipher,
-                    header.nonce,
-                    Some(plaintext),
-                ))
+                    nonce: header.nonce,
+                    v2_plaintext: Some(plaintext),
+                    key_commitment: [0u8; 32],
+                })
             } else {
-                Ok((
+                let key_commitment =
+                    compute_key_commitment(ss_bytes.as_ref(), &header.nonce, header.original_size);
+                Ok(StreamDecryptState {
                     version,
-                    header.kem_variant,
-                    header.original_size,
-                    header.chunk_size as usize,
+                    kem_variant: header.kem_variant,
+                    original_size: header.original_size,
+                    chunk_size: header.chunk_size as usize,
                     cipher,
-                    header.nonce,
-                    None,
-                ))
+                    nonce: header.nonce,
+                    v2_plaintext: None,
+                    key_commitment,
+                })
             }
         }
         VERSION_V4 => {
@@ -382,17 +462,20 @@ pub(crate) fn decapsulate_stream_init(
                 .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
                 .collect();
             let session_key = find_session_key(&dk, &entries)?;
+            let key_commitment =
+                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
             let key = Key::from_slice(session_key.as_ref());
             let cipher = ChaCha20Poly1305::new(key);
-            Ok((
-                VERSION_V4,
-                dk.kem_variant(),
-                header.original_size,
-                CHUNK_SIZE,
+            Ok(StreamDecryptState {
+                version: VERSION_V4,
+                kem_variant: dk.kem_variant(),
+                original_size: header.original_size,
+                chunk_size: CHUNK_SIZE,
                 cipher,
-                header.nonce,
-                None,
-            ))
+                nonce: header.nonce,
+                v2_plaintext: None,
+                key_commitment,
+            })
         }
         VERSION_V7 => {
             let header = PqfHeaderV7::read_body(reader)?;
@@ -402,32 +485,39 @@ pub(crate) fn decapsulate_stream_init(
                 .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
                 .collect();
             let session_key = find_session_key(&dk, &entries)?;
+            let key_commitment =
+                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
             let key = Key::from_slice(session_key.as_ref());
             let cipher = ChaCha20Poly1305::new(key);
-            Ok((
-                VERSION_V7,
-                dk.kem_variant(),
-                header.original_size,
-                CHUNK_SIZE,
+            Ok(StreamDecryptState {
+                version: VERSION_V7,
+                kem_variant: dk.kem_variant(),
+                original_size: header.original_size,
+                chunk_size: CHUNK_SIZE,
                 cipher,
-                header.nonce,
-                None,
-            ))
+                nonce: header.nonce,
+                v2_plaintext: None,
+                key_commitment,
+            })
         }
-        VERSION_V8 => {
+        // v9 uses the same wire format as v8; only the version byte differs.
+        VERSION_V8 | VERSION_V9 => {
             let header = PqfHeaderV8::read_body(reader)?;
             let session_key = find_session_key_v8(&dk, &header.recipients)?;
+            let key_commitment =
+                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
             let key = Key::from_slice(session_key.as_ref());
             let cipher = ChaCha20Poly1305::new(key);
-            Ok((
-                VERSION_V8,
-                dk.kem_variant(),
-                header.original_size,
-                CHUNK_SIZE,
+            Ok(StreamDecryptState {
+                version,
+                kem_variant: dk.kem_variant(),
+                original_size: header.original_size,
+                chunk_size: CHUNK_SIZE,
                 cipher,
-                header.nonce,
-                None,
-            ))
+                nonce: header.nonce,
+                v2_plaintext: None,
+                key_commitment,
+            })
         }
         VERSION_V6 => Err(PqfileError::CompressionNotSupported),
         v => Err(PqfileError::UnsupportedVersion(v)),
@@ -510,6 +600,7 @@ fn decrypt_v3_chunks(
     cipher: &ChaCha20Poly1305,
     header_nonce: &[u8; NONCE_LEN],
     chunk_size: usize,
+    key_commitment: &[u8; 32],
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
@@ -531,17 +622,31 @@ fn decrypt_v3_chunks(
         let is_last = next_len == 0;
 
         let cn = chunk_nonce(base_nonce, counter);
-        let aad = chunk_aad(counter, is_last);
+        let (aad_buf, aad_len) = make_chunk_aad(counter, is_last, key_commitment);
 
         if current_len < 16 {
             return Err(PqfileError::DecryptionFailure);
         }
         let ct_len = current_len - 16;
-        // Split the last 16 bytes as the AEAD tag.
         let tag = Tag::<ChaCha20Poly1305>::clone_from_slice(&current[ct_len..current_len]);
-        cipher
-            .decrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut current[..ct_len], &tag)
-            .map_err(|_| PqfileError::DecryptionFailure)?;
+        match cipher.decrypt_in_place_detached(
+            Nonce::from_slice(&cn),
+            &aad_buf[..aad_len],
+            &mut current[..ct_len],
+            &tag,
+        ) {
+            Ok(_) => {}
+            Err(_) => {
+                // is_last is true when next_len == 0 (nothing more in stream).
+                // If we've successfully decrypted at least one prior chunk (counter > 0)
+                // this pattern is characteristic of a stream truncated at a chunk boundary.
+                return Err(if is_last && counter > 0 {
+                    PqfileError::Truncated
+                } else {
+                    PqfileError::DecryptionFailure
+                });
+            }
+        }
 
         writer.write_all(&current[..ct_len])?;
 
@@ -802,6 +907,9 @@ pub fn decrypt_stream_parallel(
     let max_chunk = chunk_size + 16;
     let base_nonce: [u8; BASE_NONCE_LEN] = header.nonce[..BASE_NONCE_LEN].try_into().unwrap();
 
+    let key_commitment =
+        compute_key_commitment(key_bytes.as_ref(), &header.nonce, header.original_size);
+
     let mut first = vec![0u8; max_chunk];
     let first_len = fill_chunk(reader, &mut first)?;
     if first_len == 0 {
@@ -838,7 +946,8 @@ pub fn decrypt_stream_parallel(
         let batch_len = batch.len();
         let batch_start = counter;
 
-        let results: Vec<Result<Vec<u8>, PqfileError>> = batch
+        // key_commitment is [u8; 32] (Copy) - captured by value.
+        let results: Vec<Result<Zeroizing<Vec<u8>>, PqfileError>> = batch
             .into_par_iter()
             .enumerate()
             .map(|(i, (mut ct_buf, ct_len))| {
@@ -847,7 +956,7 @@ pub fn decrypt_stream_parallel(
                     .ok_or(PqfileError::DecryptionFailure)?;
                 let is_last = batch_is_final && i == batch_len - 1;
                 let cn = chunk_nonce(&base_nonce, c);
-                let aad = chunk_aad(c, is_last);
+                let (aad_buf, aad_len) = make_chunk_aad(c, is_last, &key_commitment);
                 if ct_len < 16 {
                     return Err(PqfileError::DecryptionFailure);
                 }
@@ -857,13 +966,22 @@ pub fn decrypt_stream_parallel(
                 cipher
                     .decrypt_in_place_detached(
                         Nonce::from_slice(&cn),
-                        &aad,
+                        &aad_buf[..aad_len],
                         &mut ct_buf[..pt_len],
                         &tag,
                     )
-                    .map_err(|_| PqfileError::DecryptionFailure)?;
+                    .map_err(|_| {
+                        // Mirror decrypt_v3_chunks: a final-chunk AEAD failure after at
+                        // least one prior chunk indicates truncation, not bit corruption.
+                        if is_last && c > 0 {
+                            PqfileError::Truncated
+                        } else {
+                            PqfileError::DecryptionFailure
+                        }
+                    })?;
                 ct_buf.truncate(pt_len);
-                Ok(ct_buf)
+                // Wrap in Zeroizing so plaintext bytes are overwritten when the Vec is dropped.
+                Ok(Zeroizing::new(ct_buf))
             })
             .collect();
 
@@ -903,6 +1021,28 @@ mod tests {
 
         let result = decrypt_bytes(&priv_pem, &data, None);
         assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
+    }
+
+    #[test]
+    fn decrypt_rejects_oversized_original_size_field() {
+        use crate::format::{KEM_CT_LEN_768, MAGIC, VERSION_V3};
+        let (_, priv_pem) = keygen_bytes(768, None).unwrap();
+
+        let mut data = Vec::new();
+        data.extend_from_slice(MAGIC);
+        data.push(VERSION_V3);
+        data.extend_from_slice(&KEM_VARIANT_768.to_le_bytes());
+        data.extend_from_slice(&[0u8; KEM_CT_LEN_768]);
+        data.extend_from_slice(&[0u8; NONCE_LEN]);
+        // original_size = MAX_ORIGINAL_SIZE + 1 (1 TiB + 1 byte) - must be rejected.
+        let oversized: u64 = (1u64 << 40) + 1;
+        data.extend_from_slice(&oversized.to_le_bytes());
+
+        let result = decrypt_stream(&priv_pem, &mut data.as_slice(), &mut Vec::new(), None);
+        assert!(
+            matches!(result, Err(PqfileError::Io(_))),
+            "expected Io error for oversized original_size, got {result:?}"
+        );
     }
 
     #[test]
@@ -1088,12 +1228,37 @@ mod tests {
         )
         .unwrap();
 
+        // Keep only the first (non-last) chunk; counter==0 so we get DecryptionFailure.
         use crate::format::HEADER_LEN_768;
         let truncated = &enc_out[..HEADER_LEN_768 + CHUNK_SIZE + 16];
         let mut src: &[u8] = truncated;
         let mut dec_out = Vec::new();
         let result = decrypt_stream(&priv_pem, &mut src, &mut dec_out, None);
         assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
+    }
+
+    #[test]
+    fn stream_decrypt_truncated_mid_stream_returns_truncated_error() {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        // Three chunks: keep the first two complete ciphertext chunks; drop the third.
+        let plaintext = vec![0u8; 2 * CHUNK_SIZE + 100];
+        let mut enc_out = Vec::new();
+        encrypt_stream(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut enc_out,
+        )
+        .unwrap();
+
+        use crate::format::HEADER_LEN_768;
+        let keep = HEADER_LEN_768 + 2 * (CHUNK_SIZE + 16);
+        let truncated = &enc_out[..keep];
+        let mut src: &[u8] = truncated;
+        let mut dec_out = Vec::new();
+        let result = decrypt_stream(&priv_pem, &mut src, &mut dec_out, None);
+        assert!(matches!(result, Err(PqfileError::Truncated)));
     }
 
     #[test]
@@ -1480,5 +1645,78 @@ mod tests {
         let mut out = Vec::new();
         decrypt_stream_parallel(&priv_pem, &mut ct.as_slice(), &mut out, None, 4).unwrap();
         assert_eq!(out, plaintext);
+    }
+
+    // ── Fix #4: parallel decrypt distinguishes Truncated from DecryptionFailure ─
+
+    #[test]
+    fn parallel_decrypt_truncated_mid_stream_returns_truncated_error() {
+        use crate::format::HEADER_LEN_768;
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        // Three chunks so truncation drops the third; counter > 0 when failure occurs.
+        let plaintext = vec![0u8; 2 * CHUNK_SIZE + 100];
+        let mut enc_out = Vec::new();
+        encrypt_stream(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut enc_out,
+        )
+        .unwrap();
+        // Keep header + first two complete ciphertext chunks; drop the third.
+        let keep = HEADER_LEN_768 + 2 * (CHUNK_SIZE + 16);
+        let mut truncated: &[u8] = &enc_out[..keep];
+        let mut out = Vec::new();
+        let result = decrypt_stream_parallel(&priv_pem, &mut truncated, &mut out, None, 4);
+        assert!(
+            matches!(result, Err(PqfileError::Truncated)),
+            "expected Truncated, got {result:?}"
+        );
+    }
+
+    // ── Fix #3: find_session_key completes all slots even when match is first ──
+
+    #[test]
+    fn v4_multi_recipient_last_slot_matches() {
+        use crate::encrypt::encrypt_stream_multi;
+        // Two recipients; key to be used (priv2) is in the SECOND slot.
+        let (pub1, _priv1) = keygen_bytes(768, None).unwrap();
+        let (pub2, priv2) = keygen_bytes(768, None).unwrap();
+        let plaintext = b"last-slot recipient";
+        let mut enc = Vec::new();
+        encrypt_stream_multi(
+            &[pub1.as_str(), pub2.as_str()],
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut enc,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv2, &mut enc.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    // ── Fix #6: v6 decompression bomb is capped at original_size ─────────────
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn v6_decompression_bomb_rejected_at_original_size_cap() {
+        // LimitedWriter must reject decompressed output that exceeds original_size.
+        use super::LimitedWriter;
+        use std::io::Write;
+
+        let small_limit: u64 = 10;
+        let mut sink = Vec::new();
+        let mut lw = LimitedWriter::new(&mut sink, small_limit);
+
+        // Writing up to the limit is fine.
+        lw.write_all(&[0u8; 10]).unwrap();
+
+        // One more byte exceeds the limit.
+        let result = lw.write(&[0u8; 1]);
+        assert!(result.is_err(), "expected error when limit exceeded");
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }

@@ -11,11 +11,13 @@
 use pqfile::decrypt::decrypt_stream;
 use pqfile::encrypt::{
     encrypt_bytes, encrypt_stream, encrypt_stream_multi, encrypt_stream_multi_anon,
+    encrypt_stream_multi_anon_padded,
 };
 use pqfile::format::{
     BASE_NONCE_LEN, CHUNK_SIZE, HYBRID_CT_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512, KEM_CT_LEN_768,
     KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN,
-    PADDED_CT_LEN, VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V8, WRAPPED_KEY_LEN,
+    PADDED_CT_LEN, VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V8, VERSION_V9,
+    WRAPPED_KEY_LEN,
 };
 use pqfile::keygen::{keygen_bytes, keygen_bytes_hybrid_768};
 
@@ -393,7 +395,7 @@ fn v4_ml_kem_768_two_recipients() {
 
 #[test]
 fn v7_ml_kem_768_two_recipients() {
-    // FORMAT.md §5.6 — v8 (variant-blind) anonymous multi-recipient.
+    // FORMAT.md §5.6 - v8 (variant-blind) anonymous multi-recipient.
     // encrypt_stream_multi_anon now emits v8; v7 is read-only (backward compat).
     // Fixed slot: PADDED_CT(1568) + WRAPPED_KEY(48) = 1616 bytes (no variant field).
     let (pub1, priv1) = keygen_bytes(768, None).unwrap();
@@ -417,7 +419,7 @@ fn v7_ml_kem_768_two_recipients() {
     let slot_size = PADDED_CT_LEN + WRAPPED_KEY_LEN;
     assert_eq!(slot_size, 1616, "v8 fixed slot size");
 
-    // No variant fields — header layout: MAGIC(4)+VERSION(1)+COUNT(2)+N*slot+NONCE(12)+SIZE(8)
+    // No variant fields - header layout: MAGIC(4)+VERSION(1)+COUNT(2)+N*slot+NONCE(12)+SIZE(8)
     let nonce_off = 7 + count * slot_size;
     let size_off = nonce_off + NONCE_LEN;
     assert_eq!(
@@ -558,4 +560,70 @@ fn header_sizes_match_format_spec() {
 
     // v7 fixed slot size = 2 + PADDED_CT_LEN + WRAPPED_KEY_LEN = 1618
     assert_eq!(2 + PADDED_CT_LEN + WRAPPED_KEY_LEN, 1618);
+
+    // v8/v9 fixed slot size = PADDED_CT_LEN + WRAPPED_KEY_LEN = 1616 (no variant field)
+    assert_eq!(PADDED_CT_LEN + WRAPPED_KEY_LEN, 1616);
+}
+
+// ── v9 padded anonymous multi-recipient ────────────────────────────────────
+
+#[test]
+fn v9_three_recipients_slots_padded_to_power_of_two() {
+    let (pub1, _priv1) = keygen_bytes(768, None).unwrap();
+    let (pub2, _) = keygen_bytes(768, None).unwrap();
+    let (pub3, _) = keygen_bytes(768, None).unwrap();
+    let mut ct = Vec::new();
+    encrypt_stream_multi_anon_padded(
+        &[pub1.as_str(), pub2.as_str(), pub3.as_str()],
+        PLAINTEXT.len() as u64,
+        &mut { PLAINTEXT },
+        &mut ct,
+    )
+    .unwrap();
+
+    // Header: MAGIC(4) + VERSION(1) + COUNT(2) = 7 bytes, then slot data.
+    assert_eq!(&ct[..4], b"PQFL");
+    assert_eq!(ct[4], VERSION_V9, "version byte must be 0x09");
+    let slot_count = u16::from_le_bytes([ct[5], ct[6]]) as usize;
+    // 3 real recipients → padded to 4 (next power of 2 ≥ 3).
+    assert_eq!(slot_count, 4, "3 recipients must be padded to 4 slots");
+}
+
+#[test]
+fn v9_three_recipients_all_can_decrypt() {
+    let (pub1, priv1) = keygen_bytes(768, None).unwrap();
+    let (pub2, priv2) = keygen_bytes(768, None).unwrap();
+    let (pub3, priv3) = keygen_bytes(512, None).unwrap();
+    let mut ct = Vec::new();
+    encrypt_stream_multi_anon_padded(
+        &[pub1.as_str(), pub2.as_str(), pub3.as_str()],
+        PLAINTEXT.len() as u64,
+        &mut { PLAINTEXT },
+        &mut ct,
+    )
+    .unwrap();
+    for priv_pem in [&priv1, &priv2, &priv3] {
+        let mut out = Vec::new();
+        decrypt_stream(priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, PLAINTEXT);
+    }
+}
+
+#[test]
+fn v9_single_recipient_no_padding_needed() {
+    let (pub1, priv1) = keygen_bytes(768, None).unwrap();
+    let mut ct = Vec::new();
+    encrypt_stream_multi_anon_padded(
+        &[pub1.as_str()],
+        PLAINTEXT.len() as u64,
+        &mut { PLAINTEXT },
+        &mut ct,
+    )
+    .unwrap();
+    assert_eq!(ct[4], VERSION_V9);
+    let slot_count = u16::from_le_bytes([ct[5], ct[6]]) as usize;
+    assert_eq!(slot_count, 1, "single recipient needs no padding");
+    let mut out = Vec::new();
+    decrypt_stream(&priv1, &mut ct.as_slice(), &mut out, None).unwrap();
+    assert_eq!(out, PLAINTEXT);
 }

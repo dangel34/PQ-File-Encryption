@@ -156,6 +156,8 @@ fn inspect_shows_header_fields() {
     let status = std::process::Command::new(bin())
         .args([
             "encrypt",
+            "--chunk-size",
+            "65536",
             "-r",
             dir.join("pubkey.pem").to_str().unwrap(),
             input.to_str().unwrap(),
@@ -434,8 +436,9 @@ fn inspect_large_file_shows_v3_version() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
 
+    // 2 MiB: falls in the 1 MiB-256 MiB range → adaptive chunk size = 64 KiB → v3 format.
     let input = dir.join("data.bin");
-    fs::write(&input, vec![0u8; 100]).unwrap();
+    fs::write(&input, vec![0u8; 2 * 1024 * 1024]).unwrap();
 
     let status = std::process::Command::new(bin())
         .args(["keygen", "--out", dir.to_str().unwrap()])
@@ -855,9 +858,12 @@ fn json_inspect_output() {
         .unwrap();
     assert!(status.success());
 
+    // Explicit chunk-size so this small file gets v3 (not adaptive v5).
     let status = std::process::Command::new(bin())
         .args([
             "encrypt",
+            "--chunk-size",
+            "65536",
             "-r",
             dir.join("pubkey.pem").to_str().unwrap(),
             input.to_str().unwrap(),
@@ -902,6 +908,10 @@ fn json_error_output_goes_to_stderr() {
     let v: serde_json::Value = serde_json::from_str(stderr.trim()).expect("stderr not valid JSON");
     assert_eq!(v["status"], "error");
     assert!(v["message"].is_string());
+    assert!(
+        v["code"].is_u64(),
+        "JSON error must include a numeric 'code' field"
+    );
 }
 
 #[test]
@@ -1127,7 +1137,7 @@ fn hybrid_key_cannot_decrypt_non_hybrid_file() {
         .status()
         .unwrap();
 
-    // Try to decrypt with the hybrid private key — should fail (KEM variant mismatch).
+    // Try to decrypt with the hybrid private key - should fail (KEM variant mismatch).
     let status = std::process::Command::new(bin())
         .args([
             "decrypt",
@@ -1630,4 +1640,76 @@ fn multi_recipient_mixed_variants() {
         assert!(s.success(), "mixed-variant decrypt ({label}) failed");
         assert_eq!(fs::read(&out).unwrap(), plaintext);
     }
+}
+
+#[test]
+fn doctor_key_file() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let priv_key = dir.join("privkey.pem");
+    let output = std::process::Command::new(bin())
+        .args(["--json", "doctor", priv_key.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "doctor should succeed on a valid key"
+    );
+
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor output must be valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["type"], "private_key");
+    assert_eq!(v["encrypted"], false);
+    assert_eq!(v["hardware"], false);
+    assert_eq!(v["legacy_argon2_p1"], false);
+}
+
+#[test]
+fn doctor_pqf_file() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let input = dir.join("plain.txt");
+    fs::write(&input, b"doctor test payload").unwrap();
+    let pqf = dir.join("plain.txt.pqf");
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            dir.join("pubkey.pem").to_str().unwrap(),
+            input.to_str().unwrap(),
+            "-o",
+            pqf.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = std::process::Command::new(bin())
+        .args(["--json", "doctor", pqf.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "doctor should succeed on a valid .pqf"
+    );
+
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor output must be valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["type"], "pqf_ciphertext");
+    assert_eq!(v["header_valid"], "true");
+    assert!(v["version"].is_string());
 }

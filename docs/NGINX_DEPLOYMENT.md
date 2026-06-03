@@ -549,4 +549,10 @@ No nginx reload is required; only static files change.
 | Rate limiting                    | Limits abusive request rates per IP                                 |
 | server_tokens off                | Hides nginx version from attackers doing reconnaissance             |
 | Anonymized access logs           | Reduces personal data stored at rest on the server                  |
+
+---
+
+## Service status
+
+The live deployment is monitored at **[status.nappi.work/status/pqfile](https://status.nappi.work/status/pqfile)**. Check this page to see current uptime, incident history, and response-time metrics for the hosted web GUI.
 | CAA DNS record                   | Prevents unauthorized CAs from issuing certificates for your domain |

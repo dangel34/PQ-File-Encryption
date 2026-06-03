@@ -11,7 +11,7 @@ useDefault = true
 description = "Test passphrases and key fixtures in unit tests"
 regexTarget = "line"
 # Suppress lines containing only test passphrases or synthetic key material.
-# These are not real secrets — they are hardcoded test inputs.
+# These are not real secrets; they are hardcoded test inputs.
 regexes = [
     # Passphrase strings used in unit tests
     '''hunter2''',

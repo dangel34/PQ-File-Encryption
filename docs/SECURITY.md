@@ -4,12 +4,13 @@
 
 | Version | Supported |
 |---------|-----------|
-| 3.x     | Yes       |
+| 4.x     | Yes       |
+| 3.x     | No        |
 | 2.x     | No        |
 | 1.x     | No        |
 | < 1.0   | No        |
 
-Only the latest 3.x release receives security patches. Upgrade to the latest tag before reporting.
+Only the latest 4.x release receives security patches. Upgrade to the latest tag before reporting.
 
 ---
 
@@ -91,10 +92,10 @@ Signing uses ML-DSA-65 (NIST FIPS 204). Signing keys are separate from encryptio
 All functions that accept an optional passphrase take it as the last parameter (`sign_passphrase: Option<&str>` in `signcrypt`/`signcrypt_bytes`, `passphrase: Option<&str>` in `signdecrypt`, `rekey_stream`, `add_recipient_stream`). This is a stable API invariant enforced since v3.3.x.
 
 **Memory safety**
-Private key seeds, shared secrets, session keys, and passphrase-derived keys are wrapped in `Zeroizing` from the `zeroize` crate, which overwrites the memory before deallocation. The `ml-kem`, `ml-dsa`, and `x25519-dalek` crates are compiled with their `zeroize` features enabled. Shamir `reconstruct_raw` borrows `y` slices from the caller's `Zeroizing<Vec<u8>>` rather than cloning, so intermediate share bytes are not left in unzeroized heap allocations.
+Private key seeds, shared secrets, session keys, and passphrase-derived keys are wrapped in `Zeroizing` from the `zeroize` crate, which overwrites the memory before deallocation. The `ml-kem`, `ml-dsa`, and `x25519-dalek` crates are compiled with their `zeroize` features enabled. Shamir `reconstruct_raw` borrows `y` slices from the caller's `Zeroizing<Vec<u8>>` rather than cloning, so intermediate share bytes are not left in unzeroized heap allocations. The random polynomial coefficients generated during Shamir share splitting (`coeff_buf` in `split_raw`) are also wrapped in `Zeroizing` and overwritten when the split operation returns. The per-chunk plaintext buffer inside `PqfReader` uses `Zeroizing<Vec<u8>>` and is explicitly zeroed before each reuse, so decrypted plaintext bytes do not outlive the chunk that produced them.
 
 **Shamir GF(256) constant-time status**
-The `gf_mul` function used in GF(256) Lagrange interpolation has data-dependent branching on its second argument. In the reconstruction path, that argument is always a Lagrange coefficient derived from the public share indices (1-indexed integers), not from the secret `y` bytes. The `y` share values appear only as the first argument, whose XOR contribution is applied unconditionally. As a result, the timing of share reconstruction is determined by the choice of threshold and total count, not by the actual secret material. This is documented in the source.
+Both GF(256) arithmetic primitives used in Lagrange interpolation are branchless. `gf_mul` uses mask idioms (`0u8.wrapping_sub(bit)`) so execution time does not depend on either argument; the loop runs exactly 8 iterations for all inputs. `gf_inv` is implemented as a fixed 7-squaring chain computing `x^254` with no conditional branches and no early exit; execution time is identical for all non-zero inputs. A standalone `dudect` statistical benchmark (`cargo run --example ct_shamir -p pqfile`) and a fast sanity test (`cargo test --features timing-tests`) are provided to verify both functions locally.
 
 **Multi-recipient security**
 In v4 format, a random 32-byte session key K encrypts the file payload. Each recipient's copy of K is wrapped under their KEM shared secret using AES-256-GCM with a zero nonce. The zero nonce is safe because each KEM shared secret is fresh and unique per encapsulation. A recipient with a non-matching key cannot distinguish a file addressed to them from one addressed to others.

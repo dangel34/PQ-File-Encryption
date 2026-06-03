@@ -4,6 +4,62 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [4.1.1] - 2026-06-02
+
+### Security
+
+- **`gf_inv` constant-time fix** (`shamir.rs`): The field inversion helper previously used a data-dependent exponentiation loop that ran a variable number of iterations depending on secret share bytes. It has been replaced with a fixed 7-squaring chain (`x^254 = x^128 * x^64 * x^32 * x^16 * x^8 * x^4 * x^2`) that runs identically for all non-zero inputs. `gf_pow` was removed entirely.
+- **`find_session_key` timing oracle closed** (`decrypt.rs`): In the v4/v7 multi-recipient path, the function previously returned early on the first successful slot, revealing via timing which slot position matched. It now iterates every same-variant entry and stores the first success, matching the behavior of `find_session_key_v8`.
+- **`signdecrypt` CLI stdout path hardened** (`main.rs`): `pqfile signdecrypt` writing to stdout previously streamed plaintext before the ML-DSA signature was verified. The stdout path now buffers into a `Zeroizing<Vec<u8>>` and writes to stdout only after `signdecrypt` returns `Ok(())`. File output paths were already safe via `AtomicOutput`.
+- **Shamir polynomial coefficients zeroized** (`shamir.rs`): `coeff_buf` in `split_raw` was a plain `Vec<u8>` holding the random polynomial coefficients used during share generation. It is now wrapped in `Zeroizing`, so the coefficients are overwritten when the split operation returns.
+- **Decompression bomb protection** (`decrypt.rs`): v6 (compress-then-encrypt) decompression now feeds the zstd decoder through a new `LimitedWriter` that returns an error if decoded output exceeds `original_size` (or `MAX_ORIGINAL_SIZE` when `original_size` is zero). Previously a crafted file with a tiny compressed payload could expand the decoder output without bound.
+- **`PqfReader` streaming plaintext zeroized** (`reader.rs`): The per-chunk plaintext buffer in `ReaderState::Streaming` has been changed from `Vec<u8>` to `Zeroizing<Vec<u8>>`. `zeroize()` is called on the buffer before each reuse, ensuring decrypted bytes are overwritten before the next chunk fills the same allocation.
+
+### Bug fixes
+
+- **`pqfile doctor` legacy key detection** (`main.rs`): `doctor_key` previously used a dummy passphrase when probing whether a key was encrypted with the legacy p=1 Argon2id parameters, so the probe always failed and `legacy_argon2_p1` was always reported as false. It now calls `maybe_prompt_passphrase` to obtain the real passphrase before probing. p=1 keys are now reliably identified.
+- **Parallel decrypt `Truncated` error** (`decrypt.rs`): `decrypt_stream_parallel` returned `PqfileError::DecryptionFailure` for streams that ended without a final chunk. It now returns `PqfileError::Truncated` when `is_last && counter > 0`, matching the behavior of the serial path and `PqfReader`.
+
+### Improvements
+
+- **`PqfWriter` drop guard** (`writer.rs`): `PqfWriter::drop` now panics in debug builds (`#[cfg(debug_assertions)]`) when `finish()` was not called, surfacing forgotten finish calls during development. Release builds keep the previous best-effort seal-on-drop behavior.
+- **`encrypt_mmap` sequential prefetch hint** (`encrypt.rs`): `mmap.advise(Advice::Sequential)` is now called on Unix after the mapping is created, hinting to the kernel that pages will be read linearly and allowing readahead to reduce page-fault stalls during encryption.
+- **`AtomicOutput` directory fsync** (`main.rs`): `AtomicOutput::commit` now opens and fsyncs the parent directory on Unix after the rename, ensuring the directory entry is durable on power loss and not just the file data.
+- **`archive::create_from_memory` single buffer** (`archive.rs`): Entry data is now appended to one contiguous `Vec<u8>` instead of cloning each entry into a separate allocation, roughly halving peak memory for multi-file in-memory archives.
+- **`json_escape` control character coverage** (`main.rs`): Characters U+0001 through U+001F (other than `\n`, `\r`, `\t`) were previously written unescaped, producing invalid JSON on any control character in an error message or filename. They are now escaped as `\uXXXX`.
+
+---
+
+## [4.1.0] - 2026-06-02
+
+### New features
+
+- **`PqfWriter<W: Write>`**: streaming encryptor in `pqfile::writer`. Buffers plaintext in `write()`, seals the final chunk in `finish()`, and makes a best-effort seal on drop. Completes Read/Write symmetry with `PqfReader`.
+- **`AsyncPqfWriter<W: AsyncWrite + Unpin>`**: async streaming encryptor in `pqfile::async_io` (feature `"async"`). Accepts plaintext via `AsyncWrite::write`, seals on `finish()` or `poll_shutdown()`.
+- **`encrypt_stream_pipelined`**: overlaps disk reads and AEAD encryption using a bounded two-buffer producer/consumer channel. Eliminates CPU idle time on I/O-bound storage. CLI `--pipeline` flag.
+- **`encrypt_mmap`**: zero-copy encrypt via memory-mapped I/O (`memmap2`). Native builds only. CLI `--mmap` flag.
+- **`encrypt_stream_multi_anon_padded`**: v9 format. Pads the recipient list to the next power of two with random dummy slots so an observer learns only 1/2/4/8/... slots exist, not the exact count. CLI `--pad-recipients` flag.
+- **Adaptive chunk sizing**: `format::adaptive_chunk_size(file_size)` returns 16 KiB for files under 1 MiB, 256 KiB for files over 256 MiB, and 64 KiB otherwise. CLI `--chunk-size 0` (the new default) triggers auto-tune. The chosen size is stored in v5 format.
+- **Atomic output writes**: all CLI file writes now use `AtomicOutput` (temp file + rename + fsync). A killed process leaves no partial artifact.
+- **Structured JSON error codes**: every JSON error response includes `"code": N`. A 21-entry stable code table is defined in `docs/ERROR_CODES.md`.
+- **`pqfile doctor`**: new CLI subcommand. Inspects a PEM key or `.pqf` file and reports passphrase status, hardware/legacy detection, revocation sidecar presence, format version, and header sanity without decryption.
+- **`PqfileError::Truncated`**: returned when a streaming decrypt ends without a final chunk (clean truncation rather than corruption). `PqfReader` surfaces it as `io::ErrorKind::UnexpectedEof`.
+- **Cross-version compatibility matrix**: golden ciphertext files for all format versions (v2 through v8) committed to `pqfile/tests/compat/`. Eleven roundtrip tests run on every CI push.
+- **Property-based tests** (`proptest`): `pqfile/tests/property.rs` covers encrypt/decrypt roundtrip, single-byte tamper detection, and Shamir split/reconstruct invariants.
+- **Mutation testing CI**: `.github/workflows/mutants.yml` runs weekly against `decrypt.rs`, `format.rs`, `shamir.rs`, and `passphrase.rs`.
+
+### Security
+
+- **GF(256) constant-time fix** (`shamir.rs`): `gf_mul` previously had a data-dependent branch (`if high != 0 { a ^= 0x1B; }`) that could leak bits of the secret share value `yj` through timing. Both conditionals are now replaced with branchless mask idioms (`a = (a << 1) ^ (0x1B & 0u8.wrapping_sub(a >> 7))`). The loop runs exactly 8 iterations for all inputs. A `dudect` statistical benchmark and a `--features timing-tests` unit test are provided for local verification.
+- **Key commitment in chunk-0 AAD**: the first AEAD chunk now includes `SHA3-256("pqfile-session-key-commitment" || session_key)` as additional data, binding each file to the specific session key. Prevents KEM ciphertext substitution and multi-key collision attacks. Static test vectors regenerated.
+- **Header validation hardening**: `original_size > 1 TiB` is rejected at parse time. Recipient count cap lowered from 1000 to 256 and extracted as a named module constant.
+
+### Bug fixes
+
+- `PqfReader` now emits `io::ErrorKind::UnexpectedEof` (wrapping `PqfileError::Truncated`) for mid-stream truncation rather than a generic authentication failure.
+
+---
+
 ## [4.0.0] - 2026-06-01
 
 ### Breaking changes

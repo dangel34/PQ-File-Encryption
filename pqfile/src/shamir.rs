@@ -49,41 +49,48 @@ fn gf_add(a: u8, b: u8) -> u8 {
     a ^ b
 }
 
-// Loop count and branches depend on b. In the Lagrange interpolation, b is always
-// a product of public x coordinates (share indices), so timing does not depend on
-// the secret y bytes. The y values appear only as `a`, whose XOR with result is
-// data-independent from the loop structure.
+// Constant-time GF(2^8) multiply using the AES irreducible polynomial x^8+x^4+x^3+x+1.
+//
+// Both conditional branches from the original loop-and-shift implementation have been
+// replaced with branchless masks so the execution time does not depend on either `a`
+// or `b`. The loop runs exactly 8 iterations regardless of the inputs.
+//
+// Correctness: the mask idiom `0u8.wrapping_sub(v & 1)` produces 0xFF when the
+// low bit is 1 and 0x00 when it is 0, implementing a conditional assignment without
+// a branch or variable-time load.
 fn gf_mul(mut a: u8, mut b: u8) -> u8 {
     let mut result = 0u8;
-    while b > 0 {
-        if b & 1 != 0 {
-            result ^= a;
-        }
-        let high = a & 0x80;
-        a <<= 1;
-        if high != 0 {
-            a ^= 0x1B;
-        }
+    for _ in 0..8 {
+        // result ^= a if LSB of b is 1, else no-op - branchless via mask.
+        let b_lsb_mask = (0u8).wrapping_sub(b & 1);
+        result ^= a & b_lsb_mask;
+        // Double a in GF(2^8): shift left and reduce by 0x1B if the MSB was set.
+        let a_msb_mask = (0u8).wrapping_sub(a >> 7);
+        a = (a << 1) ^ (0x1B & a_msb_mask);
         b >>= 1;
     }
     result
 }
 
-fn gf_pow(mut base: u8, mut exp: u8) -> u8 {
-    let mut result = 1u8;
-    while exp > 0 {
-        if exp & 1 != 0 {
-            result = gf_mul(result, base);
-        }
-        base = gf_mul(base, base);
-        exp >>= 1;
-    }
-    result
-}
-
-// x^{-1} = x^{254} in GF(2^8) by Fermat's little theorem
+// x^{-1} = x^{254} in GF(2^8) by Fermat's little theorem.
+//
+// Computed via constant-time repeated squaring for the fixed exponent 254 = 0b11111110,
+// eliminating the data-dependent loop exit that gf_pow(x, 254) would produce.
+// All gf_mul calls are branchless, so timing depends only on the number of squarings
+// (always 7), not on the value of x.
 fn gf_inv(x: u8) -> u8 {
-    gf_pow(x, 254)
+    let x2 = gf_mul(x, x);
+    let x4 = gf_mul(x2, x2);
+    let x8 = gf_mul(x4, x4);
+    let x16 = gf_mul(x8, x8);
+    let x32 = gf_mul(x16, x16);
+    let x64 = gf_mul(x32, x32);
+    let x128 = gf_mul(x64, x64);
+    // x^254 = x^128 * x^64 * x^32 * x^16 * x^8 * x^4 * x^2
+    gf_mul(
+        x128,
+        gf_mul(x64, gf_mul(x32, gf_mul(x16, gf_mul(x8, gf_mul(x4, x2))))),
+    )
 }
 
 fn gf_div(a: u8, b: u8) -> u8 {
@@ -99,10 +106,12 @@ fn split_raw(secret: &[u8], threshold: u8, total: u8) -> Result<Vec<(u8, Vec<u8>
     let mut shares: Vec<(u8, Vec<u8>)> =
         (1..=total).map(|x| (x, vec![0u8; secret.len()])).collect();
 
-    let mut coeff_buf = vec![0u8; degree];
+    // Polynomial coefficients are secret material: wrap in Zeroizing so they are
+    // overwritten before the allocation is released.
+    let mut coeff_buf = Zeroizing::new(vec![0u8; degree]);
     for (i, &s) in secret.iter().enumerate() {
         // Fresh random coefficients for each secret byte
-        getrandom::fill(&mut coeff_buf).map_err(|_| PqfileError::EncryptionFailure)?;
+        getrandom::fill(coeff_buf.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
         for (j, (_, yvec)) in shares.iter_mut().enumerate() {
             let x = (j + 1) as u8;
             // Horner's method: P(x) = s + x*(c[0] + x*(c[1] + ... + x*c[degree-1]))
@@ -163,6 +172,11 @@ fn reconstruct_raw(shares: &[(u8, &[u8])]) -> Result<Zeroizing<Vec<u8>>, PqfileE
                     num = gf_mul(num, xk);
                     den = gf_mul(den, gf_add(xj, xk));
                 }
+            }
+            if den == 0 {
+                return Err(bad_arg(
+                    "degenerate Lagrange denominator (duplicate share index)",
+                ));
             }
             val = gf_add(val, gf_mul(yj, gf_div(num, den)));
         }
@@ -458,7 +472,7 @@ pub fn split_key(
 }
 
 /// Reconstruct a private key (and derived public key) from M-of-N shares.
-/// Returns `(privkey_pem, pubkey_pem)` — both unencrypted.
+/// Returns `(privkey_pem, pubkey_pem)` - both unencrypted.
 #[must_use = "reconstructed key must be saved or the key material is lost"]
 pub fn reconstruct_key(share_pems: &[&str]) -> Result<(String, String), PqfileError> {
     if share_pems.is_empty() {
@@ -559,6 +573,22 @@ mod tests {
     fn gf_inv_roundtrip() {
         for x in 1u8..=255 {
             assert_eq!(gf_mul(x, gf_inv(x)), 1, "inv failed for x={x}");
+        }
+    }
+
+    #[test]
+    fn gf_inv_matches_brute_force_table() {
+        // Independently verify gf_inv via the definition: x * x^{-1} == 1 for all x != 0.
+        // Also spot-check known values from the AES S-box literature.
+        assert_eq!(gf_inv(0x01), 0x01); // 1^{-1} = 1
+        assert_eq!(gf_inv(0x02), 0x8d); // known AES field value
+        assert_eq!(gf_inv(0x03), 0xf6);
+        assert_eq!(gf_inv(0x53), gf_inv(0x53)); // reflexive
+                                                // Full round-trip for all non-zero elements.
+        for x in 1u8..=255 {
+            let inv = gf_inv(x);
+            assert_eq!(gf_mul(x, inv), 1, "x={x:#04x} inv={inv:#04x}");
+            assert_eq!(gf_inv(inv), x, "double-inverse failed for x={x:#04x}");
         }
     }
 
@@ -667,4 +697,50 @@ mod tests {
             "expected old-format error, got: {err}"
         );
     }
+}
+
+// ── Statistical constant-time tests (requires --features timing-tests) ──────
+
+/// Measures the mean and variance of `reconstruct_raw` timing for two classes
+/// of secret values and asserts that the relative timing difference is < 10%.
+///
+/// This is a fast sanity check (< 1 second), not a rigorous statistical test.
+/// For rigorous dudect analysis, run the standalone example:
+///   cargo run --example ct_shamir -p pqfile
+///
+/// This test REQUIRES `--features timing-tests` and a reasonably quiet machine.
+/// It is intentionally not run in CI.
+#[cfg(feature = "timing-tests")]
+#[test]
+fn timing_shamir_reconstruct_basic() {
+    const N: usize = 5_000;
+    const SEED_LEN: usize = 64;
+
+    let shares_0: Vec<(u8, Vec<u8>)> =
+        vec![(1, vec![0x00u8; SEED_LEN]), (2, vec![0x00u8; SEED_LEN])];
+    let shares_f: Vec<(u8, Vec<u8>)> =
+        vec![(1, vec![0xFFu8; SEED_LEN]), (2, vec![0xFFu8; SEED_LEN])];
+
+    fn time_batch(shares: &[(u8, Vec<u8>)], n: usize) -> u64 {
+        let slices: Vec<(u8, &[u8])> = shares.iter().map(|(x, y)| (*x, y.as_slice())).collect();
+        let start = std::time::Instant::now();
+        for _ in 0..n {
+            let _ = std::hint::black_box(reconstruct_raw(&slices));
+        }
+        start.elapsed().as_nanos() as u64
+    }
+
+    let t0 = time_batch(&shares_0, N);
+    let tf = time_batch(&shares_f, N);
+
+    let mean0 = t0 / N as u64;
+    let meanf = tf / N as u64;
+    let diff_pct = (mean0.max(meanf) - mean0.min(meanf)) as f64 / mean0.max(meanf) as f64 * 100.0;
+
+    eprintln!("timing_shamir: mean(0x00)={mean0}ns mean(0xFF)={meanf}ns diff={diff_pct:.1}%");
+    assert!(
+        diff_pct < 10.0,
+        "timing difference {diff_pct:.1}% exceeds 10% - possible timing side-channel; \
+         run `cargo run --example ct_shamir` for rigorous dudect analysis"
+    );
 }

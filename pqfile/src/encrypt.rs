@@ -15,18 +15,18 @@ use crate::error::PqfileError;
 use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
 
 use crate::format::{
-    chunk_aad, chunk_nonce, fill_chunk, hybrid_hkdf, PqfHeader, PqfHeaderV4, PqfHeaderV8,
-    RecipientEntryV4, RecipientEntryV8, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, EK_LEN_1024,
-    EK_LEN_512, EK_LEN_768, HEADER_LEN_768, HYBRID_CT_LEN_768, HYBRID_EK_LEN_768, KEM_VARIANT_1024,
-    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, PADDED_CT_LEN, VERSION,
-    VERSION_V3, VERSION_V5, WRAPPED_KEY_LEN,
+    chunk_nonce, compute_key_commitment, fill_chunk, hybrid_hkdf, make_chunk_aad, PqfHeader,
+    PqfHeaderV4, PqfHeaderV8, RecipientEntryV4, RecipientEntryV8, BASE_NONCE_LEN, CHUNK_SIZE,
+    COMPRESSION_NONE, EK_LEN_1024, EK_LEN_512, EK_LEN_768, HEADER_LEN_768, HYBRID_CT_LEN_768,
+    HYBRID_EK_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
+    NONCE_LEN, PADDED_CT_LEN, VERSION, VERSION_V3, VERSION_V5, VERSION_V9, WRAPPED_KEY_LEN,
 };
 // Used only in the native compressed-encrypt path and its tests.
 #[cfg(not(target_arch = "wasm32"))]
 use crate::format::{COMPRESSION_ZSTD, VERSION_V6};
 use crate::keygen::{PUB_TAG, PUB_TAG_1024, PUB_TAG_512, PUB_TAG_HYBRID_768};
 
-enum EkVariant {
+pub(crate) enum EkVariant {
     Kem512(EncapsulationKey512),
     Kem768(EncapsulationKey768),
     Kem1024(EncapsulationKey1024),
@@ -121,16 +121,24 @@ pub fn encrypt_stream(
         compression_algo: COMPRESSION_NONE,
     };
     header.write(writer)?;
+    let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
 
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = Key::from_slice(ss_bytes.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
-    encrypt_chunks(&cipher, base_nonce, chunk_size, reader, writer)
+    encrypt_chunks(
+        &cipher,
+        base_nonce,
+        chunk_size,
+        &key_commitment,
+        reader,
+        writer,
+    )
 }
 
-fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u16), PqfileError> {
+pub(crate) fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u16), PqfileError> {
     let pem = pem::parse(pubkey_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
     let raw = pem.contents();
     match pem.tag() {
@@ -192,7 +200,7 @@ fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u16), PqfileE
     }
 }
 
-fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>), PqfileError> {
+pub(crate) fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>), PqfileError> {
     match ek {
         EkVariant::Kem512(ek) => {
             let (ct, ss) = ek.encapsulate();
@@ -270,20 +278,28 @@ pub fn encrypt_stream_multi(
         original_size,
     };
     header.write(writer)?;
+    let key_commitment = compute_key_commitment(session_key.as_ref(), &nonce_bytes, original_size);
 
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
-    encrypt_chunks(&cipher, base_nonce, CHUNK_SIZE, reader, writer)
+    encrypt_chunks(
+        &cipher,
+        base_nonce,
+        CHUNK_SIZE,
+        &key_commitment,
+        reader,
+        writer,
+    )
 }
 
 /// Encrypts a stream to multiple recipients in anonymous (v8) format.
 ///
 /// All KEM ciphertexts are zero-padded to `PADDED_CT_LEN` (1568 bytes) and the
 /// per-slot KEM variant field is omitted entirely. Entries are written in a randomly
-/// shuffled order. An observer learns only the recipient count — no key-type
+/// shuffled order. An observer learns only the recipient count - no key-type
 /// information is exposed. Supersedes v7 anonymous mode.
 #[must_use = "encryption result must be used"]
 pub fn encrypt_stream_multi_anon(
@@ -335,13 +351,110 @@ pub fn encrypt_stream_multi_anon(
         original_size,
     };
     header.write(writer)?;
+    let key_commitment = compute_key_commitment(session_key.as_ref(), &nonce_bytes, original_size);
 
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
     let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
     let cipher = ChaCha20Poly1305::new(key);
-    encrypt_chunks(&cipher, base_nonce, CHUNK_SIZE, reader, writer)
+    encrypt_chunks(
+        &cipher,
+        base_nonce,
+        CHUNK_SIZE,
+        &key_commitment,
+        reader,
+        writer,
+    )
+}
+
+/// Like [`encrypt_stream_multi_anon`] but pads the recipient list to the next power
+/// of two by inserting random dummy slots (v9 format).
+///
+/// An observer can determine only that there are 1, 2, 4, 8, … recipient slots,
+/// not how many are real. Dummy slots consist of random bytes and will fail both
+/// KEM decapsulation and AES-GCM tag verification, so the decryptor skips them
+/// silently.
+///
+/// Use this when the exact recipient count is itself sensitive information.
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_multi_anon_padded(
+    pubkey_pems: &[&str],
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let mut session_key = Zeroizing::new([0u8; 32]);
+    getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let mut recipients: Vec<RecipientEntryV8> = Vec::with_capacity(pubkey_pems.len());
+    for pubkey_pem in pubkey_pems {
+        let (ek, _kem_variant) = parse_encapsulation_key(pubkey_pem)?;
+        let (kem_ct, ss) = encapsulate(ek)?;
+        let wrapped_key = wrap_session_key(&session_key, &ss)?;
+        let mut padded_ct = [0u8; PADDED_CT_LEN];
+        padded_ct[..kem_ct.len()].copy_from_slice(&kem_ct);
+        recipients.push(RecipientEntryV8 {
+            padded_ct,
+            wrapped_key,
+        });
+    }
+
+    // Pad with random dummy slots to the next power of two.
+    let real_count = recipients.len();
+    let padded_count = real_count.next_power_of_two().max(1);
+    for _ in real_count..padded_count {
+        let mut padded_ct = [0u8; PADDED_CT_LEN];
+        let mut wrapped_key = [0u8; WRAPPED_KEY_LEN];
+        getrandom::fill(&mut padded_ct).map_err(|_| PqfileError::EncryptionFailure)?;
+        getrandom::fill(&mut wrapped_key).map_err(|_| PqfileError::EncryptionFailure)?;
+        recipients.push(RecipientEntryV8 {
+            padded_ct,
+            wrapped_key,
+        });
+    }
+
+    // Fisher-Yates shuffle so dummy positions are unpredictable.
+    for i in (1..recipients.len()).rev() {
+        let range = (i + 1) as u64;
+        let threshold = (1u64 << 32) - ((1u64 << 32) % range);
+        let j = loop {
+            let mut r = [0u8; 4];
+            getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
+            let v = u32::from_le_bytes(r) as u64;
+            if v < threshold {
+                break (v % range) as usize;
+            }
+        };
+        recipients.swap(i, j);
+    }
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    // v9 uses the same wire format as v8 but with version byte 0x09.
+    let header = PqfHeaderV8 {
+        recipients,
+        nonce: nonce_bytes,
+        original_size,
+    };
+    header.write_with_version(writer, VERSION_V9)?;
+
+    let key_commitment = compute_key_commitment(session_key.as_ref(), &nonce_bytes, original_size);
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN");
+    let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
+    let cipher = ChaCha20Poly1305::new(key);
+    encrypt_chunks(
+        &cipher,
+        base_nonce,
+        CHUNK_SIZE,
+        &key_commitment,
+        reader,
+        writer,
+    )
 }
 
 /// Encapsulates `session_key` under `pubkey_pem` for use during rekey.
@@ -391,6 +504,7 @@ pub fn encrypt_stream_compressed(
             compression_algo: COMPRESSION_ZSTD,
         };
         header.write(writer)?;
+        let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
 
         let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
             .try_into()
@@ -400,7 +514,14 @@ pub fn encrypt_stream_compressed(
         // Stream through a zstd encoder instead of buffering the full compressed payload.
         let mut zstd_src =
             zstd::stream::read::Encoder::new(reader, compress_level).map_err(PqfileError::Io)?;
-        encrypt_chunks(&cipher, base_nonce, chunk_size, &mut zstd_src, writer)
+        encrypt_chunks(
+            &cipher,
+            base_nonce,
+            chunk_size,
+            &key_commitment,
+            &mut zstd_src,
+            writer,
+        )
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -420,6 +541,7 @@ fn encrypt_chunks(
     cipher: &ChaCha20Poly1305,
     base_nonce: &[u8; BASE_NONCE_LEN],
     chunk_size: usize,
+    key_commitment: &[u8; 32],
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
@@ -431,9 +553,13 @@ fn encrypt_chunks(
         let next_len = fill_chunk(reader, &mut next)?;
         let is_last = next_len == 0;
         let cn = chunk_nonce(base_nonce, counter);
-        let aad = chunk_aad(counter, is_last);
+        let (aad_buf, aad_len) = make_chunk_aad(counter, is_last, key_commitment);
         let tag = cipher
-            .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut current[..current_len])
+            .encrypt_in_place_detached(
+                Nonce::from_slice(&cn),
+                &aad_buf[..aad_len],
+                &mut current[..current_len],
+            )
             .map_err(|_| PqfileError::EncryptionFailure)?;
         writer.write_all(&current[..current_len])?;
         writer.write_all(tag.as_ref())?;
@@ -449,10 +575,287 @@ fn encrypt_chunks(
     Ok(())
 }
 
+/// Memory-maps `source_path` and encrypts its contents without a userspace read buffer.
+///
+/// On large files (100 MiB+) this can improve throughput compared to [`encrypt_stream`]
+/// by eliminating the intermediate copy through the 64 KiB read buffer. The kernel maps
+/// file pages directly into the process address space; the AEAD reads from that mapping.
+///
+/// Only available on native platforms (not WASM). The ciphertext format and structure are
+/// identical to [`encrypt_stream`].
+///
+/// # Example
+///
+/// ```no_run
+/// use pqfile::encrypt::encrypt_mmap;
+/// use pqfile::format::CHUNK_SIZE;
+///
+/// let (pub_pem, priv_pem) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+/// let mut ct = Vec::new();
+/// encrypt_mmap(&pub_pem, std::path::Path::new("large_file.dat"), CHUNK_SIZE, &mut ct).unwrap();
+/// ```
+#[cfg(not(target_arch = "wasm32"))]
+pub fn encrypt_mmap(
+    pubkey_pem: &str,
+    source_path: &std::path::Path,
+    chunk_size: usize,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    if chunk_size == 0 {
+        return Err(PqfileError::EncryptionFailure);
+    }
+    let file = std::fs::File::open(source_path)?;
+    let original_size = file.metadata()?.len();
+
+    let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
+    let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let version = if chunk_size == CHUNK_SIZE {
+        VERSION_V3
+    } else {
+        VERSION_V5
+    };
+    let header = PqfHeader {
+        version,
+        kem_variant,
+        kem_ciphertext: kem_ct_bytes,
+        nonce: nonce_bytes,
+        original_size,
+        chunk_size: chunk_size as u32,
+        compression_algo: COMPRESSION_NONE,
+    };
+    header.write(writer)?;
+    let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
+
+    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN");
+    let key = Key::from_slice(ss_bytes.as_ref());
+    let cipher = ChaCha20Poly1305::new(key);
+
+    if original_size == 0 {
+        // Empty file: emit single zero-length authenticated chunk.
+        return encrypt_chunks(
+            &cipher,
+            &base_nonce,
+            chunk_size,
+            &key_commitment,
+            &mut [].as_ref(),
+            writer,
+        );
+    }
+
+    // SAFETY: The file is opened read-only. We hold a shared mapping; the file
+    // must not be modified concurrently during encryption. If another process
+    // truncates the file between the metadata() call above and reads inside
+    // encrypt_chunks, the OS may deliver SIGBUS on Unix or raise a structured
+    // exception on Windows - this is an inherent mmap caveat and the caller is
+    // responsible for ensuring the source file is stable during the call.
+    let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(PqfileError::Io)?;
+    // Hint to the OS that we will read the mapping sequentially (Unix only).
+    // best-effort: ignore errors.
+    #[cfg(unix)]
+    let _ = mmap.advise(memmap2::Advice::Sequential);
+    encrypt_chunks(
+        &cipher,
+        &base_nonce,
+        chunk_size,
+        &key_commitment,
+        &mut mmap.as_ref(),
+        writer,
+    )
+}
+
+/// Encrypts `plaintext` from `reader` using a two-buffer producer/consumer pipeline:
+/// while one chunk is being encrypted on the CPU, the next chunk is being read from
+/// `reader` concurrently. This can eliminate CPU idle time on I/O-bound workloads
+/// (spinning disks, network-mounted storage).
+///
+/// Produces the same ciphertext as [`encrypt_stream`] - files are interchangeable.
+/// Requires `R: Read + Send + 'static` so the reader can be moved to a background thread.
+///
+/// On I/O-fast hardware (NVMe SSD) the throughput gain is typically small; on latency-
+/// bound storage (spinning disk, NFS) it can double throughput for large files.
+///
+/// # Example
+///
+/// ```no_run
+/// use pqfile::encrypt::encrypt_stream_pipelined;
+/// use pqfile::format::CHUNK_SIZE;
+/// use std::fs::File;
+///
+/// let (pub_pem, priv_pem) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+/// let f = File::open("large_file.dat").unwrap();
+/// let size = f.metadata().unwrap().len();
+/// let mut ct = Vec::new();
+/// encrypt_stream_pipelined(&pub_pem, size, CHUNK_SIZE, f, &mut ct).unwrap();
+/// ```
+pub fn encrypt_stream_pipelined<R>(
+    pubkey_pem: &str,
+    original_size: u64,
+    chunk_size: usize,
+    reader: R,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError>
+where
+    R: Read + Send + 'static,
+{
+    if chunk_size == 0 {
+        return Err(PqfileError::EncryptionFailure);
+    }
+    let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
+    let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let version = if chunk_size == CHUNK_SIZE {
+        VERSION_V3
+    } else {
+        VERSION_V5
+    };
+    let header = PqfHeader {
+        version,
+        kem_variant,
+        kem_ciphertext: kem_ct_bytes,
+        nonce: nonce_bytes,
+        original_size,
+        chunk_size: chunk_size as u32,
+        compression_algo: COMPRESSION_NONE,
+    };
+    header.write(writer)?;
+    let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
+
+    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN");
+    let key = Key::from_slice(ss_bytes.as_ref());
+    let cipher = ChaCha20Poly1305::new(key);
+
+    encrypt_chunks_pipelined(
+        &cipher,
+        &base_nonce,
+        chunk_size,
+        &key_commitment,
+        reader,
+        writer,
+    )
+}
+
+/// Two-buffer pipeline: reader thread fills chunks into a bounded channel while
+/// the main thread encrypts and writes. Channel capacity 2 keeps the reader
+/// one full chunk ahead of the encryptor.
+fn encrypt_chunks_pipelined<R>(
+    cipher: &ChaCha20Poly1305,
+    base_nonce: &[u8; BASE_NONCE_LEN],
+    chunk_size: usize,
+    key_commitment: &[u8; 32],
+    reader: R,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError>
+where
+    R: Read + Send + 'static,
+{
+    use std::sync::mpsc;
+
+    // Each message is Ok((buffer, filled_len)) or Err(io::Error).
+    // A capacity-2 channel lets the reader stay 1 chunk ahead of the encryptor.
+    let (tx, rx) = mpsc::sync_channel::<std::io::Result<(Vec<u8>, usize)>>(2);
+
+    let reader_thread = std::thread::spawn(move || {
+        let mut rdr = reader;
+        loop {
+            let mut buf = vec![0u8; chunk_size];
+            match fill_chunk(&mut rdr, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(Ok((buf, n))).is_err() {
+                        break; // encryptor dropped the receiver (error path)
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(std::io::Error::other(e.to_string())));
+                    break;
+                }
+            }
+        }
+        // Sending nothing more signals end-of-stream to the encryptor.
+    });
+
+    // Receive chunks from the reader and encrypt them.
+    let result = (|| -> Result<(), PqfileError> {
+        let mut counter: u32 = 0;
+        // Buffer current and peek the next to determine is_last.
+        let first = match rx.recv() {
+            Err(_) => {
+                // Empty input: emit a single zero-length chunk.
+                let cn = chunk_nonce(base_nonce, 0);
+                let (aad_buf, aad_len) = make_chunk_aad(0, true, key_commitment);
+                let mut empty: Vec<u8> = Vec::new();
+                let tag = cipher
+                    .encrypt_in_place_detached(
+                        Nonce::from_slice(&cn),
+                        &aad_buf[..aad_len],
+                        &mut empty,
+                    )
+                    .map_err(|_| PqfileError::EncryptionFailure)?;
+                writer.write_all(tag.as_ref())?;
+                return Ok(());
+            }
+            Ok(Err(e)) => return Err(PqfileError::Io(e)),
+            Ok(Ok(msg)) => msg,
+        };
+
+        let mut current = first;
+
+        loop {
+            let next = rx.recv();
+            let is_last = matches!(next, Err(_) | Ok(Ok((_, 0))));
+            let (current_buf, current_len) = &mut current;
+
+            let cn = chunk_nonce(base_nonce, counter);
+            let (aad_buf, aad_len) = make_chunk_aad(counter, is_last, key_commitment);
+            let tag = cipher
+                .encrypt_in_place_detached(
+                    Nonce::from_slice(&cn),
+                    &aad_buf[..aad_len],
+                    &mut current_buf[..*current_len],
+                )
+                .map_err(|_| PqfileError::EncryptionFailure)?;
+            writer.write_all(&current_buf[..*current_len])?;
+            writer.write_all(tag.as_ref())?;
+
+            if is_last {
+                break;
+            }
+            match next {
+                Ok(Ok(msg)) => {
+                    current = msg;
+                }
+                Ok(Err(e)) => return Err(PqfileError::Io(e)),
+                Err(_) => break,
+            }
+            counter = counter
+                .checked_add(1)
+                .ok_or(PqfileError::EncryptionFailure)?;
+        }
+        Ok(())
+    })();
+
+    // Always join the reader thread, even on error, to avoid leaking it.
+    let _ = reader_thread.join();
+    result
+}
+
 /// Wraps `session_key` under `ss` using AES-256-GCM with a zero nonce.
 ///
 /// A fixed zero nonce is safe here because the AES-256-GCM key (`ss`) is a
-/// fresh, single-use KEM shared secret — it is never reused across calls.
+/// fresh, single-use KEM shared secret - it is never reused across calls.
 /// Nonce uniqueness is guaranteed per-key, not per-nonce, so a constant nonce
 /// with a unique key is cryptographically equivalent to a random nonce with a
 /// fixed key. See §5.1 of RFC 5116 for the formal nonce-uniqueness requirement.
@@ -474,7 +877,7 @@ pub(crate) fn wrap_session_key(
 ///
 /// `batch_size` chunks are read, encrypted in parallel, then written in order.
 /// The output format and ciphertext are identical to `encrypt_stream` (same nonce
-/// derivation, same AAD) — parallel vs. serial encryption is transparent to the
+/// derivation, same AAD) - parallel vs. serial encryption is transparent to the
 /// decryptor.
 ///
 /// Falls back to [`encrypt_stream`] for `batch_size` == 1.
@@ -523,6 +926,7 @@ pub fn encrypt_stream_parallel(
         compression_algo: COMPRESSION_NONE,
     };
     header.write(writer)?;
+    let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
 
     let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into().unwrap();
     let key_bytes = Zeroizing::new(*ss_bytes);
@@ -533,10 +937,10 @@ pub fn encrypt_stream_parallel(
     if first_len == 0 {
         // Empty input: emit a single empty authenticated last chunk
         let cn = chunk_nonce(&base_nonce, 0);
-        let aad = chunk_aad(0, true);
+        let (aad_buf, aad_len) = make_chunk_aad(0, true, &key_commitment);
         let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
         let tag = cipher
-            .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad, &mut [])
+            .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad_buf[..aad_len], &mut [])
             .map_err(|_| PqfileError::EncryptionFailure)?;
         writer.write_all(tag.as_ref())?;
         return Ok(());
@@ -574,6 +978,7 @@ pub fn encrypt_stream_parallel(
         let batch_len = batch.len();
         let batch_start = counter;
 
+        // key_commitment is [u8; 32] (Copy) - captured by value in closure.
         let results: Vec<Result<_, PqfileError>> = batch
             .into_par_iter()
             .enumerate()
@@ -583,12 +988,12 @@ pub fn encrypt_stream_parallel(
                     .ok_or(PqfileError::EncryptionFailure)?;
                 let is_last = batch_is_final && i == batch_len - 1;
                 let cn = chunk_nonce(&base_nonce, c);
-                let aad = chunk_aad(c, is_last);
+                let (aad_buf, aad_len) = make_chunk_aad(c, is_last, &key_commitment);
                 let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
                 let tag = cipher
                     .encrypt_in_place_detached(
                         Nonce::from_slice(&cn),
-                        &aad,
+                        &aad_buf[..aad_len],
                         &mut chunk[..chunk_len],
                     )
                     .map_err(|_| PqfileError::EncryptionFailure)?;
@@ -619,6 +1024,7 @@ pub fn encrypt_stream_parallel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decrypt::decrypt_stream;
     use crate::keygen::keygen_bytes;
 
     fn keypair() -> (String, String) {
@@ -898,6 +1304,131 @@ mod tests {
         let (pub_pem, priv_pem) = keypair();
         let mut ct = Vec::new();
         encrypt_stream_parallel(&pub_pem, 0, CHUNK_SIZE, 4, &mut [].as_slice(), &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn pipelined_encrypt_empty_input_decrypts_correctly() {
+        use std::io::Cursor;
+        let (pub_pem, priv_pem) = keypair();
+        let mut ct = Vec::new();
+        encrypt_stream_pipelined(
+            &pub_pem,
+            0,
+            CHUNK_SIZE,
+            Cursor::new(Vec::<u8>::new()),
+            &mut ct,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn pipelined_encrypt_small_input_decrypts_correctly() {
+        use std::io::Cursor;
+        let (pub_pem, priv_pem) = keypair();
+        let plaintext = b"pipelined encrypt small input";
+        let mut ct = Vec::new();
+        encrypt_stream_pipelined(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            Cursor::new(plaintext.to_vec()),
+            &mut ct,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext.as_ref());
+    }
+
+    #[test]
+    fn pipelined_encrypt_multi_chunk_decrypts_correctly() {
+        use std::io::Cursor;
+        let (pub_pem, priv_pem) = keypair();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 3 + 77).collect();
+        let mut ct = Vec::new();
+        encrypt_stream_pipelined(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            Cursor::new(plaintext.clone()),
+            &mut ct,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn pipelined_ciphertext_matches_serial() {
+        use std::io::Cursor;
+        let (pub_pem, priv_pem) = keypair();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE + 50).collect();
+        let mut ct = Vec::new();
+        encrypt_stream_pipelined(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            Cursor::new(plaintext.clone()),
+            &mut ct,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn encrypt_mmap_roundtrip_small() {
+        use crate::encrypt::encrypt_mmap;
+        use std::io::Write as IoWrite;
+        use tempfile::NamedTempFile;
+        let (pub_pem, priv_pem) = keypair();
+        let plaintext = b"mmap roundtrip small test";
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(plaintext).unwrap();
+        tmp.flush().unwrap();
+        let mut ct = Vec::new();
+        encrypt_mmap(&pub_pem, tmp.path(), CHUNK_SIZE, &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn encrypt_mmap_roundtrip_multi_chunk() {
+        use crate::encrypt::encrypt_mmap;
+        use std::io::Write as IoWrite;
+        use tempfile::NamedTempFile;
+        let (pub_pem, priv_pem) = keypair();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 2 + 33).collect();
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(&plaintext).unwrap();
+        tmp.flush().unwrap();
+        let mut ct = Vec::new();
+        encrypt_mmap(&pub_pem, tmp.path(), CHUNK_SIZE, &mut ct).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn encrypt_mmap_empty_file() {
+        use crate::encrypt::encrypt_mmap;
+        use tempfile::NamedTempFile;
+        let (pub_pem, priv_pem) = keypair();
+        let tmp = NamedTempFile::new().unwrap();
+        let mut ct = Vec::new();
+        encrypt_mmap(&pub_pem, tmp.path(), CHUNK_SIZE, &mut ct).unwrap();
         let mut out = Vec::new();
         decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
         assert!(out.is_empty());

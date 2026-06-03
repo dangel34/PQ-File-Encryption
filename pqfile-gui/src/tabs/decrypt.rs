@@ -3,11 +3,12 @@ use crate::colors::{
     c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1,
     c_text,
 };
-use crate::types::{OpStatus, Tab};
+use crate::types::{KeyDragPayload, OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_pqf;
 use crate::widgets::{
-    card, file_row, pick_pqf_files, save_result, section_label, show_status, tab_heading_help,
+    card, file_row, pick_pqf_files, save_result, scrollable_list, section_label, show_status,
+    tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::{decrypt, keygen};
@@ -31,6 +32,7 @@ impl PqfileApp {
             }
         };
         self.decrypt_status = OpStatus::None;
+        self.decrypt_batch_summary = None;
 
         let passphrase: Option<String> = if self.decrypt_passphrase.is_empty() {
             None
@@ -155,6 +157,27 @@ impl PqfileApp {
 
         // ── Private key ───────────────────────────────────────────────────────
         section_label(ui, "PRIVATE KEY", dark);
+        // Accept drag-drop of private key from the Keys panel (native only).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (drop_resp, payload) =
+                ui.dnd_drop_zone::<std::sync::Arc<KeyDragPayload>, _>(egui::Frame::NONE, |_ui| {});
+            if drop_resp.response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+            }
+            if let Some(payload) = payload {
+                if let Some(ref priv_path) = payload.priv_path {
+                    if let Ok(data) = std::fs::read(priv_path) {
+                        self.decrypt_privkey.name = priv_path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "privkey.pem".to_owned());
+                        self.decrypt_privkey.data = Some(data);
+                        self.decrypt_privkey.path = Some(priv_path.clone());
+                    }
+                }
+            }
+        }
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             file_row(
                 ui,
@@ -236,57 +259,126 @@ impl PqfileApp {
                     {
                         pick_folder_pqf(std::sync::Arc::clone(&self.decrypt_batch_pending));
                     }
+                    if !job_running
+                        && !self.decrypt_files.is_empty()
+                        && ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Clear all").size(12.0).color(c_subtext(dark)),
+                                )
+                                .fill(Color32::TRANSPARENT),
+                            )
+                            .clicked()
+                    {
+                        self.decrypt_files.clear();
+                        self.decrypt_batch_summary = None;
+                    }
                 });
             });
 
+            // Recent .pqf files when the list is empty (native only).
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.decrypt_files.is_empty()
+                && !job_running
+                && !self.recent_decrypt_files.is_empty()
+            {
+                ui.add_space(6.0);
+                ui.label(RichText::new("Recent:").size(11.5).color(c_subtext(dark)));
+                let mut to_add: Option<std::path::PathBuf> = None;
+                for path_str in self.recent_decrypt_files.iter().take(5) {
+                    let path = std::path::Path::new(path_str);
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path_str.clone());
+                    if path.exists()
+                        && ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(&name).size(12.0).color(c_text(dark)),
+                                )
+                                .fill(Color32::TRANSPARENT),
+                            )
+                            .on_hover_text(path_str.as_str())
+                            .clicked()
+                    {
+                        to_add = Some(path.to_path_buf());
+                    }
+                }
+                if let Some(p) = to_add {
+                    if let Ok(data) = std::fs::read(&p) {
+                        let name = p
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        self.decrypt_files.push(crate::types::MultiFileEntry {
+                            name,
+                            data,
+                            path: Some(p),
+                            status: crate::types::OpStatus::None,
+                        });
+                    }
+                }
+            }
+
             if !self.decrypt_files.is_empty() {
                 ui.add_space(6.0);
-                for (i, entry) in self.decrypt_files.iter().enumerate() {
-                    let mut remove = false;
-                    let w = ui.available_width();
-                    ui.allocate_ui(egui::vec2(w, 22.0), |ui| {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.label(RichText::new(&entry.name).size(13.0).color(c_text(dark)));
+                scrollable_list(ui, 154.0, c_card(dark), |ui| {
+                    for (i, entry) in self.decrypt_files.iter().enumerate() {
+                        let mut remove = false;
+                        let w = ui.available_width();
+                        ui.allocate_ui(egui::vec2(w, 22.0), |ui| {
                             ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
+                                egui::Layout::left_to_right(egui::Align::Center),
                                 |ui| {
-                                    if !job_running {
-                                        remove = ui
-                                            .add(
-                                                egui::Button::new(
-                                                    RichText::new("x")
-                                                        .size(11.0)
-                                                        .color(c_overlay(dark)),
-                                                )
-                                                .fill(Color32::TRANSPARENT)
-                                                .stroke(Stroke::NONE),
-                                            )
-                                            .clicked();
-                                    }
-                                    match &entry.status {
-                                        OpStatus::None => {}
-                                        OpStatus::Ok(_) => {
-                                            ui.label(
-                                                RichText::new("OK").size(12.0).color(c_green(dark)),
-                                            );
-                                        }
-                                        OpStatus::Err(m) => {
-                                            let display: String = m.chars().take(32).collect();
-                                            ui.label(
-                                                RichText::new(display)
-                                                    .size(12.0)
-                                                    .color(c_red(dark)),
-                                            );
-                                        }
-                                    }
+                                    ui.label(
+                                        RichText::new(&entry.name).size(13.0).color(c_text(dark)),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if !job_running {
+                                                remove = ui
+                                                    .add(
+                                                        egui::Button::new(
+                                                            RichText::new("x")
+                                                                .size(11.0)
+                                                                .color(c_overlay(dark)),
+                                                        )
+                                                        .fill(Color32::TRANSPARENT)
+                                                        .stroke(Stroke::NONE),
+                                                    )
+                                                    .clicked();
+                                            }
+                                            match &entry.status {
+                                                OpStatus::None => {}
+                                                OpStatus::Ok(_) => {
+                                                    ui.label(
+                                                        RichText::new("OK")
+                                                            .size(12.0)
+                                                            .color(c_green(dark)),
+                                                    );
+                                                }
+                                                OpStatus::Err(m) => {
+                                                    let display: String =
+                                                        m.chars().take(32).collect();
+                                                    ui.label(
+                                                        RichText::new(display)
+                                                            .size(12.0)
+                                                            .color(c_red(dark)),
+                                                    );
+                                                }
+                                            }
+                                        },
+                                    );
                                 },
                             );
                         });
-                    });
-                    if remove && to_remove.is_none() {
-                        to_remove = Some(i);
+                        if remove && to_remove.is_none() {
+                            to_remove = Some(i);
+                        }
                     }
-                }
+                });
             }
         });
 
@@ -351,6 +443,18 @@ impl PqfileApp {
                         .color(c_subtext(dark)),
                 );
             }
+        }
+
+        // Batch operation summary
+        if let Some(ref summary) = self.decrypt_batch_summary.clone() {
+            ui.add_space(6.0);
+            let has_fail = summary.contains("failed");
+            let color = if has_fail {
+                c_subtext(dark)
+            } else {
+                c_green(dark)
+            };
+            ui.label(RichText::new(summary.as_str()).size(12.5).color(color));
         }
 
         show_status(ui, &self.decrypt_status, dark);

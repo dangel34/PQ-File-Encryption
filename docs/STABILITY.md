@@ -30,7 +30,7 @@ surface.
 
 | Module | What is stable |
 |--------|----------------|
-| `pqfile::encrypt` | `encrypt_bytes`, `encrypt_stream`, `encrypt_stream_multi`, `encrypt_stream_multi_anon`, `encrypt_stream_compressed`, `encrypt_stream_parallel` |
+| `pqfile::encrypt` | `encrypt_bytes`, `encrypt_stream`, `encrypt_stream_multi`, `encrypt_stream_multi_anon`, `encrypt_stream_multi_anon_padded`, `encrypt_stream_compressed`, `encrypt_stream_parallel`, `encrypt_stream_pipelined`, `encrypt_mmap` (native only) |
 | `pqfile::decrypt` | `decrypt_bytes`, `decrypt_stream`, `decrypt_stream_parallel` |
 | `pqfile::sign` | `sign_keygen`, `sign_keygen_bytes`, `sign_keygen_hardware`, `sign_keygen_hardware_bytes`, `sign_bytes`, `sign_file`, `verify_bytes`, `verify_file`, `encode_sig_pem`, `decode_sig_pem`, `default_sig_path`, `SignKeygenResult` |
 | `pqfile::signcrypt` | `signcrypt`, `signcrypt_bytes`, `signdecrypt` |
@@ -38,22 +38,22 @@ surface.
 | `pqfile::keys` | `PqfPublicKey`, `PqfPrivateKey`, `PqfSigningKey`, `PqfVerifyingKey` and all their methods |
 | `pqfile::inspect` | `inspect_stream`, `PqfHeaderInfo`, `RecipientInfo`, `PqfInfo` |
 | `pqfile::reader` | `PqfReader`, `PqfInfo` |
+| `pqfile::writer` | `PqfWriter` |
 | `pqfile::repassphrase` | `repassphrase`, `repassphrase_file`, `RepassphraseResult` |
 | `pqfile::hardware` | `HW_TAG_*` constants, `is_hardware_tag`, `default_backend_id` |
 | `pqfile::hardware::stub` | `BACKEND_CREDENTIAL_STORE`, `BACKEND_PKCS11` |
-| `pqfile::async_io` *(feature = "async")* | `encrypt_stream_async`, `decrypt_stream_async` |
+| `pqfile::async_io` *(feature = "async")* | `encrypt_stream_async`, `decrypt_stream_async`, `AsyncPqfWriter` |
 | `pqfile::archive` | `create`, `extract`, `list`, `create_from_memory`, `extract_to_memory`, `ArchiveEntry` |
 | `pqfile::shamir` | `split_key`, `reconstruct_key`, `write_shares`, `SplitResult` |
 | `pqfile::rekey` | `rekey_stream` |
 | `pqfile::add_recipient` | `add_recipient_stream`, `AddRecipientInfo` |
 | `pqfile::revoke` | `revoke_key`, `check_not_revoked`, `revoked_path_for` |
 | `pqfile::shred` | `shred_file` |
-| `pqfile::error` | `PqfileError` — all variants (new variants may be added) |
+| `pqfile::error` | `PqfileError` (all variants; new variants may be added in minor releases) |
 
 ### Format constants
 
-All public constants in `pqfile::format` — version bytes, KEM variant IDs, size
-constants — are stable. Their **numeric values** will not change.
+All public constants in `pqfile::format` (version bytes, KEM variant IDs, size constants, `adaptive_chunk_size`) are stable. Their **numeric values** will not change.
 
 ### Crate-level re-exports
 
@@ -64,6 +64,7 @@ The following items re-exported at the crate root are stable:
 - `pqfile::inspect_stream`, `pqfile::PqfHeaderInfo`, `pqfile::RecipientInfo`
 - `pqfile::PqfPublicKey`, `pqfile::PqfPrivateKey`, `pqfile::PqfSigningKey`, `pqfile::PqfVerifyingKey`
 - `pqfile::PqfReader`, `pqfile::PqfInfo`
+- `pqfile::PqfWriter`
 
 ---
 
@@ -91,8 +92,8 @@ The following are **not** part of the stable surface and may change in minor rel
 The `pqfile` library crate uses [Semantic Versioning](https://semver.org/):
 
 - **Patch** (4.0.x): bug fixes that do not change the public API or file format.
-- **Minor** (4.x.0): additive changes — new functions, new error variants, new
-  format versions (read and write). All existing code continues to compile.
+- **Minor** (4.x.0): additive changes (new functions, new error variants, new
+  format versions for read and write). All existing code continues to compile.
 - **Major** (x.0.0): any breaking change to the stable surface listed above, or
   removal of support for an existing file format version.
 

@@ -5,7 +5,7 @@
 # Dependency graph
 # ---------------------------------------------------------------------------
 [graph]
-# No target filtering — check all platforms so cross-compile artifacts are covered.
+# No target filtering; check all platforms so cross-compile artifacts are covered.
 targets = []
 
 # ---------------------------------------------------------------------------
@@ -15,8 +15,21 @@ targets = []
 version = 2
 # Yanked crates are treated as errors.
 yanked = "deny"
-# No advisories are ignored; any known vulnerability blocks CI.
-ignore = []
+# Ignored advisories are unmaintained-crate notices from dev-only or indirect
+# transitive dependencies that cannot be updated from this repo.
+ignore = [
+    # ansi_term: unmaintained, pulled in by dudect-bencher (dev benchmark dep)
+    # via clap v2. Not a security vulnerability; no safe upgrade path for the
+    # dev dep without replacing dudect-bencher.
+    { id = "RUSTSEC-2021-0139", reason = "dev-only via dudect-bencher -> clap v2; not a security issue" },
+
+    # atty: unmaintained, same dependency chain as ansi_term above.
+    { id = "RUSTSEC-2024-0375", reason = "dev-only via dudect-bencher -> clap v2; not a security issue" },
+
+    # instant: unmaintained, pulled in transitively by notify v7 (watchfolder
+    # feature). No upstream fix available yet; not a security vulnerability.
+    { id = "RUSTSEC-2024-0384", reason = "transitive via notify v7 -> notify-types; not a security issue" },
+]
 
 # ---------------------------------------------------------------------------
 # License policy
@@ -52,7 +65,7 @@ confidence-threshold = 0.8
 # The eframe/egui/wgpu ecosystem pulls in unavoidable duplicate transitive
 # dependencies (accesskit, bitflags, calloop, etc.) that we cannot resolve.
 # Crypto crates (ml-kem, chacha20poly1305, argon2, aes-gcm) are all single-
-# version — duplicates in those would be caught by a RustSec advisory instead.
+# version; duplicates in those would be caught by a RustSec advisory instead.
 multiple-versions = "allow"
 # Wildcard dependencies in Cargo.toml are not allowed.
 wildcards = "deny"

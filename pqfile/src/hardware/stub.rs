@@ -13,6 +13,7 @@
 ///
 /// The label is also used as the account name inside the credential store,
 /// prefixed with "pqfile:" to avoid collisions with other applications.
+#[cfg(not(target_arch = "wasm32"))]
 use crate::error::PqfileError;
 
 /// Backend ID for the OS credential store (Windows Credential Manager,
@@ -22,9 +23,11 @@ pub const BACKEND_CREDENTIAL_STORE: u8 = 0x01;
 /// Backend ID reserved for a future PKCS#11 hardware token backend.
 pub const BACKEND_PKCS11: u8 = 0x02;
 
+#[cfg(not(target_arch = "wasm32"))]
 const STUB_VERSION: u8 = 0x01;
 
 /// Decoded contents of a hardware key PEM stub body.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub(crate) struct HardwareKeyRef {
     /// Identifies which backend holds the key (e.g. `BACKEND_CREDENTIAL_STORE`).
@@ -33,6 +36,7 @@ pub(crate) struct HardwareKeyRef {
     pub label: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HardwareKeyRef {
     /// Encodes the key reference into stub body bytes.
     pub fn encode(&self) -> Vec<u8> {
@@ -70,7 +74,7 @@ impl HardwareKeyRef {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

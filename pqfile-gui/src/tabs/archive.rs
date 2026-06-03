@@ -2,9 +2,10 @@ use crate::app::PqfileApp;
 use crate::colors::{
     c_accent, c_card, c_chrome, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text,
 };
+use crate::types::ArchiveSubTab;
 use crate::types::{OpStatus, Tab};
 use crate::widgets::{
-    card, file_row, passphrase_row, pick_files, save_result, section_label, show_status,
+    card, file_row, passphrase_row, pick_files, save_result, section_label, seg_tabs, show_status,
     tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
@@ -23,11 +24,22 @@ impl PqfileApp {
             .size(13.0)
             .color(c_subtext(dark)),
         );
-        ui.add_space(14.0);
+        ui.add_space(10.0);
 
-        self.show_archive_create_section(ui, dark);
-        ui.add_space(20.0);
-        self.show_archive_extract_section(ui, dark);
+        seg_tabs(
+            ui,
+            &mut self.archive_sub_tab,
+            &[
+                ("Create", ArchiveSubTab::Create),
+                ("Extract", ArchiveSubTab::Extract),
+            ],
+            dark,
+        );
+
+        match self.archive_sub_tab {
+            ArchiveSubTab::Create => self.show_archive_create_section(ui, dark),
+            ArchiveSubTab::Extract => self.show_archive_extract_section(ui, dark),
+        }
     }
 
     // ── Create archive ────────────────────────────────────────────────────

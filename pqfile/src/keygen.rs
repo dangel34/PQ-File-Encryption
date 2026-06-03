@@ -1,11 +1,13 @@
 use std::fs;
 use std::path::Path;
 
+use hkdf::Hkdf;
 use ml_kem::{
     DecapsulationKey1024, DecapsulationKey512, DecapsulationKey768, Kem, KeyExport, MlKem1024,
     MlKem512, MlKem768, Seed,
 };
 use pem::Pem;
+use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroizing;
@@ -82,6 +84,136 @@ pub fn keygen_bytes(level: u16, passphrase: Option<&str>) -> Result<(String, Str
         KEM_VARIANT_1024 => keygen_bytes_1024(passphrase),
         _ => Err(PqfileError::UnsupportedKem(level)),
     }
+}
+
+/// Deterministically generates an ML-KEM-768 key pair from the provided 64-byte seed.
+///
+/// Intended for key import workflows: derive `seed` via HKDF from an existing
+/// secret (e.g. an SSH ed25519 seed), then call this function to produce a
+/// pqfile-compatible key pair. The resulting key has no mathematical relationship
+/// to the source key; it is a one-way derivation.
+#[must_use = "keygen result must be used"]
+pub fn keygen_bytes_from_seed(
+    seed: [u8; 64],
+    passphrase: Option<&str>,
+) -> Result<(String, String), PqfileError> {
+    let seed_arr = Seed::try_from(seed.as_ref()).map_err(|_| PqfileError::EncryptionFailure)?;
+    let dk = DecapsulationKey768::from_seed(seed_arr);
+    let ek = dk.encapsulation_key();
+    let pub_pem = pem::encode(&Pem::new(PUB_TAG, ek.to_bytes().as_slice().to_vec()));
+    let seed_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
+    let priv_pem = encode_private_key(&seed_bytes, passphrase, PRIV_TAG, PRIV_ENC_TAG)?;
+    Ok((pub_pem, priv_pem))
+}
+
+/// Imports an OpenSSH ed25519 private key and derives an ML-KEM-768 key pair from it.
+///
+/// The ed25519 32-byte seed is extracted from the unencrypted OpenSSH key format
+/// and expanded to 64 bytes via HKDF-SHA256 with info `"pqfile-import-from-ssh-ed25519"`.
+/// The derived key has no mathematical relationship to the ed25519 key; the import
+/// is one-way and the result is not interoperable with SSH.
+///
+/// Only unencrypted (`-----BEGIN OPENSSH PRIVATE KEY-----`) ed25519 keys are supported.
+/// Passphrase-protected SSH keys must be decrypted before import.
+pub fn import_key_from_ssh(
+    ssh_pem: &str,
+    output_passphrase: Option<&str>,
+) -> Result<(String, String), PqfileError> {
+    let seed = extract_ssh_ed25519_seed(ssh_pem)?;
+    let mut derived = Zeroizing::new([0u8; 64]);
+    let hk = Hkdf::<Sha256>::new(None, &*seed);
+    hk.expand(b"pqfile-import-from-ssh-ed25519", derived.as_mut())
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+    keygen_bytes_from_seed(*derived, output_passphrase)
+}
+
+/// Parses an unencrypted OpenSSH ed25519 private key and returns the 32-byte seed.
+fn extract_ssh_ed25519_seed(pem_str: &str) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    let parsed = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+    if parsed.tag() != "OPENSSH PRIVATE KEY" {
+        return Err(PqfileError::InvalidPem(format!(
+            "expected OPENSSH PRIVATE KEY, got {}",
+            parsed.tag()
+        )));
+    }
+    let data = parsed.into_contents();
+    if data.len() < 16 || &data[..15] != b"openssh-key-v1\0" {
+        return Err(PqfileError::InvalidPem(
+            "not an OpenSSH private key (bad magic)".into(),
+        ));
+    }
+    let mut pos = 16usize;
+    let cipher = ssh_read_string(&data, &mut pos)?;
+    if cipher != b"none" {
+        return Err(PqfileError::InvalidPem(
+            "passphrase-protected SSH keys are not supported; \
+             decrypt first: ssh-keygen -p -f <key> -N ''"
+                .into(),
+        ));
+    }
+    let kdf = ssh_read_string(&data, &mut pos)?;
+    if kdf != b"none" {
+        return Err(PqfileError::InvalidPem(
+            "non-empty KDF in SSH key; only unencrypted keys are supported".into(),
+        ));
+    }
+    let _ = ssh_read_string(&data, &mut pos)?; // kdf_options
+    let num_keys = ssh_read_u32(&data, &mut pos)?;
+    if num_keys != 1 {
+        return Err(PqfileError::InvalidPem(
+            "SSH key file must contain exactly one key".into(),
+        ));
+    }
+    let _ = ssh_read_string(&data, &mut pos)?; // public key blob
+    let priv_section = ssh_read_string(&data, &mut pos)?;
+    // priv_section is a plain slice reference into `data`.
+    // Copy into an owned Vec so we can parse it independently.
+    let priv_data: Vec<u8> = priv_section.to_owned();
+    let mut pp = 0usize;
+    let check1 = ssh_read_u32(&priv_data, &mut pp)?;
+    let check2 = ssh_read_u32(&priv_data, &mut pp)?;
+    if check1 != check2 {
+        return Err(PqfileError::InvalidPem(
+            "SSH key check values do not match (corrupt key)".into(),
+        ));
+    }
+    let key_type = ssh_read_string(&priv_data, &mut pp)?;
+    if key_type != b"ssh-ed25519" {
+        return Err(PqfileError::InvalidPem(format!(
+            "only ssh-ed25519 keys are supported for import; got {:?}",
+            String::from_utf8_lossy(key_type)
+        )));
+    }
+    let _ = ssh_read_string(&priv_data, &mut pp)?; // public key (32 bytes)
+    let sk = ssh_read_string(&priv_data, &mut pp)?; // 64 bytes: seed || public
+    if sk.len() != 64 {
+        return Err(PqfileError::InvalidPem(format!(
+            "expected 64-byte ed25519 SK, got {} bytes",
+            sk.len()
+        )));
+    }
+    let mut seed = Zeroizing::new([0u8; 32]);
+    seed.copy_from_slice(&sk[..32]);
+    Ok(seed)
+}
+
+fn ssh_read_u32(data: &[u8], pos: &mut usize) -> Result<u32, PqfileError> {
+    if *pos + 4 > data.len() {
+        return Err(PqfileError::InvalidPem("truncated SSH key data".into()));
+    }
+    let v = u32::from_be_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
+    *pos += 4;
+    Ok(v)
+}
+
+fn ssh_read_string<'a>(data: &'a [u8], pos: &mut usize) -> Result<&'a [u8], PqfileError> {
+    let len = ssh_read_u32(data, pos)? as usize;
+    if *pos + len > data.len() {
+        return Err(PqfileError::InvalidPem("truncated SSH key string".into()));
+    }
+    let s = &data[*pos..*pos + len];
+    *pos += len;
+    Ok(s)
 }
 
 fn keygen_bytes_512(passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
@@ -397,6 +529,52 @@ mod tests {
             assert_eq!(part.len(), 2);
             assert!(part.chars().all(|c| c.is_ascii_hexdigit()));
         }
+    }
+
+    // ── keygen_bytes_from_seed tests ───────────────────────────────────────
+
+    #[test]
+    fn keygen_from_seed_produces_valid_key_pair() {
+        let seed = [0x42u8; 64];
+        let (pub_pem, priv_pem) = keygen_bytes_from_seed(seed, None).unwrap();
+        assert!(pub_pem.contains("ML-KEM-768 PUBLIC KEY"));
+        assert!(priv_pem.contains("ML-KEM-768 PRIVATE KEY"));
+    }
+
+    #[test]
+    fn keygen_from_seed_is_deterministic() {
+        let seed = [0x99u8; 64];
+        let (pub1, priv1) = keygen_bytes_from_seed(seed, None).unwrap();
+        let (pub2, priv2) = keygen_bytes_from_seed(seed, None).unwrap();
+        assert_eq!(pub1, pub2);
+        assert_eq!(priv1, priv2);
+    }
+
+    #[test]
+    fn keygen_from_different_seeds_produce_different_keys() {
+        let (pub1, _) = keygen_bytes_from_seed([0u8; 64], None).unwrap();
+        let (pub2, _) = keygen_bytes_from_seed([1u8; 64], None).unwrap();
+        assert_ne!(pub1, pub2);
+    }
+
+    // ── import_key_from_ssh: bad input rejection ───────────────────────────
+
+    #[test]
+    fn import_ssh_rejects_wrong_pem_tag() {
+        let (pub_pem, _) = keygen_bytes(768, None).unwrap();
+        let err = import_key_from_ssh(&pub_pem, None).unwrap_err();
+        assert!(
+            err.to_string().contains("OPENSSH PRIVATE KEY"),
+            "error should mention expected tag"
+        );
+    }
+
+    #[test]
+    fn import_ssh_rejects_truncated_data() {
+        // Construct a PEM block with too-short contents.
+        let bad_pem = pem::encode(&pem::Pem::new("OPENSSH PRIVATE KEY", vec![0u8; 4]));
+        let err = import_key_from_ssh(&bad_pem, None).unwrap_err();
+        assert!(err.to_string().contains("bad magic") || err.to_string().contains("truncated"));
     }
 
     #[test]
