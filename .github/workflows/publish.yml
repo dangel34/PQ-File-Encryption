@@ -68,7 +68,7 @@ jobs:
           out=$(cargo publish -p pqfile --locked 2>&1)
           rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && echo "$out" | grep -qi "already uploaded"; then
+          if [ $rc -ne 0 ] && echo "$out" | grep -qi "already uploaded\|already exists"; then
             echo "pqfile already on crates.io -- skipping"
             exit 0
           fi
@@ -104,7 +104,7 @@ jobs:
           out=$(cargo publish -p pqfile-cli --locked 2>&1)
           rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && echo "$out" | grep -qi "already uploaded"; then
+          if [ $rc -ne 0 ] && echo "$out" | grep -qi "already uploaded\|already exists"; then
             echo "pqfile-cli already on crates.io -- skipping"
             exit 0
           fi
