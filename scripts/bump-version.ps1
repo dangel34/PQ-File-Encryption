@@ -9,7 +9,7 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     exit 1
 }
 
-$root = $PSScriptRoot
+$root = Split-Path $PSScriptRoot -Parent
 
 # ── Pre-flight checks ──────────────────────────────────────────────────────
 
