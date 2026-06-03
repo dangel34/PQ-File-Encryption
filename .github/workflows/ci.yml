@@ -9,6 +9,7 @@ on:
       - 'STABILITY.md'
       - '.gitleaks.toml'
       - 'supply-chain/imports.lock'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
     paths-ignore:
@@ -17,6 +18,7 @@ on:
       - 'STABILITY.md'
       - '.gitleaks.toml'
       - 'supply-chain/imports.lock'
+      - '.github/workflows/**'
 
 # Cancel any in-progress run for the same ref so rapid pushes don't pile up.
 # The bench job overrides this with its own group so a push never cancels a

@@ -25,8 +25,9 @@ jobs:
         with:
           toolchain: 1.96.0
 
-      # Idempotency guard: skip publishing any crate that is already on crates.io.
-      # Protects against accidental double-publishes if the workflow is re-run.
+      # Idempotency guard: check crates.io REST API (not the sparse index, which lags).
+      # Skips publishing any crate that is already present, so re-running the workflow
+      # after a partial failure or accidental double-trigger is always safe.
       - name: Check which crates are already published
         id: check
         run: |
@@ -36,20 +37,28 @@ jobs:
               print(next(p['version'] for p in pkgs if p['name']=='pqfile'))")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          if cargo search pqfile --limit 1 | grep -qF "pqfile = \"$VERSION\""; then
+          check_crate() {
+            local name="$1"
+            local http
+            http=$(curl -sf -o /dev/null -w "%{http_code}" \
+              "https://crates.io/api/v1/crates/${name}/${VERSION}")
+            [ "$http" = "200" ]
+          }
+
+          if check_crate pqfile; then
             echo "pqfile_published=true"  >> "$GITHUB_OUTPUT"
-            echo "pqfile $VERSION already on crates.io — skipping"
+            echo "pqfile $VERSION already on crates.io -- skipping"
           else
             echo "pqfile_published=false" >> "$GITHUB_OUTPUT"
-            echo "pqfile $VERSION not yet on crates.io — will publish"
+            echo "pqfile $VERSION not yet on crates.io -- will publish"
           fi
 
-          if cargo search pqfile-cli --limit 1 | grep -qF "pqfile-cli = \"$VERSION\""; then
+          if check_crate pqfile-cli; then
             echo "cli_published=true"  >> "$GITHUB_OUTPUT"
-            echo "pqfile-cli $VERSION already on crates.io — skipping"
+            echo "pqfile-cli $VERSION already on crates.io -- skipping"
           else
             echo "cli_published=false" >> "$GITHUB_OUTPUT"
-            echo "pqfile-cli $VERSION not yet on crates.io — will publish"
+            echo "pqfile-cli $VERSION not yet on crates.io -- will publish"
           fi
 
       - name: Publish pqfile
@@ -58,22 +67,25 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      # Poll crates.io until the new pqfile version is visible in the index.
-      # pqfile-cli depends on it and cargo publish will fail if the index lags.
-      # Each iteration waits 10 s; most propagations finish within 60 s.
-      - name: Wait for pqfile to appear in crates.io index
+      # Poll the crates.io REST API until pqfile is visible.
+      # pqfile-cli depends on pqfile; cargo publish will fail if the API hasn't
+      # registered the new version yet. The REST API reflects uploads within
+      # seconds, much faster than the sparse index which can lag by minutes.
+      - name: Wait for pqfile to appear on crates.io
         if: steps.check.outputs.pqfile_published == 'false'
         run: |
           VERSION="${{ steps.check.outputs.version }}"
           echo "Waiting for pqfile $VERSION on crates.io..."
           for i in $(seq 1 30); do
-            if cargo search pqfile --limit 1 | grep -qF "pqfile = \"$VERSION\""; then
-              echo "Found pqfile $VERSION in index after $((i * 10))s"
+            http=$(curl -sf -o /dev/null -w "%{http_code}" \
+              "https://crates.io/api/v1/crates/pqfile/${VERSION}")
+            if [ "$http" = "200" ]; then
+              echo "pqfile $VERSION confirmed on crates.io after $((i * 10))s"
               exit 0
             fi
             sleep 10
           done
-          echo "Timed out waiting for pqfile $VERSION in crates.io index" >&2
+          echo "Timed out waiting for pqfile $VERSION on crates.io" >&2
           exit 1
 
       - name: Publish pqfile-cli
