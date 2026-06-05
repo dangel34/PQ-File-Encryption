@@ -53,31 +53,77 @@ pub fn signcrypt<R: Read + io::Seek>(
     encrypt::encrypt_stream(pubkey_pem, combined_size, chunk_size, &mut combined, writer)
 }
 
-/// Streaming variant of signdecrypt: decrypts to `writer` while streaming, then
-/// verifies the sender's ML-DSA signature at the end.
+/// Decrypt a signcrypted file in memory and verify the sender's signature before
+/// returning any data.
 ///
-/// **Prefer [`signdecrypt_bytes`] for most use cases.**  That variant buffers all
-/// output internally and releases plaintext only after verification succeeds, which
-/// is the safe default.  Use this streaming form only when you need to avoid
-/// buffering the entire plaintext in memory and you can guarantee that you will not
-/// act on `writer` output before this function returns `Ok(())`.
+/// No plaintext bytes are accessible until ML-DSA sender verification succeeds.
+/// Every byte is buffered internally; the caller receives data only when this
+/// function returns `Ok(plaintext)`.
 ///
-/// # Streaming write-before-verify hazard
-///
-/// Plaintext is written to `writer` **while streaming**, before the ML-DSA sender
-/// signature is checked.  Each chunk is AEAD-authenticated (integrity guaranteed),
-/// but sender identity is only confirmed when this function returns `Ok(())`.
-///
-/// **Do NOT pass a `File`, a socket, or any writer whose output you cannot retract.**
-/// Pass a `Vec<u8>` and use the data only after `Ok(())`, or call [`signdecrypt_bytes`]
-/// which enforces this automatically.
+/// This is the recommended function for all callers. Use [`signdecrypt`] only
+/// when the plaintext is too large to fit in memory and you accept the
+/// write-before-verify risk documented on that function.
 ///
 /// # Format limitation
 ///
 /// This function uses `PqfReader` internally and therefore does not support v6
 /// (compress-then-encrypt) files. Since `signcrypt` never produces v6 output this
-/// is not a problem in practice. If a v6 file is passed, `PqfileError::CompressionNotSupported`
-/// is returned.
+/// is not a problem in practice.
+#[must_use = "signdecrypt_bytes result must be checked; plaintext is only returned on Ok(())"]
+pub fn signdecrypt_bytes<R: Read>(
+    privkey_pem: &str,
+    vk_pem: &str,
+    reader: R,
+    passphrase: Option<&str>,
+) -> Result<Vec<u8>, PqfileError> {
+    let mut pqf = PqfReader::new(reader, privkey_pem, passphrase)?;
+
+    let mut sig_buf = vec![0u8; SIG_LEN];
+    pqf.read_exact(&mut sig_buf).map_err(|e| {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            PqfileError::InvalidSignature
+        } else {
+            PqfileError::Io(e)
+        }
+    })?;
+
+    let mut hasher = Sha3_256::new();
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut plaintext: Vec<u8> = Vec::new();
+    loop {
+        let n = pqf.read(&mut buf).map_err(PqfileError::Io)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        plaintext.extend_from_slice(&buf[..n]);
+    }
+    let hash = hasher.finalize();
+    sign::verify_bytes(vk_pem, &hash, &sig_buf)?;
+    Ok(plaintext)
+}
+
+/// Streaming variant of signdecrypt: decrypts to `writer` while streaming, then
+/// verifies the sender's ML-DSA signature at the end.
+///
+/// **Prefer [`signdecrypt_bytes`] for most callers.** That variant buffers all
+/// output internally and releases plaintext only after verification succeeds.
+///
+/// # Write-before-verify hazard
+///
+/// Plaintext is written to `writer` chunk by chunk before the ML-DSA sender
+/// signature is checked. Each chunk is AEAD-authenticated (integrity guaranteed),
+/// but sender identity is only confirmed when this function returns `Ok(())`.
+///
+/// Do NOT pass a `File`, a socket, or any writer whose output you cannot retract.
+/// Pass a `Vec<u8>` and use the data only after `Ok(())`, or call
+/// [`signdecrypt_bytes`] which enforces this automatically.
+///
+/// # Format limitation
+///
+/// This function uses `PqfReader` internally and therefore does not support v6
+/// (compress-then-encrypt) files. Since `signcrypt` never produces v6 output this
+/// is not a problem in practice.
 #[must_use = "signdecrypt result must be checked; signature is verified only on Ok(())"]
 pub fn signdecrypt<R: Read>(
     privkey_pem: &str,
@@ -88,7 +134,6 @@ pub fn signdecrypt<R: Read>(
 ) -> Result<(), PqfileError> {
     let mut pqf = PqfReader::new(reader, privkey_pem, passphrase)?;
 
-    // Read the prepended signature
     let mut sig_buf = vec![0u8; SIG_LEN];
     pqf.read_exact(&mut sig_buf).map_err(|e| {
         if e.kind() == io::ErrorKind::UnexpectedEof {
@@ -98,7 +143,6 @@ pub fn signdecrypt<R: Read>(
         }
     })?;
 
-    // Stream plaintext to output while hashing
     let mut hasher = Sha3_256::new();
     let mut buf = vec![0u8; CHUNK_SIZE];
     loop {
@@ -110,31 +154,7 @@ pub fn signdecrypt<R: Read>(
         writer.write_all(&buf[..n]).map_err(PqfileError::Io)?;
     }
     let hash = hasher.finalize();
-
-    // Verify sender identity
     sign::verify_bytes(vk_pem, &hash, &sig_buf)
-}
-
-/// Decrypt a signcrypted file in memory and verify the sender's signature before
-/// returning any data.
-///
-/// Unlike [`signdecrypt`], **no plaintext bytes are accessible until ML-DSA sender
-/// verification succeeds**.  Every byte is buffered internally; the caller receives
-/// data only when this function returns `Ok(plaintext)`.
-///
-/// This is the recommended variant for most callers.  Use [`signdecrypt`] only
-/// when you need streaming and can guarantee you will not act on `writer` output
-/// before the function returns `Ok(())`.
-#[must_use = "signdecrypt_bytes result must be checked; plaintext is only returned on Ok(())"]
-pub fn signdecrypt_bytes<R: Read>(
-    privkey_pem: &str,
-    vk_pem: &str,
-    reader: R,
-    passphrase: Option<&str>,
-) -> Result<Vec<u8>, PqfileError> {
-    let mut buf = Vec::new();
-    signdecrypt(privkey_pem, vk_pem, reader, &mut buf, passphrase)?;
-    Ok(buf)
 }
 
 /// Sign `data` (in a single pass) with `sk_pem`, then encrypt the combined payload to `pubkey_pem`.

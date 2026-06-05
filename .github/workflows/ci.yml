@@ -192,14 +192,14 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- --deny warnings
+        run: cargo clippy --workspace --all-targets --features pqfile/async -- --deny warnings
 
       # PRs: reuse clippy's compiled artifacts — no instrumentation overhead.
       - name: Run tests
         if: github.event_name == 'pull_request'
-        run: cargo test --workspace
+        run: cargo test --workspace --features pqfile/async
 
       # Main pushes: instrument for coverage reporting.
       - name: Run tests with coverage
         if: github.event_name == 'push'
-        run: cargo llvm-cov --workspace --summary-only
+        run: cargo llvm-cov --workspace --features pqfile/async --summary-only

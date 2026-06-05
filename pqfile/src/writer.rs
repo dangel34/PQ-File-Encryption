@@ -184,16 +184,21 @@ impl<W: Write> Drop for PqfWriter<W> {
     fn drop(&mut self) {
         if self.inner.is_some() && !self.finished {
             // In debug builds, panic loudly so callers notice they forgot finish().
-            // Dropping without finish() silently discards any I/O error from the
-            // final chunk seal, leaving a corrupt or truncated output file.
+            // Guard with !panicking() so a Drop that fires during stack-unwinding
+            // from another panic does not cause a double-panic and process abort.
             #[cfg(debug_assertions)]
-            panic!(
-                "PqfWriter dropped without calling finish(); \
-                 I/O errors from the final chunk seal are lost and the output may be corrupt. \
-                 Call finish() to handle errors explicitly."
-            );
-            // In release builds, attempt a best-effort seal and discard any error.
+            if !std::thread::panicking() {
+                panic!(
+                    "PqfWriter dropped without calling finish(); \
+                     I/O errors from the final chunk seal are lost and the output may be corrupt. \
+                     Call finish() to handle errors explicitly."
+                );
+            }
+            // In release builds (or when already unwinding), attempt a best-effort
+            // seal and discard any error.
             #[cfg(not(debug_assertions))]
+            let _ = self.seal_final();
+            #[cfg(debug_assertions)]
             let _ = self.seal_final();
         }
     }

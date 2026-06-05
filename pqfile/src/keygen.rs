@@ -166,8 +166,15 @@ fn extract_ssh_ed25519_seed(pem_str: &str) -> Result<Zeroizing<[u8; 32]>, Pqfile
     }
     let _ = ssh_read_string(&data, &mut pos)?; // public key blob
     let priv_section = ssh_read_string(&data, &mut pos)?;
-    // priv_section is a plain slice reference into `data`.
-    // Copy into an owned Vec so we can parse it independently.
+    // Reject absurdly large private sections before copying to avoid allocating
+    // an unbounded amount of heap memory from a crafted SSH key file.
+    // A legitimate ed25519 private section is never more than a few hundred bytes.
+    const MAX_PRIV_SECTION: usize = 4096;
+    if priv_section.len() > MAX_PRIV_SECTION {
+        return Err(PqfileError::InvalidPem(
+            "SSH key private section exceeds maximum expected size".into(),
+        ));
+    }
     let priv_data: Vec<u8> = priv_section.to_owned();
     let mut pp = 0usize;
     let check1 = ssh_read_u32(&priv_data, &mut pp)?;
@@ -575,6 +582,45 @@ mod tests {
         let bad_pem = pem::encode(&pem::Pem::new("OPENSSH PRIVATE KEY", vec![0u8; 4]));
         let err = import_key_from_ssh(&bad_pem, None).unwrap_err();
         assert!(err.to_string().contains("bad magic") || err.to_string().contains("truncated"));
+    }
+
+    #[test]
+    fn import_ssh_rejects_oversized_private_section() {
+        // Craft an OpenSSH private key blob whose priv_section length field
+        // announces more than MAX_PRIV_SECTION (4096) bytes. The parser must
+        // reject it before allocating the oversized buffer.
+        //
+        // OpenSSH binary format (simplified):
+        //   magic (15 bytes) + NUL + cipher("none",4B) + kdf("none",4B) +
+        //   kdf_options("",4B) + num_keys(1,4B) + pubkey_blob("",4B) +
+        //   priv_section_len(4B) + priv_section_bytes
+        let mut data: Vec<u8> = Vec::new();
+        // The parser checks data[..15] against b"openssh-key-v1\0" (15 bytes),
+        // then starts reading at pos = 16, so one extra byte must follow the magic.
+        data.extend_from_slice(b"openssh-key-v1\0"); // indices 0-14 (15 bytes)
+        data.push(0u8); // index 15: consumed by pos = 16, not checked
+                        // cipher = "none"
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(b"none");
+        // kdf = "none"
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(b"none");
+        // kdf_options = ""
+        data.extend_from_slice(&0u32.to_be_bytes());
+        // num_keys = 1
+        data.extend_from_slice(&1u32.to_be_bytes());
+        // public key blob = "" (empty)
+        data.extend_from_slice(&0u32.to_be_bytes());
+        // priv_section = 8000 bytes (exceeds MAX_PRIV_SECTION=4096)
+        data.extend_from_slice(&8000u32.to_be_bytes());
+        data.extend(std::iter::repeat_n(0u8, 8000));
+
+        let bad_pem = pem::encode(&pem::Pem::new("OPENSSH PRIVATE KEY", data));
+        let err = import_key_from_ssh(&bad_pem, None).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds maximum"),
+            "expected size-cap error, got: {err}"
+        );
     }
 
     #[test]

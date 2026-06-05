@@ -95,6 +95,9 @@ const HEADER_PREFIX_LEN: usize = 7;
 /// Fixed suffix: NONCE(12) + ORIGINAL_SIZE(8) = 20 bytes.
 const HEADER_SUFFIX_LEN: usize = 20;
 
+// These constants are used in the library tests (cfg(test) blocks in encrypt.rs
+// and decrypt.rs). The dead_code lint fires because tests are compiled as a
+// separate crate target and the compiler does not see the cross-crate use.
 #[allow(dead_code)]
 pub(crate) const HEADER_LEN_512: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_512 + HEADER_SUFFIX_LEN;
 pub(crate) const HEADER_LEN_768: usize = HEADER_PREFIX_LEN + KEM_CT_LEN_768 + HEADER_SUFFIX_LEN;
@@ -494,15 +497,16 @@ pub const MAX_CHUNK_SIZE: u32 = 256 * 1024 * 1024;
 
 /// Picks a chunk size appropriate for the given `file_size`.
 ///
-/// | File size | Chosen chunk | Rationale |
-/// |-----------|-------------|-----------|
-/// | < 1 MiB   | 16 KiB      | Reduces per-file AEAD overhead for small files |
-/// | > 256 MiB | 256 KiB     | Amortises per-chunk cost for large files |
-/// | otherwise | 64 KiB      | Standard [`CHUNK_SIZE`] default |
+/// | File size    | Chosen chunk | Format | Rationale |
+/// |--------------|-------------|--------|-----------|
+/// | < 1 MiB      | 16 KiB      | v5     | Reduces per-file AEAD overhead for small files |
+/// | 1-256 MiB    | 64 KiB      | v3     | Standard [`CHUNK_SIZE`] default |
+/// | > 256 MiB    | 256 KiB     | v5     | Amortises per-chunk cost for large files |
 ///
-/// The returned value always differs from [`CHUNK_SIZE`] for the small and large
-/// tiers, so the encoder writes v5 format (with the chunk size stored in the header)
-/// rather than the more compact v3 header.
+/// The small and large tiers return a value that differs from [`CHUNK_SIZE`], so
+/// the encoder writes v5 format (with the chunk size stored in the header).
+/// The medium tier returns exactly [`CHUNK_SIZE`] and the encoder writes the
+/// more compact v3 header.
 pub fn adaptive_chunk_size(file_size: u64) -> usize {
     const MB: u64 = 1024 * 1024;
     if file_size < MB {
@@ -583,7 +587,8 @@ pub(crate) fn compute_key_commitment(
 }
 
 /// Maximum AAD byte length across all chunk positions (first chunk is largest).
-pub(crate) const MAX_CHUNK_AAD_LEN: usize = 11 + 32; // 43 bytes
+/// Layout: STREAM_AAD_PREFIX(6) + counter_be(4) + is_last(1) + key_commitment(32).
+pub(crate) const MAX_CHUNK_AAD_LEN: usize = STREAM_AAD_PREFIX.len() + 4 + 1 + 32;
 
 /// Builds the chunk-specific AAD into a fixed-size buffer, returning the used length.
 ///

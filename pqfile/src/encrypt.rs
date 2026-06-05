@@ -227,6 +227,9 @@ pub(crate) fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>
             let eph_pk = X25519PublicKey::from(&eph_sk);
 
             let recipient_pk = X25519PublicKey::from(x25519_pk);
+            // x25519-dalek v2 with the "zeroize" feature implements Zeroize on
+            // both StaticSecret and SharedSecret, so both eph_sk and x25519_ss are
+            // overwritten on drop.
             let x25519_ss = Zeroizing::new(eph_sk.diffie_hellman(&recipient_pk));
 
             let (ml_ct, ml_ss) = ml_ek.encapsulate();
@@ -327,16 +330,22 @@ pub fn encrypt_stream_multi_anon(
 
     // Fisher-Yates shuffle with rejection sampling to eliminate modulo bias.
     // For recipient counts up to 1000 the expected number of retries is < 1.001.
+    // A hard limit of 1000 retries per position guards against a malfunctioning
+    // entropy source causing an infinite loop.
+    const MAX_REJECTION_RETRIES: u32 = 1000;
     for i in (1..recipients.len()).rev() {
         let range = (i + 1) as u64;
         let threshold = (1u64 << 32) - ((1u64 << 32) % range);
-        let j = loop {
-            let mut r = [0u8; 4];
-            getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
-            let v = u32::from_le_bytes(r) as u64;
-            if v < threshold {
-                break (v % range) as usize;
+        let j = 'sample: {
+            for _ in 0..MAX_REJECTION_RETRIES {
+                let mut r = [0u8; 4];
+                getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
+                let v = u32::from_le_bytes(r) as u64;
+                if v < threshold {
+                    break 'sample (v % range) as usize;
+                }
             }
+            return Err(PqfileError::EncryptionFailure);
         };
         recipients.swap(i, j);
     }
@@ -858,7 +867,12 @@ where
 /// fresh, single-use KEM shared secret - it is never reused across calls.
 /// Nonce uniqueness is guaranteed per-key, not per-nonce, so a constant nonce
 /// with a unique key is cryptographically equivalent to a random nonce with a
-/// fixed key. See §5.1 of RFC 5116 for the formal nonce-uniqueness requirement.
+/// fixed key. See Section 5.1 of RFC 5116 for the formal nonce-uniqueness requirement.
+///
+/// The wrapped key has no additional AAD binding it to the per-file nonce or
+/// KEM ciphertext. That binding is provided instead by the key commitment in
+/// `crate::format::compute_key_commitment`, which is checked on every chunk-0
+/// decryption. See that function for the full security argument.
 pub(crate) fn wrap_session_key(
     session_key: &[u8; 32],
     ss: &[u8; 32],

@@ -89,9 +89,11 @@ impl CredentialStoreBackend {
             other => hw_err(other),
         })?);
         hex_decode(encoded.as_str()).map_err(|_| {
+            // Truncate the label to 32 chars in the error message so that
+            // sensitive identifiers embedded in label names do not appear in logs.
+            let label_preview = key_ref.label.chars().take(32).collect::<String>();
             PqfileError::InvalidPem(format!(
-                "hardware key '{}' credential store entry is corrupted",
-                key_ref.label
+                "hardware key '{label_preview}' credential store entry is corrupted"
             ))
         })
     }
@@ -117,7 +119,15 @@ fn hw_err(e: impl std::fmt::Display) -> PqfileError {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    // Write nibbles directly into a pre-sized buffer to avoid per-byte heap
+    // allocations that would not be zeroized on drop.
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0xF) as usize] as char);
+    }
+    out
 }
 
 fn hex_decode(s: &str) -> Result<Zeroizing<Vec<u8>>, ()> {

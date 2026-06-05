@@ -80,7 +80,12 @@ pub fn create(
 
 /// Extract a `.pqf` archive into `out_dir`, creating subdirectories as needed.
 ///
-/// Authentication of each chunk happens before any bytes are written to disk.
+/// Each AEAD chunk is authenticated before its plaintext bytes are passed to
+/// the file writer, but authentication is per-chunk rather than per-file. If
+/// a crafted or truncated archive causes an authentication failure mid-stream,
+/// partially-written files may already exist on disk. For security-sensitive
+/// use cases prefer [`extract_to_memory`], which returns data only after the
+/// entire decryption succeeds.
 #[must_use = "extracted file paths must be used"]
 pub fn extract<R: Read>(
     privkey_pem: &str,
@@ -253,6 +258,7 @@ fn read_manifest<R: Read>(reader: &mut R) -> Result<Vec<ArchiveEntry>, PqfileErr
     }
 
     let mut entries = Vec::with_capacity(count);
+    let mut total_declared_size: u64 = 0;
     for _ in 0..count {
         let mut pl = [0u8; 2];
         reader.read_exact(&mut pl).map_err(io_err)?;
@@ -270,6 +276,18 @@ fn read_manifest<R: Read>(reader: &mut R) -> Result<Vec<ArchiveEntry>, PqfileErr
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "archive entry file_size {file_size} exceeds maximum ({})",
+                    crate::format::MAX_ORIGINAL_SIZE
+                ),
+            )));
+        }
+        // Cap the running total so a crafted manifest with many valid-looking
+        // entries cannot force an unbounded extraction.
+        total_declared_size = total_declared_size.saturating_add(file_size);
+        if total_declared_size > crate::format::MAX_ORIGINAL_SIZE {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "archive total declared size exceeds maximum ({})",
                     crate::format::MAX_ORIGINAL_SIZE
                 ),
             )));
@@ -584,5 +602,43 @@ mod tests {
         // Normal names are still allowed.
         assert!(safe_dest(base, "normal.txt").is_ok());
         assert!(safe_dest(base, "subdir/file.dat").is_ok());
+    }
+
+    #[test]
+    fn archive_rejects_manifest_whose_aggregate_size_exceeds_max() {
+        // Craft a manifest where each entry's file_size is valid but their
+        // sum exceeds MAX_ORIGINAL_SIZE. The aggregate guard should fire.
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let per_entry: u64 = crate::format::MAX_ORIGINAL_SIZE / 2 + 1;
+
+        // Two entries each claiming (MAX/2 + 1) bytes: total > MAX.
+        let mut manifest = Vec::new();
+        manifest.extend_from_slice(b"PQFA");
+        manifest.push(1u8);
+        manifest.extend_from_slice(&2u32.to_le_bytes()); // 2 entries
+        for name in &[b"a.txt" as &[u8], b"b.txt"] {
+            manifest.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            manifest.extend_from_slice(name);
+            manifest.extend_from_slice(&per_entry.to_le_bytes());
+            manifest.extend_from_slice(&0i64.to_le_bytes());
+            manifest.extend_from_slice(&0u32.to_le_bytes());
+        }
+
+        let mut archive_bytes = Vec::new();
+        crate::encrypt::encrypt_stream(
+            &pub_pem,
+            manifest.len() as u64,
+            CHUNK_SIZE,
+            &mut manifest.as_slice(),
+            &mut archive_bytes,
+        )
+        .unwrap();
+
+        let out_dir = tempdir().unwrap();
+        let result = extract(&priv_pem, archive_bytes.as_slice(), out_dir.path(), None);
+        assert!(
+            result.is_err(),
+            "aggregate file_size exceeding MAX_ORIGINAL_SIZE must be rejected"
+        );
     }
 }

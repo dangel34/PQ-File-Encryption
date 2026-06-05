@@ -32,6 +32,7 @@ pub(crate) struct QrModal {
 pub struct PqfileApp {
     pub(crate) tab: Tab,
     pub(crate) show_about: bool,
+    pub(crate) show_legal: bool,
     pub(crate) help_modal_open: Option<Tab>,
     pub(crate) settings: Settings,
     pub(crate) app_icon: Option<egui::TextureHandle>,
@@ -225,6 +226,7 @@ impl Default for PqfileApp {
         Self {
             tab: Tab::Keygen,
             show_about: false,
+            show_legal: false,
             help_modal_open: None,
             settings: Settings::default(),
             app_icon: None,
@@ -554,6 +556,23 @@ impl eframe::App for PqfileApp {
                             .size(11.0)
                             .color(c_overlay(dark)),
                     );
+                    ui.label(RichText::new("|").size(11.0).color(c_overlay(dark)));
+                    if ui
+                        .add(
+                            egui::Label::new(
+                                RichText::new("Legal").size(11.0).color(c_overlay(dark)),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .clicked()
+                    {
+                        self.show_legal = true;
+                    }
+                    ui.label(RichText::new("|").size(11.0).color(c_overlay(dark)));
+                    ui.hyperlink_to(
+                        RichText::new("Privacy").size(11.0).color(c_overlay(dark)),
+                        "https://nappi.work/privacy",
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(
@@ -569,6 +588,11 @@ impl eframe::App for PqfileApp {
         // ── About modal ────────────────────────────────────────────────────
         if self.show_about {
             self.show_about_window(&ctx, dark);
+        }
+
+        // ── Legal modal ────────────────────────────────────────────────────
+        if self.show_legal {
+            self.show_legal_window(&ctx, dark);
         }
 
         // ── QR code modal ──────────────────────────────────────────────────
@@ -1168,6 +1192,195 @@ impl PqfileApp {
 
         if close {
             self.show_about = false;
+        }
+    }
+
+    fn show_legal_window(&mut self, ctx: &egui::Context, dark: bool) {
+        let mut close = false;
+
+        egui::Window::new(
+            RichText::new("Legal Notices")
+                .size(14.0)
+                .strong()
+                .color(c_text(dark)),
+        )
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .fixed_size([480.0, 520.0])
+        .frame(
+            egui::Frame::window(&ctx.global_style())
+                .fill(c_bg(dark))
+                .stroke(Stroke::new(2.0, c_subtext(dark)))
+                .corner_radius(CornerRadius::same(10)),
+        )
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(470.0)
+                .auto_shrink([true, true])
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Last updated: June 5, 2026")
+                            .size(11.0)
+                            .color(c_subtext(dark)),
+                    );
+                    ui.add_space(10.0);
+
+                    section_label(ui, "WHAT PQFILE IS", dark);
+                    ui.label(
+                        RichText::new(
+                            "pqfile is open-source software for encrypting and decrypting files \
+                             using post-quantum cryptographic algorithms. It uses ML-KEM-768 \
+                             (NIST FIPS 203) for key encapsulation and ChaCha20-Poly1305 for \
+                             authenticated encryption. The browser-based version performs all \
+                             cryptographic operations locally in your browser using WebAssembly. \
+                             No key material, plaintexts, or ciphertexts are transmitted over \
+                             the network.",
+                        )
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                    );
+                    ui.add_space(10.0);
+
+                    section_label(ui, "NO WARRANTY", dark);
+                    ui.label(
+                        RichText::new(
+                            "This software is provided \"as is\" without warranty of any kind, \
+                             express or implied, including but not limited to warranties of \
+                             merchantability, fitness for a particular purpose, or \
+                             non-infringement. The author makes no representations regarding \
+                             the correctness, completeness, or security of this software.\n\n\
+                             This software has not been independently audited by a third-party \
+                             cryptographic security firm. Cryptographic software is complex and \
+                             may contain defects. You are responsible for evaluating whether \
+                             this software is appropriate for your use case.",
+                        )
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                    );
+                    ui.add_space(10.0);
+
+                    section_label(ui, "NO LIABILITY", dark);
+                    ui.label(
+                        RichText::new(
+                            "To the maximum extent permitted by applicable law, the author is \
+                             not liable for any damages arising from use or inability to use \
+                             this software, including but not limited to data loss, unauthorized \
+                             access to encrypted or decrypted content, or damages resulting from \
+                             cryptographic failures or implementation defects.",
+                        )
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                    );
+                    ui.add_space(10.0);
+
+                    section_label(ui, "EXPORT CONTROL", dark);
+                    ui.label(
+                        RichText::new(
+                            "This software contains cryptographic functionality and is subject \
+                             to U.S. Export Administration Regulations (EAR), 15 CFR Parts \
+                             730-774. By downloading, accessing, using, or redistributing this \
+                             software, you represent and warrant that:",
+                        )
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                    );
+                    ui.add_space(4.0);
+                    card(ui, c_card(dark), c_surface1(dark), |ui| {
+                        bullet(
+                            ui,
+                            "You are not located in, and will not use this software in, any \
+                             country or territory subject to U.S. economic sanctions or export \
+                             restrictions, including Cuba, Iran, North Korea, and Syria",
+                            dark,
+                        );
+                        bullet(
+                            ui,
+                            "You are not listed on any U.S. government restricted-party list",
+                            dark,
+                        );
+                        bullet(
+                            ui,
+                            "Your use of this software does not otherwise violate the EAR or \
+                             any applicable export control law",
+                            dark,
+                        );
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(
+                            "This software uses only publicly documented, NIST-standardized \
+                             cryptographic algorithms (FIPS 203 and a FIPS 197-compatible AEAD \
+                             construction) and is published as open-source software under the \
+                             MIT License. Its cryptographic functionality has been reported to \
+                             the U.S. Bureau of Industry and Security under License Exception \
+                             TSU (15 CFR 742.15(b)).",
+                        )
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                    );
+                    ui.add_space(10.0);
+
+                    section_label(ui, "SECURITY DISCLOSURES", dark);
+                    ui.label(
+                        RichText::new(
+                            "If you discover a security vulnerability in pqfile, please report \
+                             it responsibly. Do not open a public issue. Use the private \
+                             security advisory feature on GitHub:",
+                        )
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                    );
+                    ui.add_space(2.0);
+                    ui.hyperlink_to(
+                        RichText::new("Report a vulnerability (GitHub advisory)")
+                            .size(12.5)
+                            .color(c_accent(dark)),
+                        "https://github.com/dangel34/PQ-File-Encryption/security/advisories/new",
+                    );
+                    ui.add_space(10.0);
+
+                    section_label(ui, "PRIVACY", dark);
+                    ui.label(
+                        RichText::new(
+                            "This site collects no personal information beyond standard server \
+                             access logs (IP address, request metadata). See the Privacy Policy \
+                             for full details.",
+                        )
+                        .size(12.5)
+                        .color(c_subtext(dark)),
+                    );
+                    ui.add_space(2.0);
+                    ui.hyperlink_to(
+                        RichText::new("Privacy Policy")
+                            .size(12.5)
+                            .color(c_accent(dark)),
+                        "https://nappi.work/privacy",
+                    );
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.vertical_centered(|ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Close").size(13.0).color(c_text(dark)),
+                                )
+                                .fill(c_surface0(dark))
+                                .min_size(Vec2::new(88.0, 30.0)),
+                            )
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
+                    ui.add_space(4.0);
+                });
+        });
+
+        if close {
+            self.show_legal = false;
         }
     }
 

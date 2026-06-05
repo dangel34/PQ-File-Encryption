@@ -174,7 +174,9 @@ pub fn decrypt_stream(
             match version {
                 VERSION => {
                     let mut header_bytes = Vec::with_capacity(header.header_len());
-                    header.write(&mut header_bytes).unwrap();
+                    header
+                        .write(&mut header_bytes)
+                        .expect("write to Vec<u8> is infallible");
                     decrypt_v2_payload(&cipher, &header.nonce, &header_bytes, reader, writer)
                 }
                 _ => {
@@ -317,8 +319,11 @@ fn find_session_key(
 ) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     let dk_variant = dk.kem_variant();
     let mut found: Option<Zeroizing<[u8; 32]>> = None;
-    // Iterate every same-variant entry without early return so that timing does
-    // not reveal which slot index matched (mirrors find_session_key_v8).
+    // For v4 files, each slot carries an explicit kem_variant field in the header.
+    // Skipping mismatched-variant slots does not leak information beyond what the
+    // header already exposes in plaintext. Slots that match the key's variant are
+    // always decapsulated regardless of position, so the matched slot index is not
+    // revealed by timing.
     for (kem_variant, kem_ciphertext, wrapped_key) in entries {
         if *kem_variant != dk_variant {
             continue;
@@ -391,7 +396,6 @@ fn unwrap_session_key(
 ///
 /// **v6 (compressed) files are not supported** - returns
 /// `PqfileError::CompressionNotSupported`. Use [`decrypt_stream`] instead.
-#[allow(dead_code)] // used by lib target (reader.rs) but not by the binary
 pub(crate) fn decapsulate_stream_init(
     reader: &mut dyn Read,
     privkey_pem: &str,
@@ -411,9 +415,15 @@ pub(crate) fn decapsulate_stream_init(
             if version == VERSION {
                 // v2: whole-file AEAD - header bytes needed as AAD.
                 let mut header_bytes = Vec::with_capacity(header.header_len());
-                header.write(&mut header_bytes).unwrap();
+                header
+                    .write(&mut header_bytes)
+                    .expect("write to Vec<u8> is infallible");
+                // Cap the read to MAX_ORIGINAL_SIZE + AEAD tag to prevent DoS via a
+                // crafted header whose original_size field understates the true payload.
                 let mut payload = Vec::new();
-                reader.read_to_end(&mut payload)?;
+                reader
+                    .take(crate::format::MAX_ORIGINAL_SIZE + 16)
+                    .read_to_end(&mut payload)?;
                 if payload.len() < 16 {
                     return Err(PqfileError::DecryptionFailure);
                 }

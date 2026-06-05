@@ -97,7 +97,7 @@ fn add_to_v4(
     )?;
 
     let (new_kem_ct, new_kem_variant, new_wrapped_key) =
-        encapsulate_for_rekey(new_pubkey_pem, session_key.as_ref().try_into().unwrap())?;
+        encapsulate_for_rekey(new_pubkey_pem, &session_key)?;
 
     let mut recipients = header.recipients;
     recipients.push(RecipientEntryV4 {
@@ -141,7 +141,7 @@ fn add_to_v7(
     )?;
 
     let (new_kem_ct, new_kem_variant, new_wrapped_key) =
-        encapsulate_for_rekey(new_pubkey_pem, session_key.as_ref().try_into().unwrap())?;
+        encapsulate_for_rekey(new_pubkey_pem, &session_key)?;
 
     let mut recipients = header.recipients;
     recipients.push(RecipientEntryV7 {
@@ -157,7 +157,7 @@ fn add_to_v7(
         original_size: header.original_size,
     };
     new_header.write(writer)?;
-    stream_payload_v7(reader, writer, recipient_count - 1)?;
+    stream_payload(reader, writer)?;
 
     Ok(AddRecipientInfo {
         recipient_count,
@@ -176,17 +176,6 @@ fn stream_payload(reader: &mut dyn Read, writer: &mut dyn Write) -> Result<(), P
         writer.write_all(&buf[..n])?;
     }
     Ok(())
-}
-
-/// Streams the AEAD payload from `reader` to `writer` after a v7 header.
-/// The `old_recipient_count` is not used here since the payload is identical
-/// regardless of recipient count; this parameter exists for documentation.
-fn stream_payload_v7(
-    reader: &mut dyn Read,
-    writer: &mut dyn Write,
-    _old_recipient_count: usize,
-) -> Result<(), PqfileError> {
-    stream_payload(reader, writer)
 }
 
 fn add_to_v8(

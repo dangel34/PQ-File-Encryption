@@ -27,14 +27,8 @@ use crate::keygen::{
 
 /// A parsed and validated ML-KEM (or hybrid) public key.
 ///
-/// Construct with [`PqfPublicKey::from_pem`].  The PEM is validated on
+/// Construct with [`PqfPublicKey::from_pem`]. The PEM is validated on
 /// construction; subsequent uses of [`PqfPublicKey::as_pem`] are infallible.
-///
-/// TODO (v4.0): Consider caching the raw key bytes as a `Zeroizing<Vec<u8>>` so that
-/// `encrypt_stream` and friends can accept a pre-parsed key and skip the second PEM
-/// parse that currently happens when `as_pem()` is passed to those functions. The API
-/// change requires a new trait or overloaded entry points, and is intentionally deferred
-/// to avoid a semver break before the 1.0 stability commitment.
 #[derive(Clone)]
 pub struct PqfPublicKey {
     pem: String,

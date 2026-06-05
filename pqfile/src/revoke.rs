@@ -33,7 +33,9 @@ pub fn revoke_key(pubkey_path: &Path, reason: &str) -> Result<String, PqfileErro
 /// Checks whether the public key file at `pubkey_path` has been revoked.
 ///
 /// Reads the `.revoked` sidecar if it exists and compares the fingerprint.
-/// Returns `Err(KeyRevoked)` if revoked, `Ok(())` otherwise.
+/// Returns `Err(KeyRevoked)` if the sidecar fingerprint matches this key.
+/// Returns `Err(Io)` if the sidecar exists but cannot be read (fail closed).
+/// Returns `Ok(())` if no sidecar exists or the sidecar belongs to a different key.
 #[must_use = "revocation check must be inspected; ignoring it means encrypting to revoked keys"]
 pub fn check_not_revoked(pubkey_path: &Path, pubkey_pem: &str) -> Result<(), PqfileError> {
     let revoked_path = revoked_path_for(pubkey_path);
@@ -41,12 +43,14 @@ pub fn check_not_revoked(pubkey_path: &Path, pubkey_pem: &str) -> Result<(), Pqf
         return Ok(());
     }
 
-    let json = fs::read_to_string(&revoked_path).unwrap_or_default();
+    // Fail closed: an unreadable sidecar blocks use of the key until the
+    // administrator can inspect it. This prevents a race where a revocation
+    // file is created but not yet flushed to disk.
+    let json = fs::read_to_string(&revoked_path)?;
     let fp_in_file = extract_json_str(&json, "fingerprint").unwrap_or_default();
     let reason = extract_json_str(&json, "reason").unwrap_or_default();
     let fp_of_key = fingerprint_pem(pubkey_pem);
 
-    // If fingerprints are present and match (or sidecar has no valid fingerprint), refuse.
     if fp_in_file.is_empty() || fp_of_key == fp_in_file {
         return Err(PqfileError::KeyRevoked {
             fingerprint: fp_of_key,

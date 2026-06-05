@@ -48,8 +48,6 @@ linux-keyutils-keyring-store = "1"
 # Enable async encrypt/decrypt API backed by Tokio.
 async = ["tokio"]
 # Enable statistical constant-time tests (requires a quiet machine; not for CI).
-# The dudect-bencher crate is always compiled as a dev-dep; this flag just gates
-# whether the expensive timing tests are actually run.
 timing-tests = []
 
 [dependencies.tokio]
@@ -63,7 +61,6 @@ serde_json = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 proptest = "1"
-dudect-bencher = "0.7"
 
 [[bench]]
 name = "crypto"
