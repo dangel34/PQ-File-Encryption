@@ -3365,7 +3365,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "aes-gcm",
  "apple-native-keyring-store",
@@ -3396,7 +3396,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile-cli"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3409,7 +3409,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile-desktop"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "eframe",
  "pqfile-gui",
@@ -3418,7 +3418,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile-gui"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
