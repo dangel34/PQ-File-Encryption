@@ -4,6 +4,15 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [4.2.0] - 2026-06-05
+
+### New features
+
+- **Legal Notices modal**: a scrollable in-app legal page covering what pqfile is, no-warranty and no-liability disclaimers, U.S. export control obligations (EAR / License Exception TSU, 15 CFR 742.15(b)), responsible security disclosure instructions, and a link to the Privacy Policy.
+- **Footer links**: the footer now shows "Legal" (opens the Legal Notices modal) and "Privacy" (links to the Privacy Policy) alongside the existing version label.
+
+---
+
 ## [4.1.1] - 2026-06-02
 
 ### Security
