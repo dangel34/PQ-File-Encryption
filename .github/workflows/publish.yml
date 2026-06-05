@@ -40,7 +40,7 @@ jobs:
           check_crate() {
             local name="$1"
             local http
-            http=$(curl -sf -o /dev/null -w "%{http_code}" \
+            http=$(curl -s -o /dev/null -w "%{http_code}" \
               "https://crates.io/api/v1/crates/${name}/${VERSION}")
             [ "$http" = "200" ]
           }
@@ -86,7 +86,7 @@ jobs:
           VERSION="${{ steps.check.outputs.version }}"
           echo "Waiting for pqfile $VERSION on crates.io..."
           for i in $(seq 1 30); do
-            http=$(curl -sf -o /dev/null -w "%{http_code}" \
+            http=$(curl -s -o /dev/null -w "%{http_code}" \
               "https://crates.io/api/v1/crates/pqfile/${VERSION}")
             if [ "$http" = "200" ]; then
               echo "pqfile $VERSION confirmed on crates.io after $((i * 10))s"
