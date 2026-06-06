@@ -1,5 +1,5 @@
 Name:           pqfile
-Version:        4.2.0
+Version:        4.2.1
 Release:        1%{?dist}
 Summary:        Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305
 

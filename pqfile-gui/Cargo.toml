@@ -1,6 +1,6 @@
 [package]
 name = "pqfile-gui"
-version = "4.2.0"
+version = "4.2.1"
 edition = "2021"
 license = "MIT"
 autobins = false

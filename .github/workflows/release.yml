@@ -153,6 +153,9 @@ jobs:
         with:
           version: latest
 
+      - name: Install binaryen (wasm-opt)
+        run: sudo apt-get install -y binaryen
+
       - name: Cache Cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -166,6 +169,13 @@ jobs:
       - name: Build WASM
         working-directory: pqfile-gui
         run: trunk build --release
+
+      - name: Pre-compress assets
+        working-directory: pqfile-gui
+        run: |
+          for f in dist/*.wasm dist/*.js; do
+            [ -f "$f" ] && gzip --keep --force -9 "$f"
+          done
 
       - name: Archive WASM
         run: tar -czf pqfile-web.tar.gz -C pqfile-gui/dist .

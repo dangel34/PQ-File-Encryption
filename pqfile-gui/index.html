@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#1a1a2e" />
   <title>pqfile - Post-Quantum File Encryption</title>
   <link data-trunk rel="copy-file" href="icon.png" />
+  <link data-trunk rel="copy-file" href="sw.js" />
   <script>
     (function() {
       var img = new Image();
@@ -91,6 +92,11 @@
         loader.classList.add('hidden');
       }
     }).observe(canvas);
+  </script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js');
+    }
   </script>
 </body>
 </html>

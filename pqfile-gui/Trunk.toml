@@ -1,0 +1,6 @@
+[build]
+dist    = "dist"
+# Optimize the compiled WASM for size. Runs wasm-opt -Os after compilation.
+# Requires the `binaryen` package (provides wasm-opt) to be in PATH.
+# In CI this is installed via: apt-get install -y binaryen
+wasm_opt = "s"
