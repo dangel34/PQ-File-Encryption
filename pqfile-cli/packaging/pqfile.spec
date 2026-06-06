@@ -19,6 +19,9 @@ install -D -m 755 %{_builddir}/pqfile %{buildroot}%{_bindir}/pqfile
 %{_bindir}/pqfile
 
 %changelog
+* Fri Jun 05 2026 dangel34 <dma38091@protonmail.com> - 4.2.1-1
+- Version bump
+
 * Fri Jun 05 2026 dangel34 <dma38091@protonmail.com> - 4.2.0-1
 - Version bump
 
