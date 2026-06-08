@@ -24,6 +24,7 @@ pub(crate) struct WatchHandle {
 }
 
 /// State for the QR code modal window.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct QrModal {
     pub(crate) title: String,
     pub(crate) texture: egui::TextureHandle,
@@ -208,6 +209,7 @@ pub struct PqfileApp {
 
     // ── QR code modal ────────────────────────────────────────────────────
     /// When Some, a QR window is open showing the encoded PEM data.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qr_modal: Option<QrModal>,
 
     // ── Clipboard encrypt / decrypt (Tools tab) ───────────────────────────
@@ -364,6 +366,7 @@ impl Default for PqfileApp {
             clipboard_enc_status: OpStatus::None,
             clipboard_dec_status: OpStatus::None,
             clipboard_last_used: None,
+            #[cfg(not(target_arch = "wasm32"))]
             qr_modal: None,
             #[cfg(target_arch = "wasm32")]
             encrypt_wasm_queue: Vec::new(),
@@ -605,6 +608,7 @@ impl eframe::App for PqfileApp {
         }
 
         // ── QR code modal ──────────────────────────────────────────────────
+        #[cfg(not(target_arch = "wasm32"))]
         if self.qr_modal.is_some() {
             self.show_qr_window(&ctx, dark);
         }
@@ -1734,8 +1738,8 @@ pub(crate) fn load_keys(storage: &dyn eframe::Storage) -> Vec<KeyEntry> {
 
 // ── QR code helpers ────────────────────────────────────────────────────────
 
-#[cfg(not(target_arch = "wasm32"))]
 impl PqfileApp {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_qr(&mut self, ctx: &egui::Context, title: String, data: &str) {
         use image::Rgba;
         use qrcode::QrCode;
@@ -1758,7 +1762,7 @@ impl PqfileApp {
         self.qr_modal = Some(QrModal { title, texture });
     }
 
-    /// Render the QR modal window if open.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn show_qr_window(&mut self, ctx: &egui::Context, dark: bool) {
         use crate::colors::{c_bg, c_subtext, c_surface0, c_text};
         use eframe::egui::{CornerRadius, Stroke, Vec2};

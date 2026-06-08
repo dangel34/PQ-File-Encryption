@@ -1,0 +1,7 @@
+[target.wasm32-unknown-unknown]
+# getrandom 0.3.x dropped the `js` feature in favour of a cfg-based backend
+# selection. Setting this flag tells getrandom 0.3 to use `globalThis.crypto`
+# in browser / Node.js environments. getrandom 0.4 uses the `wasm_js` feature
+# (set in pqfile/Cargo.toml) and getrandom 0.2 uses the `js` feature, so this
+# flag only affects the 0.3.x transitive dependency.
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
