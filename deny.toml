@@ -17,11 +17,7 @@ version = 2
 yanked = "deny"
 # Ignored advisories are unmaintained-crate notices from dev-only or indirect
 # transitive dependencies that cannot be updated from this repo.
-ignore = [
-    # instant: unmaintained, pulled in transitively by notify v7 (watchfolder
-    # feature). No upstream fix available yet; not a security vulnerability.
-    { id = "RUSTSEC-2024-0384", reason = "transitive via notify v7 -> notify-types; not a security issue" },
-]
+ignore = []
 
 # ---------------------------------------------------------------------------
 # License policy

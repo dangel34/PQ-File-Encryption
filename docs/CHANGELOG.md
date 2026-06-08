@@ -4,6 +4,24 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [4.2.1] - 2026-06-08
+
+### Performance
+
+- **Pre-compressed WASM assets**: `pqfile-gui` build now runs `wasm-opt` and ships Brotli/gzip pre-compressed assets alongside a service worker for offline support, reducing initial load size.
+
+### Fixes
+
+- **Publish workflow**: corrected `curl` command in `publish.yml` that could misreport HTTP errors during the crates.io idempotency check.
+
+### Dependencies
+
+- `ml-dsa` 0.1.0 → 0.1.1 (bug fixes in the ML-DSA-65 implementation)
+- `notify` 7.0.0 → 8.2.0 (filesystem watcher; API-compatible for the watchfolder feature)
+- `taiki-e/install-action` CI action 2.81.3 → 2.81.8
+
+---
+
 ## [4.2.0] - 2026-06-05
 
 ### New features

@@ -97,3 +97,27 @@ fn compat_v8_anon_recipient2() {
 fn compat_v8_anon_recipient3() {
     assert_eq!(decrypt_one("v8_anon.pqf", "v8_anon.priv3.pem"), plaintext());
 }
+
+#[test]
+fn compat_v9_padded_recipient1() {
+    assert_eq!(
+        decrypt_one("v9_padded.pqf", "v9_padded.priv1.pem"),
+        plaintext()
+    );
+}
+
+#[test]
+fn compat_v9_padded_recipient2() {
+    assert_eq!(
+        decrypt_one("v9_padded.pqf", "v9_padded.priv2.pem"),
+        plaintext()
+    );
+}
+
+#[test]
+fn compat_v9_padded_recipient3() {
+    assert_eq!(
+        decrypt_one("v9_padded.pqf", "v9_padded.priv3.pem"),
+        plaintext()
+    );
+}

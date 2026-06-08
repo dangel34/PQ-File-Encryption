@@ -12,6 +12,7 @@ use std::path::Path;
 
 use pqfile::encrypt::{
     encrypt_stream, encrypt_stream_compressed, encrypt_stream_multi, encrypt_stream_multi_anon,
+    encrypt_stream_multi_anon_padded,
 };
 use pqfile::format::CHUNK_SIZE;
 use pqfile::keygen::{keygen_bytes, keygen_bytes_hybrid_768};
@@ -21,6 +22,10 @@ const PLAINTEXT: &[u8] = b"pqfile compat vector - do not change";
 
 fn write(dir: &Path, name: &str, data: &[u8]) {
     let path = dir.join(name);
+    if path.exists() {
+        println!("skip  (exists) {}", path.display());
+        return;
+    }
     fs::write(&path, data).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
     println!("wrote {}", path.display());
 }
@@ -158,5 +163,24 @@ fn main() {
         write(dir, "v8_anon.priv3.pem", priv3.as_bytes());
     }
 
-    println!("done - {} test vectors written to {OUT_DIR}/", 9 + 1); // +1 plaintext.bin
+    // v9 - padded anonymous multi-recipient (3 keys → 4 slots), ML-KEM-768
+    {
+        let (pub1, priv1) = keygen_bytes(768, None).unwrap();
+        let (pub2, priv2) = keygen_bytes(768, None).unwrap();
+        let (pub3, priv3) = keygen_bytes(768, None).unwrap();
+        let mut ct = Vec::new();
+        encrypt_stream_multi_anon_padded(
+            &[pub1.as_str(), pub2.as_str(), pub3.as_str()],
+            PLAINTEXT.len() as u64,
+            &mut { PLAINTEXT },
+            &mut ct,
+        )
+        .unwrap();
+        write(dir, "v9_padded.pqf", &ct);
+        write(dir, "v9_padded.priv1.pem", priv1.as_bytes());
+        write(dir, "v9_padded.priv2.pem", priv2.as_bytes());
+        write(dir, "v9_padded.priv3.pem", priv3.as_bytes());
+    }
+
+    println!("done - test vectors written to {OUT_DIR}/");
 }

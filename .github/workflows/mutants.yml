@@ -52,7 +52,11 @@ jobs:
 
       # Run mutations on the four crypto-critical modules only.
       # --jobs 4: run 4 mutations concurrently.
-      # --timeout 60: kill any mutant test run that exceeds 60 seconds.
+      # --timeout 180: kill any mutant test run that exceeds 180 seconds.
+      #   The full pqfile test suite (~365 tests) takes 90-120s on ubuntu-latest
+      #   because Argon2id runs at m=64MiB t=3 p=4 in production params. 180s
+      #   gives a 1.5-2x buffer over the observed baseline time; most mutants
+      #   still fail within the first few tests (<10s).
       # --no-shuffle: stable ordering for reproducible logs.
       - name: Run cargo-mutants on crypto-critical paths
         run: |
@@ -63,7 +67,7 @@ jobs:
             --file pqfile/src/shamir.rs \
             --file pqfile/src/passphrase.rs \
             --jobs 4 \
-            --timeout 60 \
+            --timeout 180 \
             --no-shuffle \
             ${{ github.event.inputs.extra_flags }}
         env:
