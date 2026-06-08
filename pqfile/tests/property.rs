@@ -4,6 +4,7 @@
 //! possible input, not just the specific cases covered by unit tests.
 //!
 //! Run with: `cargo test --test property`
+#![cfg(not(target_arch = "wasm32"))]
 
 use proptest::prelude::*;
 
