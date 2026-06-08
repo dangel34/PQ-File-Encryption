@@ -28,7 +28,8 @@ paths = [
     '''tests/static_vectors\.rs''',
     '''tests/vectors\.rs''',
     '''examples/gen_vectors\.rs''',
-    '''tests/compat/''',
+    # Match both bare `tests/compat/` and workspace-prefixed `pqfile/tests/compat/`
+    '''(pqfile/)?tests/compat/''',
 ]
 
 [[allowlists]]
