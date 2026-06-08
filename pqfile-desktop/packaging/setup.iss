@@ -16,7 +16,7 @@
 ; With a local PFX cert: signtool sign /fd SHA256 /f cert.pfx /p pass /tr http://timestamp.digicert.com /td SHA256 $f
 
 #define AppName      "pqfile"
-#define AppVersion   "4.2.1"
+#define AppVersion   "4.2.2"
 #define AppPublisher "Derek"
 #define AppExeName   "pqfile-desktop.exe"
 #define BinPath      "..\..\target\release\" + AppExeName
