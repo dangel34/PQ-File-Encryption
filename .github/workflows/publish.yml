@@ -76,38 +76,31 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      # Poll the crates.io REST API until pqfile is visible.
-      # pqfile-cli depends on pqfile; cargo publish will fail if the API hasn't
-      # registered the new version yet. The REST API reflects uploads within
-      # seconds, much faster than the sparse index which can lag by minutes.
-      - name: Wait for pqfile to appear on crates.io
-        if: steps.check.outputs.pqfile_published == 'false'
-        run: |
-          VERSION="${{ steps.check.outputs.version }}"
-          echo "Waiting for pqfile $VERSION on crates.io..."
-          for i in $(seq 1 30); do
-            http=$(curl -s -o /dev/null -w "%{http_code}" \
-              "https://crates.io/api/v1/crates/pqfile/${VERSION}")
-            if [ "$http" = "200" ]; then
-              echo "pqfile $VERSION confirmed on crates.io after $((i * 10))s"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Timed out waiting for pqfile $VERSION on crates.io" >&2
-          exit 1
-
+      # Retry publishing pqfile-cli until the sparse index has pqfile visible.
+      # cargo publish uses the sparse index (not the REST API), which can lag a
+      # few minutes after the pqfile upload completes. Retrying here avoids a
+      # separate polling step and handles the lag transparently.
       - name: Publish pqfile-cli
         if: steps.check.outputs.cli_published == 'false'
         run: |
-          set +e
-          out=$(cargo publish -p pqfile-cli --locked 2>&1)
-          rc=$?
-          echo "$out"
-          if [ $rc -ne 0 ] && echo "$out" | grep -qi "already uploaded\|already exists"; then
-            echo "pqfile-cli already on crates.io -- skipping"
-            exit 0
-          fi
-          exit $rc
+          for i in $(seq 1 24); do
+            set +e
+            out=$(cargo publish -p pqfile-cli --locked 2>&1)
+            rc=$?
+            set -e
+            echo "$out"
+            if [ $rc -eq 0 ]; then
+              echo "pqfile-cli published successfully"
+              exit 0
+            fi
+            if echo "$out" | grep -qi "already uploaded\|already exists"; then
+              echo "pqfile-cli already on crates.io -- skipping"
+              exit 0
+            fi
+            echo "Attempt $i/24 failed, retrying in 30s..."
+            sleep 30
+          done
+          echo "pqfile-cli publish failed after all retries" >&2
+          exit 1
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
