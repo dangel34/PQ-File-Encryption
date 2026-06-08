@@ -210,7 +210,7 @@ impl PqfileApp {
                 );
                 // Passphrase strength meter
                 if !self.keygen_passphrase.is_empty() {
-                    let score = passphrase_strength(&self.keygen_passphrase);
+                    let score = keygen::passphrase_strength(&self.keygen_passphrase);
                     let (label, color) = if score <= 2 {
                         ("Weak", c_red(dark))
                     } else if score <= 4 {
@@ -524,31 +524,4 @@ impl PqfileApp {
             }
         }
     }
-}
-
-/// Simple passphrase entropy score 0 to 7. Length + character diversity heuristic.
-fn passphrase_strength(s: &str) -> u8 {
-    let mut score = 0u8;
-    if s.len() >= 8 {
-        score += 1;
-    }
-    if s.len() >= 12 {
-        score += 1;
-    }
-    if s.len() >= 16 {
-        score += 1;
-    }
-    if s.chars().any(|c| c.is_lowercase()) {
-        score += 1;
-    }
-    if s.chars().any(|c| c.is_uppercase()) {
-        score += 1;
-    }
-    if s.chars().any(|c| c.is_ascii_digit()) {
-        score += 1;
-    }
-    if s.chars().any(|c| !c.is_alphanumeric()) {
-        score += 1;
-    }
-    score
 }

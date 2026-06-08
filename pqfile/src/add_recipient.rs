@@ -294,7 +294,7 @@ mod tests {
         let mut result = Vec::new();
         let err = add_recipient_stream(&priv2, &pub3, &mut enc.as_slice(), &mut result, None)
             .unwrap_err();
-        assert!(matches!(err, PqfileError::NoMatchingRecipient));
+        assert!(matches!(err, PqfileError::NoMatchingRecipient { .. }));
     }
 
     #[test]

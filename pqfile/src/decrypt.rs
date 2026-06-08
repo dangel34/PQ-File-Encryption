@@ -313,12 +313,34 @@ pub fn decrypt_stream(
     }
 }
 
+/// Decrypts a stream, calling `progress(bytes_written, total_hint)` after each plaintext
+/// chunk is written to `writer`.
+///
+/// `total_hint` is the expected plaintext size in bytes. Pass the `original_size` from a
+/// prior [`inspect_stream`](crate::inspect::inspect_stream) call if known, or 0 to signal
+/// "unknown total". The callback still fires with `(bytes_written, 0)` when total is 0;
+/// callers should treat the second argument as "unknown" in that case.
+///
+/// In all other respects this function is identical to [`decrypt_stream`].
+pub fn decrypt_stream_with_progress(
+    privkey_pem: &str,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    passphrase: Option<&str>,
+    total_hint: u64,
+    progress: &dyn Fn(u64, u64),
+) -> Result<(), PqfileError> {
+    let mut tracked = crate::progress::ProgressWriter::new(writer, total_hint, progress);
+    decrypt_stream(privkey_pem, reader, &mut tracked, passphrase)
+}
+
 fn find_session_key(
     dk: &DkVariant,
     entries: &[(u16, &[u8], &[u8; WRAPPED_KEY_LEN])],
 ) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     let dk_variant = dk.kem_variant();
     let mut found: Option<Zeroizing<[u8; 32]>> = None;
+    let mut slots_tried: usize = 0;
     // For v4 files, each slot carries an explicit kem_variant field in the header.
     // Skipping mismatched-variant slots does not leak information beyond what the
     // header already exposes in plaintext. Slots that match the key's variant are
@@ -328,6 +350,7 @@ fn find_session_key(
         if *kem_variant != dk_variant {
             continue;
         }
+        slots_tried += 1;
         let ss = decapsulate_shared_secret(dk, kem_ciphertext)?;
         if let Ok(k) = unwrap_session_key(wrapped_key, &ss) {
             if found.is_none() {
@@ -335,7 +358,7 @@ fn find_session_key(
             }
         }
     }
-    found.ok_or(PqfileError::NoMatchingRecipient)
+    found.ok_or(PqfileError::NoMatchingRecipient { slots_tried })
 }
 
 /// Searches v8 entries for one whose wrapped session key is recoverable with `dk`.
@@ -365,7 +388,9 @@ fn find_session_key_v8(
             }
         }
     }
-    found.ok_or(PqfileError::NoMatchingRecipient)
+    found.ok_or(PqfileError::NoMatchingRecipient {
+        slots_tried: entries.len(),
+    })
 }
 
 fn unwrap_session_key(
@@ -1728,5 +1753,43 @@ mod tests {
         assert!(result.is_err(), "expected error when limit exceeded");
         let err = result.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn decrypt_stream_with_progress_fires_and_accurate() {
+        use std::sync::{Arc, Mutex};
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 2 + 77).collect();
+        let mut ct = Vec::new();
+        encrypt_stream(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        let calls: Arc<Mutex<Vec<(u64, u64)>>> = Arc::new(Mutex::new(Vec::new()));
+        let calls2 = Arc::clone(&calls);
+        let mut out = Vec::new();
+        super::decrypt_stream_with_progress(
+            &priv_pem,
+            &mut ct.as_slice(),
+            &mut out,
+            None,
+            plaintext.len() as u64,
+            &move |done, total| {
+                calls2.lock().unwrap().push((done, total));
+            },
+        )
+        .unwrap();
+
+        assert_eq!(out, plaintext);
+        let log = calls.lock().unwrap().clone();
+        assert!(!log.is_empty(), "progress callback must fire");
+        let (last_done, last_total) = *log.last().unwrap();
+        assert_eq!(last_done, plaintext.len() as u64);
+        assert_eq!(last_total, plaintext.len() as u64);
     }
 }

@@ -52,6 +52,10 @@ pub(crate) struct EncryptJob {
     /// Completed file results: (original index in encrypt_files, status).
     pub(crate) results: Vec<(usize, OpStatus)>,
     pub(crate) finished: bool,
+    /// Bytes processed in the currently-encrypting file (0 when idle).
+    pub(crate) current_file_bytes_done: u64,
+    /// Total bytes of the currently-encrypting file (0 when idle).
+    pub(crate) current_file_bytes_total: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,6 +69,10 @@ pub(crate) struct DecryptBatchJob {
     /// Completed file results: (original index in decrypt_files, status).
     pub(crate) results: Vec<(usize, OpStatus)>,
     pub(crate) finished: bool,
+    /// Bytes written for the currently-decrypting file (0 when idle).
+    pub(crate) current_file_bytes_done: u64,
+    /// Total bytes expected for the currently-decrypting file (0 when unknown/idle).
+    pub(crate) current_file_bytes_total: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -218,6 +226,7 @@ impl FileInput {
 
 /// Drag-and-drop payload when dragging a key from the Keys panel.
 /// Used with egui's `dnd_drag_source` / `dnd_drop_zone` API.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(crate) struct KeyDragPayload {
     pub(crate) label: String,

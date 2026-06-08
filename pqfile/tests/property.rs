@@ -60,6 +60,41 @@ proptest! {
     }
 }
 
+// Roundtrip at the adaptive chunk-size tier boundaries (16 KiB, 64 KiB, 256 KiB).
+// Off-by-one errors in fill_chunk or the final-chunk logic show up at these sizes.
+#[test]
+fn prop_chunk_boundary_sizes() {
+    const KIB: usize = 1024;
+    let boundaries = [
+        16 * KIB - 1,
+        16 * KIB,
+        16 * KIB + 1,
+        64 * KIB - 1,
+        64 * KIB,
+        64 * KIB + 1,
+        256 * KIB - 1,
+        256 * KIB,
+        256 * KIB + 1,
+    ];
+    let (pub_pem, priv_pem) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+    for &size in &boundaries {
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(size).collect();
+        let mut ct = Vec::new();
+        pqfile::encrypt::encrypt_stream(
+            &pub_pem,
+            size as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap_or_else(|e| panic!("encrypt failed at size {size}: {e}"));
+        let mut out = Vec::new();
+        pqfile::decrypt::decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None)
+            .unwrap_or_else(|e| panic!("decrypt failed at size {size}: {e}"));
+        assert_eq!(out, plaintext, "roundtrip mismatch at boundary size {size}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Ciphertext integrity: any flip always fails authentication
 // ---------------------------------------------------------------------------

@@ -84,14 +84,11 @@
   </div>
   <canvas id="pqfile_canvas"></canvas>
   <script>
-    // Hide the loading overlay once eframe has sized the canvas.
-    const canvas = document.getElementById('pqfile_canvas');
-    const loader = document.getElementById('loader');
-    new ResizeObserver(() => {
-      if (canvas.width > 0) {
-        loader.classList.add('hidden');
-      }
-    }).observe(canvas);
+    // Called from Rust via wasm_bindgen after the first egui frame is rendered.
+    function hide_loader() {
+      var loader = document.getElementById('loader');
+      if (loader) loader.classList.add('hidden');
+    }
   </script>
   <script>
     if ('serviceWorker' in navigator) {

@@ -138,6 +138,61 @@ pub fn encrypt_stream(
     )
 }
 
+/// Encrypts a stream of plaintext bytes, calling `progress(bytes_read, original_size)` after
+/// each chunk is consumed from `reader`.
+///
+/// This is identical to [`encrypt_stream`] but reports progress incrementally.
+/// `bytes_read` counts plaintext bytes consumed so far; `original_size` is the same value
+/// passed as the second argument and can be used as the denominator for a progress fraction.
+/// When `original_size` is 0 the fraction is undefined; the callback will still fire but
+/// callers should treat the second argument as "unknown total" in that case.
+///
+/// Use [`MultiEncryptBuilder::with_progress`] for multi-recipient variants, or
+/// [`encrypt_stream_multi_anon_with_progress`] / [`encrypt_stream_multi_anon_padded_with_progress`]
+/// when a borrowed callback is more convenient.
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_with_progress(
+    pubkey_pem: &str,
+    original_size: u64,
+    chunk_size: usize,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    progress: &dyn Fn(u64, u64),
+) -> Result<(), PqfileError> {
+    let mut tracked = crate::progress::ProgressReader::new(reader, original_size, progress);
+    encrypt_stream(pubkey_pem, original_size, chunk_size, &mut tracked, writer)
+}
+
+/// Multi-recipient v8 (anonymous) encryption with a progress callback.
+///
+/// Identical to [`encrypt_stream_multi_anon`] but calls `progress(bytes_read, original_size)`
+/// after each plaintext chunk is consumed. See [`encrypt_stream_with_progress`] for semantics.
+pub fn encrypt_stream_multi_anon_with_progress(
+    pubkey_pems: &[&str],
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    progress: &dyn Fn(u64, u64),
+) -> Result<(), PqfileError> {
+    let mut tracked = crate::progress::ProgressReader::new(reader, original_size, progress);
+    encrypt_stream_multi_anon(pubkey_pems, original_size, &mut tracked, writer)
+}
+
+/// Multi-recipient v9 (padded anonymous) encryption with a progress callback.
+///
+/// Identical to [`encrypt_stream_multi_anon_padded`] but calls `progress(bytes_read, original_size)`
+/// after each plaintext chunk is consumed. See [`encrypt_stream_with_progress`] for semantics.
+pub fn encrypt_stream_multi_anon_padded_with_progress(
+    pubkey_pems: &[&str],
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    progress: &dyn Fn(u64, u64),
+) -> Result<(), PqfileError> {
+    let mut tracked = crate::progress::ProgressReader::new(reader, original_size, progress);
+    encrypt_stream_multi_anon_padded(pubkey_pems, original_size, &mut tracked, writer)
+}
+
 pub(crate) fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u16), PqfileError> {
     let pem = pem::parse(pubkey_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
     let raw = pem.contents();
@@ -464,6 +519,137 @@ pub fn encrypt_stream_multi_anon_padded(
         reader,
         writer,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Multi-recipient builder
+// ---------------------------------------------------------------------------
+
+/// Format selector for [`MultiEncryptBuilder`].
+#[derive(Debug, Clone, Copy, Default)]
+enum MultiEncryptMode {
+    #[default]
+    Standard,
+    Anonymous,
+    Padded,
+}
+
+/// Ergonomic builder for multi-recipient encryption.
+///
+/// Wraps the three multi-recipient free functions and selects the right format
+/// based on the options you configure. Prefer this over calling
+/// [`encrypt_stream_multi`], [`encrypt_stream_multi_anon`], or
+/// [`encrypt_stream_multi_anon_padded`] directly; future minor releases will
+/// add progress callbacks and other knobs here without changing the existing
+/// free-function signatures.
+///
+/// # Format selection
+///
+/// | Method called | Format | Version byte |
+/// |---|---|---|
+/// | (none) | v4 - explicit per-slot KEM variant | `0x04` |
+/// | `.anonymous()` | v8 - uniform slot size, shuffled order | `0x08` |
+/// | `.padded()` | v9 - like v8 + slot count padded to next power of two | `0x09` |
+///
+/// # Example
+///
+/// ```no_run
+/// use pqfile::encrypt::MultiEncryptBuilder;
+/// # let (pub1, pub2) = (String::new(), String::new());
+/// # let plaintext = vec![0u8; 0];
+/// let mut ct = Vec::new();
+/// MultiEncryptBuilder::new(&[pub1.as_str(), pub2.as_str()])
+///     .anonymous()
+///     .encrypt(plaintext.len() as u64, &mut plaintext.as_slice(), &mut ct)?;
+/// # Ok::<_, pqfile::error::PqfileError>(())
+/// ```
+pub struct MultiEncryptBuilder<'a> {
+    pubkey_pems: Vec<&'a str>,
+    mode: MultiEncryptMode,
+    progress: Option<Box<dyn Fn(u64, u64)>>,
+}
+
+impl<'a> MultiEncryptBuilder<'a> {
+    /// Creates a new builder with the given recipient public keys.
+    ///
+    /// Defaults to v4 (standard multi-recipient) format. Call [`anonymous`](Self::anonymous)
+    /// or [`padded`](Self::padded) to select a different format.
+    pub fn new(pubkey_pems: &[&'a str]) -> Self {
+        Self {
+            pubkey_pems: pubkey_pems.to_vec(),
+            mode: MultiEncryptMode::Standard,
+            progress: None,
+        }
+    }
+
+    /// Use v8 anonymous format: uniform 1568-byte slots, no per-slot KEM variant field,
+    /// recipient order shuffled with Fisher-Yates.
+    pub fn anonymous(mut self) -> Self {
+        self.mode = MultiEncryptMode::Anonymous;
+        self
+    }
+
+    /// Use v9 padded format: like anonymous but slot count is rounded up to the next power
+    /// of two with random dummy slots to obscure recipient count.
+    pub fn padded(mut self) -> Self {
+        self.mode = MultiEncryptMode::Padded;
+        self
+    }
+
+    /// Register a progress callback invoked after each plaintext chunk is consumed.
+    ///
+    /// The callback receives `(bytes_read, original_size)`. When `original_size` is 0
+    /// the total is unknown; the callback still fires but the second argument should be
+    /// treated as "unknown total".
+    pub fn with_progress(mut self, progress: impl Fn(u64, u64) + 'static) -> Self {
+        self.progress = Some(Box::new(progress));
+        self
+    }
+
+    /// Encrypts `reader` for all configured recipients and writes to `writer`.
+    pub fn encrypt(
+        self,
+        original_size: u64,
+        reader: &mut dyn Read,
+        writer: &mut dyn Write,
+    ) -> Result<(), PqfileError> {
+        if let Some(cb) = self.progress {
+            let mut tracked =
+                crate::progress::ProgressReader::new(reader, original_size, cb.as_ref());
+            match self.mode {
+                MultiEncryptMode::Standard => {
+                    encrypt_stream_multi(&self.pubkey_pems, original_size, &mut tracked, writer)
+                }
+                MultiEncryptMode::Anonymous => encrypt_stream_multi_anon(
+                    &self.pubkey_pems,
+                    original_size,
+                    &mut tracked,
+                    writer,
+                ),
+                MultiEncryptMode::Padded => encrypt_stream_multi_anon_padded(
+                    &self.pubkey_pems,
+                    original_size,
+                    &mut tracked,
+                    writer,
+                ),
+            }
+        } else {
+            match self.mode {
+                MultiEncryptMode::Standard => {
+                    encrypt_stream_multi(&self.pubkey_pems, original_size, reader, writer)
+                }
+                MultiEncryptMode::Anonymous => {
+                    encrypt_stream_multi_anon(&self.pubkey_pems, original_size, reader, writer)
+                }
+                MultiEncryptMode::Padded => encrypt_stream_multi_anon_padded(
+                    &self.pubkey_pems,
+                    original_size,
+                    reader,
+                    writer,
+                ),
+            }
+        }
+    }
 }
 
 /// Encapsulates `session_key` under `pubkey_pem` for use during rekey.
@@ -1481,5 +1667,154 @@ mod tests {
         // (both have the same ciphertext payload since compression may vary,
         //  but we can check the compression_algo byte in the header).
         let _ = V5_CHUNK_SIZE_FIELD_LEN + V6_COMPRESSION_FIELD_LEN; // 5 bytes
+    }
+
+    // ── MultiEncryptBuilder ───────────────────────────────────────────────────
+
+    use crate::format::{VERSION_V4, VERSION_V8, VERSION_V9};
+
+    #[test]
+    fn builder_standard_roundtrip() {
+        let (pub1, priv1) = keypair();
+        let (pub2, priv2) = keypair();
+        let plaintext = b"builder standard v4 roundtrip";
+        let mut ct = Vec::new();
+        MultiEncryptBuilder::new(&[pub1.as_str(), pub2.as_str()])
+            .encrypt(plaintext.len() as u64, &mut plaintext.as_slice(), &mut ct)
+            .unwrap();
+        let version_pos = crate::format::MAGIC.len();
+        assert_eq!(ct[version_pos], VERSION_V4);
+        for priv_pem in [&priv1, &priv2] {
+            let mut out = Vec::new();
+            decrypt_stream(priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+            assert_eq!(out, plaintext);
+        }
+    }
+
+    #[test]
+    fn builder_anonymous_roundtrip() {
+        let (pub1, priv1) = keypair();
+        let (pub2, priv2) = keypair();
+        let plaintext = b"builder anonymous v8 roundtrip";
+        let mut ct = Vec::new();
+        MultiEncryptBuilder::new(&[pub1.as_str(), pub2.as_str()])
+            .anonymous()
+            .encrypt(plaintext.len() as u64, &mut plaintext.as_slice(), &mut ct)
+            .unwrap();
+        let version_pos = crate::format::MAGIC.len();
+        assert_eq!(ct[version_pos], VERSION_V8);
+        for priv_pem in [&priv1, &priv2] {
+            let mut out = Vec::new();
+            decrypt_stream(priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+            assert_eq!(out, plaintext);
+        }
+    }
+
+    #[test]
+    fn builder_padded_roundtrip() {
+        let (pub1, priv1) = keypair();
+        let (pub2, priv2) = keypair();
+        let plaintext = b"builder padded v9 roundtrip";
+        let mut ct = Vec::new();
+        MultiEncryptBuilder::new(&[pub1.as_str(), pub2.as_str()])
+            .padded()
+            .encrypt(plaintext.len() as u64, &mut plaintext.as_slice(), &mut ct)
+            .unwrap();
+        let version_pos = crate::format::MAGIC.len();
+        assert_eq!(ct[version_pos], VERSION_V9);
+        for priv_pem in [&priv1, &priv2] {
+            let mut out = Vec::new();
+            decrypt_stream(priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+            assert_eq!(out, plaintext);
+        }
+    }
+
+    #[test]
+    fn builder_last_mode_wins() {
+        let (pub1, _priv1) = keypair();
+        let plaintext = b"mode ordering";
+        let mut ct_ap = Vec::new();
+        MultiEncryptBuilder::new(&[pub1.as_str()])
+            .anonymous()
+            .padded()
+            .encrypt(
+                plaintext.len() as u64,
+                &mut plaintext.as_slice(),
+                &mut ct_ap,
+            )
+            .unwrap();
+        let version_pos = crate::format::MAGIC.len();
+        assert_eq!(
+            ct_ap[version_pos], VERSION_V9,
+            ".anonymous().padded() => v9"
+        );
+
+        let mut ct_pa = Vec::new();
+        MultiEncryptBuilder::new(&[pub1.as_str()])
+            .padded()
+            .anonymous()
+            .encrypt(
+                plaintext.len() as u64,
+                &mut plaintext.as_slice(),
+                &mut ct_pa,
+            )
+            .unwrap();
+        assert_eq!(
+            ct_pa[version_pos], VERSION_V8,
+            ".padded().anonymous() => v8"
+        );
+    }
+
+    #[test]
+    fn encrypt_stream_with_progress_fires_and_accurate() {
+        use std::sync::{Arc, Mutex};
+        let (pub_pem, priv_pem) = keypair();
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 2 + 100).collect();
+        let calls: Arc<Mutex<Vec<(u64, u64)>>> = Arc::new(Mutex::new(Vec::new()));
+        let calls2 = Arc::clone(&calls);
+        let mut ct = Vec::new();
+        encrypt_stream_with_progress(
+            &pub_pem,
+            plaintext.len() as u64,
+            CHUNK_SIZE,
+            &mut plaintext.as_slice(),
+            &mut ct,
+            &move |done, total| {
+                calls2.lock().unwrap().push((done, total));
+            },
+        )
+        .unwrap();
+        let log = calls.lock().unwrap().clone();
+        assert!(!log.is_empty(), "progress callback must fire at least once");
+        let (last_done, last_total) = *log.last().unwrap();
+        assert_eq!(
+            last_done,
+            plaintext.len() as u64,
+            "final bytes_read must equal plaintext length"
+        );
+        assert_eq!(last_total, plaintext.len() as u64);
+        let mut out = Vec::new();
+        decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn builder_with_progress_fires() {
+        use std::sync::{Arc, Mutex};
+        let (pub1, priv1) = keypair();
+        let plaintext = b"builder progress test payload";
+        let calls: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        let calls2 = Arc::clone(&calls);
+        let mut ct = Vec::new();
+        MultiEncryptBuilder::new(&[pub1.as_str()])
+            .with_progress(move |_, _| {
+                *calls2.lock().unwrap() += 1;
+            })
+            .encrypt(plaintext.len() as u64, &mut plaintext.as_slice(), &mut ct)
+            .unwrap();
+        assert!(*calls.lock().unwrap() > 0, "progress callback must fire");
+        let mut out = Vec::new();
+        decrypt_stream(&priv1, &mut ct.as_slice(), &mut out, None).unwrap();
+        assert_eq!(out, plaintext);
     }
 }

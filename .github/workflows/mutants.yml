@@ -1,7 +1,7 @@
 name: Mutation Testing
 
 # Run nightly and on manual dispatch. Not run on every push/PR because
-# cargo-mutants is CPU-intensive (can take 20–40 minutes on the full set).
+# cargo-mutants is CPU-intensive (can take 20-40 minutes on the full set).
 #
 # Scope is intentionally limited to the four crypto-critical modules where a
 # surviving mutant is a genuine test gap. Any survivor should result in a new

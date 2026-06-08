@@ -66,6 +66,8 @@ pub struct PqfileApp {
     pub(crate) encrypt_wasm_done: usize,
     #[cfg(target_arch = "wasm32")]
     pub(crate) encrypt_wasm_total: usize,
+    #[cfg(target_arch = "wasm32")]
+    loader_hidden: bool,
 
     pub(crate) decrypt_privkey: FileInput,
     pub(crate) decrypt_files: Vec<MultiFileEntry>,
@@ -371,6 +373,8 @@ impl Default for PqfileApp {
             encrypt_wasm_done: 0,
             #[cfg(target_arch = "wasm32")]
             encrypt_wasm_total: 0,
+            #[cfg(target_arch = "wasm32")]
+            loader_hidden: false,
         }
     }
 }
@@ -443,6 +447,11 @@ impl eframe::App for PqfileApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_arch = "wasm32")]
+        if !self.loader_hidden {
+            crate::hide_loader();
+            self.loader_hidden = true;
+        }
         if self.poll_files() {
             ctx.request_repaint();
         }
@@ -1725,8 +1734,8 @@ pub(crate) fn load_keys(storage: &dyn eframe::Storage) -> Vec<KeyEntry> {
 
 // ── QR code helpers ────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PqfileApp {
-    /// Generate a QR texture and open the QR modal.
     pub(crate) fn open_qr(&mut self, ctx: &egui::Context, title: String, data: &str) {
         use image::Rgba;
         use qrcode::QrCode;

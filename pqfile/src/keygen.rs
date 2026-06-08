@@ -466,6 +466,39 @@ pub fn fingerprint_pem(pem_str: &str) -> String {
         .unwrap_or_else(|_| "unknown".to_owned())
 }
 
+/// Score a passphrase from 0 (very weak) to 7 (strong).
+///
+/// Combines length (3 tiers) and character diversity (4 classes).
+/// Score 0-2 = weak, 3-4 = fair, 5-7 = strong.
+///
+/// This is a heuristic for user feedback only; it does not enforce any minimum.
+#[must_use]
+pub fn passphrase_strength(s: &str) -> u8 {
+    let mut score = 0u8;
+    if s.len() >= 8 {
+        score += 1;
+    }
+    if s.len() >= 12 {
+        score += 1;
+    }
+    if s.len() >= 16 {
+        score += 1;
+    }
+    if s.chars().any(|c| c.is_lowercase()) {
+        score += 1;
+    }
+    if s.chars().any(|c| c.is_uppercase()) {
+        score += 1;
+    }
+    if s.chars().any(|c| c.is_ascii_digit()) {
+        score += 1;
+    }
+    if s.chars().any(|c| !c.is_alphanumeric()) {
+        score += 1;
+    }
+    score
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

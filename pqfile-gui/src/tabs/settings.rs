@@ -42,9 +42,9 @@ impl PqfileApp {
                     ui.label(RichText::new("Theme").size(13.0).color(c_text(dark)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let label = if self.settings.dark_mode {
-                            "Moon  Dark"
+                            "🌙  Dark"
                         } else {
-                            "Sun  Light"
+                            "☀  Light"
                         };
                         if ui
                             .add(

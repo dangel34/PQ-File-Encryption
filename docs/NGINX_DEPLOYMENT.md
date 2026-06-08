@@ -91,13 +91,30 @@ Accept the prompt to enable automatic security updates. Configuration is at
 
 ---
 
-## 2. Install nginx
+## 2. Install nginx and the brotli module
 
 ```bash
 sudo apt update
-sudo apt install nginx -y
+sudo apt install nginx libnginx-mod-http-brotli-filter libnginx-mod-http-brotli-static -y
 sudo systemctl enable nginx
 ```
+
+The brotli module ships as a dynamic module in Ubuntu 22.04+. It loads automatically once installed; no `load_module` directive is needed.
+
+### AppArmor adjustment (required if using a custom nginx profile)
+
+If nginx runs under a custom AppArmor profile (e.g. `/etc/apparmor.d/usr.sbin.nginx`), it
+will be denied access to the brotli module files even as root. Two paths need to be
+added: the `.so` binary and the symlink target in `/usr/share/nginx/`:
+
+```bash
+sudo sed -i '/# Nginx binaries/a\  \/usr\/lib\/nginx\/modules\/*.so mr,' /etc/apparmor.d/usr.sbin.nginx
+sudo sed -i '/# Config files/a\  \/usr\/share\/nginx\/modules-available\/*.conf r,' /etc/apparmor.d/usr.sbin.nginx
+sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.nginx
+```
+
+The `modules-enabled/` symlinks point to targets under `/usr/share/nginx/modules-available/`;
+AppArmor checks the symlink target path, so both directories must be explicitly allowed.
 
 ---
 
@@ -298,6 +315,15 @@ server {
     types {
         application/wasm wasm;
     }
+
+    # ----------------------------------------------------------------
+    # Pre-compressed asset serving
+    # Serve .gz / .br files produced by the release workflow instead of
+    # the uncompressed originals when the client accepts the encoding.
+    # Requires: libnginx-mod-http-brotli-static (installed in step 2)
+    # ----------------------------------------------------------------
+    gzip_static on;
+    brotli_static on;
 
     # ----------------------------------------------------------------
     # Static file caching

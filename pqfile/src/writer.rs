@@ -109,6 +109,7 @@ impl<W: Write> PqfWriter<W> {
     /// Must be called exactly once when all plaintext has been written. Dropping a
     /// `PqfWriter` without calling `finish` attempts a best-effort seal but silently
     /// discards any I/O error; prefer `finish` when error handling matters.
+    #[must_use = "the sealed inner writer must be used or the output file will not be finalized"]
     pub fn finish(mut self) -> Result<W, PqfileError> {
         self.seal_final().map_err(PqfileError::Io)?;
         Ok(self.inner.take().unwrap())

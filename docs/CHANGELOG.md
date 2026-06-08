@@ -4,6 +4,34 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [4.2.3] - unreleased
+
+### New features
+
+- **`--threads N` global CLI flag**: caps the Rayon worker thread count for `--parallel` encrypt and decrypt operations. Default 0 uses all available cores. Useful when pqfile runs alongside other workloads on a shared machine.
+
+### Fixes
+
+- **WASM loading screen no longer goes blank**: the loading spinner previously hid itself as soon as the canvas was sized (before WASM was instantiated), leaving a blank screen for several seconds. It now stays visible until Rust signals readiness after the first egui frame renders.
+
+### Performance
+
+- **Brotli pre-compression**: release builds now ship `.wasm.br` and `.js.br` alongside `.wasm.gz`. With `brotli_static on` in nginx, browsers receive brotli-compressed assets (15-20% smaller than gzip), reducing initial load time.
+
+---
+
+## [4.2.2] - 2026-06-08
+
+### New features
+
+- **`MultiEncryptBuilder`**: fluent builder API in `pqfile::encrypt` wrapping all three multi-recipient formats (Standard v4, Anonymous v8, Padded v9). Chain `.anonymous()`, `.padded()`, and `.with_progress(cb)` before calling `.encrypt(reader, writer)`.
+- **Progress callbacks**: `encrypt_stream_with_progress`, `encrypt_stream_multi_anon_with_progress`, `encrypt_stream_multi_anon_padded_with_progress`, and `decrypt_stream_with_progress` report `(bytes_done, total)` via a callback on each chunk. `total` is 0 when the size is not known in advance.
+- **Per-file byte progress bar in desktop GUI**: the encrypt and decrypt tabs now show a second progress bar tracking bytes processed for the current file. The decrypt bar is animated and indeterminate (with a MiB counter) because the original size is not available until after decryption completes.
+- **WASM CI smoke test**: `pqfile/tests/wasm_smoke.rs` adds four `#[wasm_bindgen_test]` cases (encrypt/decrypt roundtrip, keygen at 512 and 1024, wrong-key rejection). A `wasm-test` job in `ci.yml` runs them via `wasm-pack test --node` on every push and pull request.
+- **`--threads N` global CLI flag**: caps the Rayon worker thread count for `--parallel` encrypt and decrypt operations. Useful when pqfile runs alongside other workloads and should not consume all cores. Default 0 uses all available cores (previous behavior unchanged).
+
+---
+
 ## [4.2.1] - 2026-06-08
 
 ### Performance

@@ -74,9 +74,12 @@ pub enum PqfileError {
     #[error("signature verification failed")]
     SignatureVerificationFailed,
 
-    /// None of the recipient slots in a v4/v7 file matched the supplied private key.
-    #[error("no matching recipient found in this file for the given private key")]
-    NoMatchingRecipient,
+    /// None of the recipient slots in a v4/v7/v8/v9 file matched the supplied private key.
+    #[error("no matching recipient found: {slots_tried} slot(s) tried with the given private key")]
+    NoMatchingRecipient {
+        /// Number of recipient slots that were attempted during decryption.
+        slots_tried: usize,
+    },
 
     /// The key has been explicitly revoked.
     #[error("key has been revoked (fingerprint: {fingerprint}): {reason}")]

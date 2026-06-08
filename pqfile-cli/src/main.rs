@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
+use rayon::ThreadPoolBuilder;
 
 use pqfile::error::PqfileError;
 use pqfile::inspect::{inspect_stream, PqfHeaderInfo, RecipientInfo};
@@ -19,6 +20,10 @@ struct Cli {
     /// Emit machine-readable JSON to stdout (errors go to stderr as JSON).
     #[arg(long, global = true)]
     json: bool,
+
+    /// Maximum Rayon worker threads for --parallel operations (0 = all cores).
+    #[arg(long, global = true, value_name = "N", default_value_t = 0)]
+    threads: usize,
 
     #[command(subcommand)]
     command: Command,
@@ -389,6 +394,12 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), PqfileError> {
     let json = cli.json;
+    if cli.threads > 0 {
+        ThreadPoolBuilder::new()
+            .num_threads(cli.threads)
+            .build_global()
+            .map_err(|e| PqfileError::Io(io::Error::other(e)))?;
+    }
     match cli.command {
         Command::Keygen {
             out,
@@ -528,7 +539,11 @@ fn run_keygen(
         keygen::keygen_hardware(&out, force, level, hybrid, &lbl)?
     } else {
         let pp = if passphrase {
-            Some(prompt_new_passphrase()?)
+            let p = prompt_new_passphrase()?;
+            if !json && keygen::passphrase_strength(p.as_str()) <= 2 {
+                eprintln!("Warning: passphrase is weak. Use 12+ characters with mixed case, digits, and symbols.");
+            }
+            Some(p)
         } else {
             None
         };
@@ -1331,7 +1346,11 @@ fn run_sign_keygen(
         sign::sign_keygen_hardware(&out, force, &lbl)?
     } else {
         let pp = if use_passphrase {
-            Some(prompt_new_passphrase()?)
+            let p = prompt_new_passphrase()?;
+            if !json && keygen::passphrase_strength(p.as_str()) <= 2 {
+                eprintln!("Warning: passphrase is weak. Use 12+ characters with mixed case, digits, and symbols.");
+            }
+            Some(p)
         } else {
             None
         };
@@ -2137,7 +2156,7 @@ fn error_code(e: &PqfileError) -> u32 {
         PqfileError::PassphraseMismatch => 13,
         PqfileError::InvalidSignature => 14,
         PqfileError::SignatureVerificationFailed => 15,
-        PqfileError::NoMatchingRecipient => 16,
+        PqfileError::NoMatchingRecipient { .. } => 16,
         PqfileError::KeyRevoked { .. } => 17,
         PqfileError::CompressionNotSupported => 18,
         PqfileError::LegacyKeyFormat => 19,

@@ -16,6 +16,7 @@ path = "src/main.rs"
 pqfile        = { workspace = true }
 clap          = { version = "4", features = ["derive"] }
 clap_complete = "4"
+rayon         = "1"
 rpassword     = "7"
 zeroize       = { version = "1", features = ["derive"] }
 

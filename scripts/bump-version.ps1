@@ -25,7 +25,7 @@ if ($dirty) {
     exit 1
 }
 
-# Fail early if the tag already exists — before any files are modified.
+# Fail early if the tag already exists, before any files are modified.
 if (git tag -l "v$Version" | Select-String "v$Version") {
     Write-Error "Tag v$Version already exists locally. Delete it first: git tag -d v$Version"
     exit 1
@@ -37,17 +37,17 @@ if (git ls-remote --tags origin "refs/tags/v$Version" | Select-String "v$Version
 
 Write-Host "Checking formatting..."
 cargo fmt --check
-if ($LASTEXITCODE -ne 0) { Write-Error "cargo fmt check failed — run 'cargo fmt' then re-check"; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Error "cargo fmt check failed - run 'cargo fmt' then re-check"; exit 1 }
 Write-Host "  fmt OK"
 
 Write-Host "Running clippy..."
 cargo clippy -q --workspace --all-targets -- --deny warnings
-if ($LASTEXITCODE -ne 0) { Write-Error "Clippy failed — fix warnings before releasing"; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Error "Clippy failed - fix warnings before releasing"; exit 1 }
 Write-Host "  clippy OK"
 
 Write-Host "Running tests..."
 cargo test --workspace -q
-if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed — aborting version bump"; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed - aborting version bump"; exit 1 }
 Write-Host "  all tests passed"
 
 # ── Version replacements ───────────────────────────────────────────────────
@@ -62,7 +62,7 @@ function Replace-InFile([string]$path, [string]$pattern, [string]$replacement) {
 
 Write-Host "Bumping to v$Version..."
 
-# Cargo.toml files — match only the package version line (line starts with 'version =')
+# Cargo.toml files: match only the package version line (line starts with 'version =')
 $cargoPattern     = '(?m)^version = "\d+\.\d+\.\d+"'
 $cargoReplacement = "version = `"$Version`""
 Replace-InFile "$root\pqfile\Cargo.toml"         $cargoPattern $cargoReplacement
@@ -81,7 +81,7 @@ Replace-InFile "$root\pqfile-desktop\Cargo.toml" `
     '(pqfile-gui\s*=\s*\{[^}]*version\s*=\s*)"[\d.]+"' `
     ('${1}"' + $Version + '"')
 
-# pqfile-gui/src/lib.rs — APP_VERSION constant
+# pqfile-gui/src/lib.rs - APP_VERSION constant
 Replace-InFile "$root\pqfile-gui\src\lib.rs" `
     'pub\(crate\) const APP_VERSION: &str = "\d+\.\d+\.\d+";' `
     "pub(crate) const APP_VERSION: &str = `"$Version`";"
@@ -91,7 +91,7 @@ Replace-InFile "$root\pqfile-desktop\packaging\setup.iss" `
     '#define AppVersion\s+"[\d.]+"' `
     "#define AppVersion   `"$Version`""
 
-# RPM spec — Version field + prepend changelog entry
+# RPM spec - Version field + prepend changelog entry
 $specPath = "$root\pqfile-cli\packaging\pqfile.spec"
 Replace-InFile $specPath `
     '(?m)^Version:\s+[\d.]+' `
@@ -106,18 +106,18 @@ $specContent = $specContent -replace '(%changelog)', "%changelog`n$entry`n"
 Set-Content $specPath $specContent -NoNewline
 Write-Host "  added %changelog entry to pqfile-cli/packaging/pqfile.spec"
 
-# docs/BUILDING.md — example output path
+# docs/BUILDING.md - example output path
 Replace-InFile "$root\docs\BUILDING.md" `
     'pqfile-setup-[\d.]+\.exe' `
     "pqfile-setup-$Version.exe"
 
-# docs/CHANGELOG.md — stamp the unreleased section with today's date
+# docs/CHANGELOG.md - stamp the unreleased section with today's date
 $today = Get-Date -Format "yyyy-MM-dd"
 Replace-InFile "$root\docs\CHANGELOG.md" `
     "\[$Version\] - unreleased[^\n]*" `
     "[$Version] - $today"
 
-# Regenerate Cargo.lock — cargo check is much faster than cargo build
+# Regenerate Cargo.lock - cargo check is much faster than cargo build
 # (no codegen or linking, but still resolves and writes the lockfile)
 Write-Host "Regenerating Cargo.lock..."
 cargo check --workspace -q
@@ -127,7 +127,7 @@ if ($LASTEXITCODE -ne 0) { Write-Error "cargo check failed"; exit 1 }
 
 Write-Host "Committing..."
 
-# Stage only the files we knowingly modified — never use git add -A here.
+# Stage only the files we knowingly modified - never use git add -A here.
 $filesToStage = @(
     "pqfile/Cargo.toml",
     "pqfile-cli/Cargo.toml",
@@ -150,6 +150,6 @@ git tag "v$Version"
 git push origin main
 git push origin "v$Version"
 
-Write-Host "Done — v$Version tagged and pushed."
+Write-Host "Done: v$Version tagged and pushed."
 Write-Host "  -> CI release workflow will build artifacts and create a draft GitHub release."
 Write-Host "  -> Deploy workflow will rebuild and publish the web app."

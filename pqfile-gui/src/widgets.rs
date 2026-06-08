@@ -707,6 +707,7 @@ pub(crate) fn seg_tabs<T: PartialEq + Clone>(
 
 /// Small clipboard-copy button. Shows "⎘" and copies `text` on click.
 /// Returns `true` if clicked this frame.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn copy_text_btn(ui: &mut egui::Ui, text: &str, dark: bool) -> bool {
     ui.add(
         egui::Button::new(RichText::new("⎘").size(11.0).color(c_subtext(dark)))

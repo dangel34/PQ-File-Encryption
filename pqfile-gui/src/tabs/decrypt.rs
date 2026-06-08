@@ -3,7 +3,9 @@ use crate::colors::{
     c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1,
     c_text,
 };
-use crate::types::{KeyDragPayload, OpStatus, Tab};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::types::KeyDragPayload;
+use crate::types::{OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_pqf;
 use crate::widgets::{
@@ -63,6 +65,8 @@ impl PqfileApp {
                 total,
                 results: Vec::new(),
                 finished: false,
+                current_file_bytes_done: 0,
+                current_file_bytes_total: 0,
             }));
             self.decrypt_batch_job = Some(Arc::clone(&job));
 
@@ -70,10 +74,32 @@ impl PqfileApp {
             std::thread::spawn(move || {
                 for (i, name, data, path) in files {
                     let pp = passphrase.as_deref();
+                    // Reset per-file byte progress.
+                    {
+                        let mut g = job.lock().unwrap();
+                        g.current_file_bytes_done = 0;
+                        g.current_file_bytes_total = 0;
+                    }
+                    let job_progress = Arc::clone(&job);
+                    let ctx_progress = ctx.clone();
                     let result: Result<Vec<u8>, _> = {
                         let mut cursor = Cursor::new(&data);
                         let mut out = Vec::new();
-                        decrypt::decrypt_stream(&priv_pem, &mut cursor, &mut out, pp).map(|_| out)
+                        decrypt::decrypt_stream_with_progress(
+                            &priv_pem,
+                            &mut cursor,
+                            &mut out,
+                            pp,
+                            0, // total_hint unknown until header is parsed
+                            &move |done: u64, total: u64| {
+                                let mut g = job_progress.lock().unwrap();
+                                g.current_file_bytes_done = done;
+                                g.current_file_bytes_total = total;
+                                drop(g);
+                                ctx_progress.request_repaint();
+                            },
+                        )
+                        .map(|_| out)
                     };
                     let status = match result {
                         Ok(plain) => {
@@ -95,6 +121,8 @@ impl PqfileApp {
                     {
                         let mut g = job.lock().unwrap();
                         g.done += 1;
+                        g.current_file_bytes_done = 0;
+                        g.current_file_bytes_total = 0;
                         g.results.push((i, status));
                     }
                     ctx.request_repaint();
@@ -436,6 +464,17 @@ impl PqfileApp {
                         .desired_width(f32::INFINITY)
                         .animate(true),
                 );
+                if g.current_file_bytes_done > 0 {
+                    ui.add_space(2.0);
+                    let mib = g.current_file_bytes_done as f32 / (1024.0 * 1024.0);
+                    // Show indeterminate bar (total is unknown for decrypt); display byte count.
+                    ui.add(
+                        egui::ProgressBar::new(0.0)
+                            .desired_width(f32::INFINITY)
+                            .text(format!("{mib:.1} MiB"))
+                            .animate(true),
+                    );
+                }
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!("Decrypting… {}/{}", g.done, g.total))

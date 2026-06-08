@@ -113,7 +113,7 @@ fn gf_div(a: u8, b: u8) -> u8 {
     gf_mul(a, gf_inv(b))
 }
 
-/// Lagrange interpolation over GF(256) at x=0 — same algorithm as `reconstruct_raw`.
+/// Lagrange interpolation over GF(256) at x=0 - same algorithm as `reconstruct_raw`.
 fn lagrange_interp_gf256(shares: &[(u8, &[u8])]) -> Vec<u8> {
     let len = shares[0].1.len();
     let xs: Vec<u8> = shares.iter().map(|(x, _)| *x).collect();

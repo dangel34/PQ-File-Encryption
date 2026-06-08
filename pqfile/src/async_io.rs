@@ -230,6 +230,7 @@ impl<W: AsyncWrite + Unpin> AsyncPqfWriter<W> {
     ///
     /// Must be called once when all plaintext has been written. Calling `finish` is
     /// equivalent to awaiting `shutdown()` and then recovering the inner writer.
+    #[must_use = "the sealed inner writer must be used or the output file will not be finalized"]
     pub async fn finish(mut self) -> Result<W, PqfileError> {
         self.seal_and_write().await
     }

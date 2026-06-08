@@ -1398,6 +1398,102 @@ fn sign_keygen_json_output() {
     assert!(!v["fingerprint"].as_str().unwrap().is_empty());
 }
 
+// ── Corrupt / truncated input ────────────────────────────────────────────────
+
+#[test]
+fn decrypt_truncated_pqf_fails() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let original = b"truncation test payload with enough bytes to produce multiple chunks";
+    let input = dir.join("plain.txt");
+    fs::write(&input, original).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    let pqf = dir.join("plain.txt.pqf");
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            dir.join("pubkey.pem").to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt failed");
+
+    // Truncate the ciphertext to half its size.
+    let full = fs::read(&pqf).unwrap();
+    let truncated = dir.join("truncated.pqf");
+    fs::write(&truncated, &full[..full.len() / 2]).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k",
+            dir.join("privkey.pem").to_str().unwrap(),
+            truncated.to_str().unwrap(),
+            "-o",
+            dir.join("out.txt").to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "decrypt of truncated file should fail");
+}
+
+#[test]
+fn decrypt_corrupt_pqf_fails() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("plain.txt");
+    fs::write(&input, b"corrupt test payload").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let pqf = dir.join("plain.txt.pqf");
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            dir.join("pubkey.pem").to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    // Flip bytes in the payload (after the 7-byte header prefix).
+    let mut corrupt = fs::read(&pqf).unwrap();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 0xFF;
+    corrupt[last - 1] ^= 0xFF;
+    let bad = dir.join("corrupt.pqf");
+    fs::write(&bad, &corrupt).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k",
+            dir.join("privkey.pem").to_str().unwrap(),
+            bad.to_str().unwrap(),
+            "-o",
+            dir.join("out.txt").to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "decrypt of corrupt file should fail");
+}
+
 // ── Multiple recipients (v4 format) ──────────────────────────────────────────
 
 #[test]

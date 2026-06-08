@@ -3,7 +3,9 @@ use crate::colors::{
     c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1,
     c_text,
 };
-use crate::types::{KeyDragPayload, OpStatus, Tab};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::types::KeyDragPayload;
+use crate::types::{OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_files;
 use crate::widgets::{
@@ -73,6 +75,8 @@ impl PqfileApp {
             total,
             results: Vec::new(),
             finished: false,
+            current_file_bytes_done: 0,
+            current_file_bytes_total: 0,
         }));
         self.encrypt_batch_summary = None;
         self.encrypt_job = Some(Arc::clone(&job));
@@ -83,6 +87,17 @@ impl PqfileApp {
                 let out_name = format!("{name}.pqf");
                 let out_path = resolve_out_path(&output_dir, &out_name, path);
                 let original_size = data.len() as u64;
+                {
+                    let mut g = job.lock().unwrap();
+                    g.current_file_bytes_done = 0;
+                    g.current_file_bytes_total = original_size;
+                }
+                let job_progress = Arc::clone(&job);
+                let ctx_progress = ctx.clone();
+                let progress = move |done: u64, _total: u64| {
+                    job_progress.lock().unwrap().current_file_bytes_done = done;
+                    ctx_progress.request_repaint();
+                };
                 let status = encrypt_entry(
                     &pub_pems,
                     &data,
@@ -93,10 +108,13 @@ impl PqfileApp {
                     compress_level,
                     pad_recipients,
                     confirm,
+                    &progress,
                 );
                 {
                     let mut g = job.lock().unwrap();
                     g.done += 1;
+                    g.current_file_bytes_done = 0;
+                    g.current_file_bytes_total = 0;
                     g.results.push((i, status));
                 }
                 ctx.request_repaint();
@@ -153,6 +171,7 @@ impl PqfileApp {
             3,
             pad,
             false,
+            &|_, _| {},
         );
         if idx < self.encrypt_files.len() {
             self.encrypt_files[idx].status = status;
@@ -721,6 +740,16 @@ impl PqfileApp {
                         .desired_width(f32::INFINITY)
                         .animate(true),
                 );
+                if g.current_file_bytes_total > 0 {
+                    let byte_frac =
+                        g.current_file_bytes_done as f32 / g.current_file_bytes_total as f32;
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::ProgressBar::new(byte_frac)
+                            .desired_width(f32::INFINITY)
+                            .show_percentage(),
+                    );
+                }
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!("Encrypting… {}/{}", g.done, g.total))
@@ -779,6 +808,7 @@ fn encrypt_entry(
     compress_level: i32,
     pad_recipients: bool,
     confirm: bool,
+    progress: &dyn Fn(u64, u64),
 ) -> OpStatus {
     let chunk_size = adaptive_chunk_size(original_size);
     let (effective_path, effective_confirm) = (out_path, confirm);
@@ -795,12 +825,13 @@ fn encrypt_entry(
                 &mut out,
             )
         } else {
-            encrypt::encrypt_stream(
+            encrypt::encrypt_stream_with_progress(
                 &pub_pems[0],
                 original_size,
                 chunk_size,
                 &mut reader,
                 &mut out,
+                progress,
             )
         };
         match result {
@@ -814,14 +845,21 @@ fn encrypt_entry(
         // v9: pad slot count to next power of two (stronger recipient-count anonymity)
         // v8: variant-blind slots, shuffled order (hides key types only)
         let result = if pad_recipients {
-            encrypt::encrypt_stream_multi_anon_padded(
+            encrypt::encrypt_stream_multi_anon_padded_with_progress(
                 &pem_refs,
                 original_size,
                 &mut reader,
                 &mut out,
+                progress,
             )
         } else {
-            encrypt::encrypt_stream_multi_anon(&pem_refs, original_size, &mut reader, &mut out)
+            encrypt::encrypt_stream_multi_anon_with_progress(
+                &pem_refs,
+                original_size,
+                &mut reader,
+                &mut out,
+                progress,
+            )
         };
         match result {
             Ok(()) => save_result(out_name, &out, effective_path, effective_confirm),

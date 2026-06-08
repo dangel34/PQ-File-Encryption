@@ -43,7 +43,7 @@ jobs:
   # release time with no additional signal.
 
   build:
-    name: Build — ${{ matrix.target }}
+    name: Build - ${{ matrix.target }}
     needs: check-versions
     runs-on: ${{ matrix.os }}
     permissions:
@@ -136,7 +136,7 @@ jobs:
           path: dist/
 
   wasm:
-    name: Build — WASM
+    name: Build - WASM
     needs: check-versions
     runs-on: ubuntu-latest
     permissions:
@@ -153,8 +153,8 @@ jobs:
         with:
           version: latest
 
-      - name: Install binaryen (wasm-opt)
-        run: sudo apt-get install -y binaryen
+      - name: Install binaryen (wasm-opt) and brotli
+        run: sudo apt-get install -y binaryen brotli
 
       - name: Cache Cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -175,6 +175,7 @@ jobs:
         run: |
           for f in dist/*.wasm dist/*.js; do
             [ -f "$f" ] && gzip --keep --force -9 "$f"
+            [ -f "$f" ] && brotli --best --keep "$f"
           done
 
       - name: Archive WASM

@@ -12,6 +12,12 @@ use wasm_bindgen::prelude::*;
 
 pub(crate) const APP_VERSION: &str = "4.2.2";
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    pub(crate) fn hide_loader();
+}
+
 // ── WASM entry ────────────────────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
