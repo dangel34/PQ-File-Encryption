@@ -878,10 +878,6 @@ criteria = "safe-to-deploy"
 version = "2.8.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.minicov]]
-version = "0.3.8"
-criteria = "safe-to-run"
-
 [[exemptions.memmap2]]
 version = "0.9.10"
 criteria = "safe-to-deploy"
@@ -889,6 +885,10 @@ criteria = "safe-to-deploy"
 [[exemptions.memoffset]]
 version = "0.9.1"
 criteria = "safe-to-deploy"
+
+[[exemptions.minicov]]
+version = "0.3.8"
+criteria = "safe-to-run"
 
 [[exemptions.miniz_oxide]]
 version = "0.8.9"
@@ -938,10 +938,6 @@ criteria = "safe-to-deploy"
 version = "0.2.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.nu-ansi-term]]
-version = "0.50.3"
-criteria = "safe-to-run"
-
 [[exemptions.notify]]
 version = "7.0.0"
 criteria = "safe-to-deploy"
@@ -957,6 +953,10 @@ criteria = "safe-to-deploy"
 [[exemptions.notify-types]]
 version = "2.1.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.nu-ansi-term]]
+version = "0.50.3"
+criteria = "safe-to-run"
 
 [[exemptions.num_enum]]
 version = "0.7.6"
@@ -1634,18 +1634,6 @@ criteria = "safe-to-deploy"
 version = "0.4.0+wasi-0.3.0-rc-2026-01-06"
 criteria = "safe-to-deploy"
 
-[[exemptions.wasm-bindgen-test]]
-version = "0.3.72"
-criteria = "safe-to-run"
-
-[[exemptions.wasm-bindgen-test-macro]]
-version = "0.3.72"
-criteria = "safe-to-run"
-
-[[exemptions.wasm-bindgen-test-shared]]
-version = "0.2.122"
-criteria = "safe-to-run"
-
 [[exemptions.wasm-bindgen]]
 version = "0.2.122"
 criteria = "safe-to-deploy"
@@ -1665,6 +1653,18 @@ criteria = "safe-to-deploy"
 [[exemptions.wasm-bindgen-shared]]
 version = "0.2.122"
 criteria = "safe-to-deploy"
+
+[[exemptions.wasm-bindgen-test]]
+version = "0.3.72"
+criteria = "safe-to-run"
+
+[[exemptions.wasm-bindgen-test-macro]]
+version = "0.3.72"
+criteria = "safe-to-run"
+
+[[exemptions.wasm-bindgen-test-shared]]
+version = "0.2.122"
+criteria = "safe-to-run"
 
 [[exemptions.wasm-encoder]]
 version = "0.244.0"

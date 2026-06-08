@@ -1,7 +1,7 @@
 // Service worker for pqfile web app.
 // Strategy:
 //   - Hashed assets (*.wasm, *.js with a content hash in the name): cache-first.
-//     These filenames are immutable — once cached they never need revalidation.
+//     These filenames are immutable - once cached they never need revalidation.
 //   - Everything else (index.html, sw.js, icon.png): network-first with a
 //     cache fallback so new deployments propagate immediately.
 //

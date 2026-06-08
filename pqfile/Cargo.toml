@@ -30,6 +30,9 @@ rayon = "1"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # getrandom 0.4 needs the wasm_js feature to use globalThis.crypto in a browser/Node.js context.
 getrandom = { workspace = true, features = ["wasm_js"] }
+# getrandom 0.3 needs both the wasm_js feature AND the getrandom_backend cfg flag
+# (set in .cargo/config.toml) to select the wasm_js backend.
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 # chacha20poly1305 -> rand_core -> getrandom 0.2; needs the js feature for WASM.
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 
