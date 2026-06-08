@@ -1037,7 +1037,9 @@ pub fn decrypt_stream_parallel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encrypt::{encrypt_bytes, encrypt_stream, encrypt_stream_compressed};
+    use crate::encrypt::{encrypt_bytes, encrypt_stream};
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::encrypt::encrypt_stream_compressed;
     use crate::format::{KEM_CT_LEN_768, KEM_VARIANT_768, MAGIC, NONCE_LEN, VERSION};
     use crate::keygen::keygen_bytes;
 

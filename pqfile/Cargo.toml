@@ -70,10 +70,10 @@ optional = true
 [dev-dependencies]
 tempfile = { workspace = true }
 serde_json = "1"
-criterion = { version = "0.8", features = ["html_reports"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
 proptest = "1"
 
 [[bench]]
