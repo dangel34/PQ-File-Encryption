@@ -116,26 +116,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p wasm-dist
-          # Fetch asset IDs for pqfile-web.tar.gz and checksums.txt in one API call
-          release_json=$(curl -fsSL \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.release.tag_name }}")
-
-          download_asset() {
-            local name="$1" dest="$2"
-            local id
-            id=$(echo "$release_json" | python3 -c "import sys,json; print(next(a['id'] for a in json.load(sys.stdin)['assets'] if a['name']=='$name'))")
-            curl -fsSL \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/octet-stream" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/assets/${id}" \
-              -o "$dest"
-          }
-
-          download_asset "pqfile-web.tar.gz" "wasm-dist/pqfile-web.tar.gz"
-          download_asset "checksums.txt"     "wasm-dist/checksums.txt"
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "pqfile-web.tar.gz" \
+            --pattern "checksums.txt" \
+            --dir wasm-dist/ \
+            --clobber
 
       - name: Verify checksum
         run: |
