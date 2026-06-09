@@ -116,27 +116,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          rm -rf wasm-dist && mkdir wasm-dist
           gh release download "${{ github.event.release.tag_name }}" \
             --repo "${{ github.repository }}" \
             --pattern "pqfile-web.tar.gz" \
             --pattern "checksums.txt" \
-            --dir wasm-dist/ \
-            --clobber
+            --dir wasm-dist/
 
-      - name: Verify checksum
+      - name: Verify and extract WASM
         run: |
           cd wasm-dist
-          grep "pqfile-web.tar.gz" checksums.txt | sha256sum --check
-
-      - name: Extract WASM
-        run: |
-          mkdir -p pqfile-gui/dist
-          tar -xzf wasm-dist/pqfile-web.tar.gz -C pqfile-gui/dist
+          grep "pqfile-web.tar.gz" checksums.txt | sed 's|\./||g' | sha256sum --check
+          rm -rf ../pqfile-gui/dist && mkdir -p ../pqfile-gui/dist
+          tar -xzf pqfile-web.tar.gz -C ../pqfile-gui/dist
 
       - name: Deploy to /var/www/pqfile
         run: rsync -a --delete pqfile-gui/dist/ /var/www/pqfile/
 
       - name: Purge Cloudflare cache
+        continue-on-error: true
         env:
           CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
