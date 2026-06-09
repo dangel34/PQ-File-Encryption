@@ -1,6 +1,6 @@
 [package]
 name = "pqfile"
-version = "4.2.2"
+version = "4.2.3"
 edition = "2021"
 description = "Quantum-resistant file encryption: ML-KEM (512/768/1024), hybrid X25519+ML-KEM-768, ML-DSA-65 signing, multi-recipient, Shamir sharing"
 license = "MIT"

@@ -1,9 +1,9 @@
-name: Publish to crates.io
+name: Publish
 
 # Fires exactly once: when a GitHub Release is published (i.e. moved out of draft).
 # The Release workflow builds artifacts and creates a *draft* release on tag push;
 # this workflow only runs when a human explicitly clicks "Publish release", giving
-# a review gate before touching the immutable crates.io registry.
+# a review gate before touching the immutable crates.io registry and deploying to prod.
 on:
   release:
     types: [published]
@@ -104,3 +104,38 @@ jobs:
           exit 1
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  deploy:
+    name: Deploy to RaspberryPi
+    needs: [publish]
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    steps:
+      - name: Download WASM from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "pqfile-web.tar.gz" \
+            --dir wasm-dist/
+
+      - name: Extract WASM
+        run: |
+          mkdir -p pqfile-gui/dist
+          tar -xzf wasm-dist/pqfile-web.tar.gz -C pqfile-gui/dist
+
+      - name: Deploy to /var/www/pqfile
+        run: rsync -a --delete pqfile-gui/dist/ /var/www/pqfile/
+
+      - name: Purge Cloudflare cache
+        env:
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          curl -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}' \
+            --fail --silent --show-error
