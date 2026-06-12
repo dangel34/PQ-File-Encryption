@@ -1,5 +1,5 @@
 use crate::app::PqfileApp;
-use crate::colors::{c_accent, c_card, c_chrome, c_green, c_red, c_subtext, c_surface1};
+use crate::colors::{c_accent, c_card, c_chrome, c_green, c_red, c_subtext, c_surface1, c_yellow};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::colors::{c_overlay, c_text};
 use crate::types::{KeygenAlgorithm, OpStatus, Tab};
@@ -8,6 +8,9 @@ use eframe::egui::{self, RichText, Vec2};
 use pqfile::keygen;
 #[cfg(not(target_arch = "wasm32"))]
 use pqfile::keygen::keygen_hardware;
+use pqfile::sign;
+#[cfg(not(target_arch = "wasm32"))]
+use pqfile::sign::sign_keygen_hardware;
 
 impl PqfileApp {
     pub(crate) fn show_keygen(&mut self, ui: &mut egui::Ui, dark: bool) {
@@ -15,9 +18,11 @@ impl PqfileApp {
             self.help_modal_open = Some(Tab::Keygen);
         }
         ui.label(
-            RichText::new("Creates a new post-quantum key pair for encryption.")
-                .size(13.0)
-                .color(c_subtext(dark)),
+            RichText::new(
+                "Creates a new post-quantum key pair for encryption or signing (ML-DSA-65).",
+            )
+            .size(13.0)
+            .color(c_subtext(dark)),
         );
         ui.add_space(14.0);
 
@@ -63,7 +68,7 @@ impl PqfileApp {
 
         section_label(ui, "ALGORITHM", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.radio_value(
                     &mut self.keygen_algorithm,
                     KeygenAlgorithm::MlKem512,
@@ -95,12 +100,21 @@ impl PqfileApp {
                         .size(13.0)
                         .color(c_subtext(dark)),
                 );
+                ui.add_space(8.0);
+                ui.radio_value(
+                    &mut self.keygen_algorithm,
+                    KeygenAlgorithm::MlDsa65,
+                    RichText::new("ML-DSA-65 (signing)")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
+                );
             });
             let desc = match self.keygen_algorithm {
-                KeygenAlgorithm::MlKem512 => "Post-quantum only, lower security level. 800-byte public key, 64-byte seed. NIST FIPS 203.",
-                KeygenAlgorithm::MlKem768 => "Post-quantum only. 1184-byte public key, 64-byte seed. NIST FIPS 203.",
-                KeygenAlgorithm::MlKem1024 => "Post-quantum only, higher security level. 1568-byte public key. NIST FIPS 203.",
-                KeygenAlgorithm::HybridX25519MlKem768 => "Classical + post-quantum. X25519 shared secret combined with ML-KEM-768 via HKDF-SHA256.",
+                KeygenAlgorithm::MlKem512 => "Post-quantum encryption key. 800-byte public key, 64-byte seed. NIST FIPS 203.",
+                KeygenAlgorithm::MlKem768 => "Post-quantum encryption key (recommended). 1184-byte public key. NIST FIPS 203.",
+                KeygenAlgorithm::MlKem1024 => "Post-quantum encryption key, highest security level. 1568-byte public key. NIST FIPS 203.",
+                KeygenAlgorithm::HybridX25519MlKem768 => "Hybrid encryption key. X25519 + ML-KEM-768 combined via HKDF-SHA256 for classical + PQ security.",
+                KeygenAlgorithm::MlDsa65 => "Post-quantum signing key. Outputs sign_privkey.pem + sign_pubkey.pem. Use in the Sign tab. NIST FIPS 204.",
             };
             ui.add_space(4.0);
             ui.label(RichText::new(desc).size(12.0).color(c_subtext(dark)));
@@ -214,7 +228,7 @@ impl PqfileApp {
                     let (label, color) = if score <= 2 {
                         ("Weak", c_red(dark))
                     } else if score <= 4 {
-                        ("Fair", eframe::egui::Color32::from_rgb(200, 140, 0))
+                        ("Fair", c_yellow(dark))
                     } else {
                         ("Strong", c_green(dark))
                     };
@@ -252,7 +266,7 @@ impl PqfileApp {
         ui.add_space(14.0);
 
         ui.horizontal(|ui| {
-            if ui
+            let btn_clicked = ui
                 .add(
                     egui::Button::new(
                         RichText::new("⚡  Generate Key Pair")
@@ -263,8 +277,10 @@ impl PqfileApp {
                     .fill(c_accent(dark))
                     .min_size(Vec2::new(170.0, 32.0)),
                 )
-                .clicked()
-            {
+                .clicked();
+            let ctrl_enter =
+                ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+            if btn_clicked || ctrl_enter {
                 self.handle_keygen();
             }
 
@@ -414,6 +430,11 @@ impl PqfileApp {
     }
 
     pub(crate) fn handle_keygen(&mut self) {
+        if self.keygen_algorithm.is_signing() {
+            self.handle_sign_keygen();
+            return;
+        }
+
         let passphrase: Option<&str> = if self.keygen_use_passphrase {
             if self.keygen_passphrase.is_empty() {
                 self.keygen_status =
@@ -518,6 +539,85 @@ impl PqfileApp {
                         .unwrap_or_default();
                     self.keygen_status = OpStatus::Ok(format!(
                         "pubkey.pem and privkey.pem downloaded.\nFingerprint: {fp}{expiry_note}"
+                    ));
+                }
+                Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),
+            }
+        }
+    }
+
+    pub(crate) fn handle_sign_keygen(&mut self) {
+        let passphrase: Option<String> = if self.keygen_use_passphrase {
+            let pp = (*self.keygen_passphrase).clone();
+            let pc = (*self.keygen_passphrase_confirm).clone();
+            if pp != pc {
+                self.keygen_status = OpStatus::Err("Passphrases do not match.".to_owned());
+                return;
+            }
+            if pp.is_empty() {
+                self.keygen_status =
+                    OpStatus::Err("Enter a passphrase or uncheck the option.".to_owned());
+                return;
+            }
+            Some(pp)
+        } else {
+            None
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.settings.output_dir.trim().is_empty() {
+                self.keygen_status =
+                    OpStatus::Err("Set a default output directory in Settings first.".to_owned());
+                return;
+            }
+            let dir = std::path::Path::new(&self.settings.output_dir);
+            let force = !self.settings.confirm_overwrite;
+
+            if self.keygen_use_hardware {
+                let label = self.keygen_hardware_label.trim().to_owned();
+                if label.is_empty() {
+                    self.keygen_status =
+                        OpStatus::Err("Enter a label for the hardware signing key.".to_owned());
+                    return;
+                }
+                self.keygen_status = match sign_keygen_hardware(dir, force, &label) {
+                    Ok(r) => OpStatus::Ok(format!(
+                        "Hardware-backed signing keys saved to {}\n\
+                         Seed stored in OS credential store.\nFingerprint: {}",
+                        dir.display(),
+                        r.vk_fingerprint,
+                    )),
+                    Err(e) => OpStatus::Err(e.to_string()),
+                };
+            } else {
+                self.keygen_status = match sign::sign_keygen(dir, force, passphrase.as_deref()) {
+                    Ok(r) => {
+                        self.keygen_passphrase.clear();
+                        self.keygen_passphrase_confirm.clear();
+                        OpStatus::Ok(format!(
+                            "Signing keys saved to {}\nFingerprint: {}",
+                            dir.display(),
+                            r.vk_fingerprint,
+                        ))
+                    }
+                    Err(e) => OpStatus::Err(e.to_string()),
+                };
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            use crate::widgets::download_bytes;
+            match sign::sign_keygen_bytes(passphrase.as_deref()) {
+                Ok(r) => {
+                    download_bytes("sign_pubkey.pem", r.vk_pem.as_bytes());
+                    download_bytes("sign_privkey.pem", r.sk_pem.as_bytes());
+                    self.keygen_passphrase.clear();
+                    self.keygen_passphrase_confirm.clear();
+                    self.keygen_status = OpStatus::Ok(format!(
+                        "sign_pubkey.pem and sign_privkey.pem downloaded.\nFingerprint: {}",
+                        r.vk_fingerprint,
                     ));
                 }
                 Err(e) => self.keygen_status = OpStatus::Err(e.to_string()),

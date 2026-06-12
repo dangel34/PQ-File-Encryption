@@ -189,6 +189,15 @@ impl PqfileApp {
                         .color(c_subtext(dark)),
                 );
             });
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "ML-DSA-65 signing keys are always selected explicitly in the Keygen tab \
+                     and do not have a default here.",
+                )
+                .size(11.5)
+                .color(c_subtext(dark)),
+            );
             ui.add_space(10.0);
             ui.label(
                 RichText::new("Default key expiry (days from today). Set to 0 to disable.")
@@ -336,9 +345,6 @@ impl PqfileApp {
             g.take();
         }
         self.decrypt_status = OpStatus::None;
-        self.inspect_pqf.clear();
-        self.inspect_result.clear();
-        self.inspect_status = OpStatus::None;
         self.keygen_status = OpStatus::None;
     }
 

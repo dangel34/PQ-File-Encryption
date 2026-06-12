@@ -1,11 +1,10 @@
 use crate::app::PqfileApp;
-use crate::colors::{c_accent, c_card, c_chrome, c_green, c_overlay, c_subtext, c_surface1};
+use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 use crate::types::{OpStatus, Tab};
 use crate::widgets::{
-    card, file_row, passphrase_row, save_result, section_label, show_status, tab_heading_help,
+    card, file_row, passphrase_row, section_label, show_status, tab_heading_help,
 };
 use eframe::egui::{self, RichText, Vec2};
-use pqfile::rekey;
 use pqfile::repassphrase;
 #[cfg(not(target_arch = "wasm32"))]
 use pqfile::revoke;
@@ -13,31 +12,26 @@ use std::io::Cursor;
 use zeroize::Zeroize;
 
 impl PqfileApp {
-    pub(crate) fn show_tools(&mut self, ui: &mut egui::Ui, dark: bool) {
-        if tab_heading_help(ui, "Tools", dark) {
-            self.help_modal_open = Some(Tab::Tools);
+    pub(crate) fn show_clipboard_tab(&mut self, ui: &mut egui::Ui, dark: bool) {
+        if tab_heading_help(ui, "Clipboard", dark) {
+            self.help_modal_open = Some(Tab::Clipboard);
         }
         ui.label(
             RichText::new(
-                "Key revocation, file rekeying, passphrase management, and clipboard encrypt/decrypt.",
+                "Encrypt or decrypt short text without writing any file to disk. \
+                 Useful for sharing secrets via messaging apps or email.",
             )
             .size(13.0)
             .color(c_subtext(dark)),
         );
         ui.add_space(14.0);
 
-        self.show_repassphrase_section(ui, dark);
-        ui.add_space(20.0);
-        self.show_revoke_section(ui, dark);
-        ui.add_space(20.0);
-        self.show_rekey_section(ui, dark);
-        ui.add_space(20.0);
         self.show_clipboard_section(ui, dark);
     }
 
     // ── Repassphrase ──────────────────────────────────────────────────────
 
-    fn show_repassphrase_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+    pub(crate) fn show_repassphrase_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "CHANGE / UPGRADE PASSPHRASE", dark);
         ui.label(
             RichText::new(
@@ -48,6 +42,7 @@ impl PqfileApp {
             .color(c_subtext(dark)),
         );
         ui.add_space(6.0);
+        let mut confirm_submitted = false;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             file_row(
                 ui,
@@ -76,7 +71,7 @@ impl PqfileApp {
                 dark,
             );
             ui.add_space(2.0);
-            passphrase_row(
+            confirm_submitted = passphrase_row(
                 ui,
                 "Confirm new:",
                 &mut self.repassphrase_new_passphrase_confirm,
@@ -112,6 +107,9 @@ impl PqfileApp {
             )
             .on_disabled_hover_text("Load an encrypted key and fill in both passphrase fields.")
             .clicked()
+            || (ready
+                && (confirm_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
         {
             self.do_repassphrase();
         }
@@ -193,7 +191,7 @@ impl PqfileApp {
 
     // ── Revoke ────────────────────────────────────────────────────────────
 
-    fn show_revoke_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+    pub(crate) fn show_revoke_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "REVOKE KEY", dark);
         ui.label(
             RichText::new(
@@ -302,167 +300,25 @@ impl PqfileApp {
         }
     }
 
-    // ── Rekey ─────────────────────────────────────────────────────────────
-
-    fn show_rekey_section(&mut self, ui: &mut egui::Ui, dark: bool) {
-        section_label(ui, "REKEY FILE", dark);
-        ui.label(
-            RichText::new(
-                "Switch a v3/v5 encrypted file to a new recipient without re-encrypting the payload. \
-                 Only supported for files using the default 64 KiB chunk size.",
-            )
-            .size(12.0)
-            .color(c_subtext(dark)),
-        );
-        ui.add_space(6.0);
-        card(ui, c_card(dark), c_surface1(dark), |ui| {
-            file_row(
-                ui,
-                "Old private key (for decapsulation)",
-                &mut self.rekey_privkey,
-                "PEM",
-                &["pem"],
-                dark,
-            );
-            ui.add_space(4.0);
-            passphrase_row(
-                ui,
-                "Old key passphrase:",
-                &mut self.rekey_privkey_passphrase,
-                &mut self.rekey_privkey_passphrase_visible,
-                "Leave empty for an unencrypted key",
-                dark,
-            );
-            ui.add_space(4.0);
-            file_row(
-                ui,
-                "New recipient public key",
-                &mut self.rekey_new_pubkey,
-                "PEM",
-                &["pem"],
-                dark,
-            );
-            ui.add_space(4.0);
-            file_row(
-                ui,
-                "Encrypted file to rekey (.pqf)",
-                &mut self.rekey_input,
-                "PQF",
-                &["pqf"],
-                dark,
-            );
-        });
-        ui.add_space(8.0);
-
-        let ready = self.rekey_privkey.loaded()
-            && self.rekey_new_pubkey.loaded()
-            && self.rekey_input.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("🔄  Rekey File")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(160.0, 32.0)),
-            )
-            .clicked()
-        {
-            self.do_rekey();
-        }
-
-        show_status(ui, &self.rekey_status, dark);
-    }
-
-    fn do_rekey(&mut self) {
-        let old_priv = match self.rekey_privkey.as_str().map(str::to_owned) {
-            Some(s) => s,
-            None => {
-                self.rekey_status = OpStatus::Err("Load the old private key first.".to_owned());
-                return;
-            }
-        };
-        let new_pub = match self.rekey_new_pubkey.as_str().map(str::to_owned) {
-            Some(s) => s,
-            None => {
-                self.rekey_status =
-                    OpStatus::Err("Load the new recipient public key first.".to_owned());
-                return;
-            }
-        };
-        let data = match self.rekey_input.data.clone() {
-            Some(d) => d,
-            None => {
-                self.rekey_status =
-                    OpStatus::Err("Choose the .pqf file to rekey first.".to_owned());
-                return;
-            }
-        };
-        let passphrase = if self.rekey_privkey_passphrase.is_empty() {
-            None
-        } else {
-            Some((*self.rekey_privkey_passphrase).clone())
-        };
-
-        let mut output = Vec::new();
-        let mut reader = Cursor::new(&data);
-        match rekey::rekey_stream(
-            &old_priv,
-            &new_pub,
-            &mut reader,
-            &mut output,
-            passphrase.as_deref(),
-        ) {
-            Ok(()) => {
-                let out_name = self.rekey_input.name.clone();
-                #[cfg(not(target_arch = "wasm32"))]
-                let native_path = {
-                    use std::path::PathBuf;
-                    let base = self
-                        .rekey_input
-                        .path
-                        .clone()
-                        .unwrap_or_else(|| PathBuf::from(&out_name));
-                    let path = if self.settings.output_dir.is_empty() {
-                        base
-                    } else {
-                        PathBuf::from(&self.settings.output_dir)
-                            .join(base.file_name().unwrap_or_default())
-                    };
-                    Some(path)
-                };
-                #[cfg(target_arch = "wasm32")]
-                let native_path: Option<std::path::PathBuf> = None;
-                self.rekey_status = save_result(
-                    &out_name,
-                    &output,
-                    native_path,
-                    self.settings.confirm_overwrite,
-                );
-            }
-            Err(e) => {
-                self.rekey_status = OpStatus::Err(e.to_string());
-            }
-        }
-    }
-
     // ── Clipboard encrypt / decrypt ───────────────────────────────────────
 
     fn show_clipboard_section(&mut self, ui: &mut egui::Ui, dark: bool) {
-        section_label(ui, "CLIPBOARD ENCRYPT / DECRYPT", dark);
-        ui.label(
-            RichText::new(
-                "Type or paste short plaintext, encrypt for a recipient, and copy the \
-                 result to the clipboard. Reverse path for decrypt. Useful for encrypting \
-                 secrets in messaging apps without writing files to disk.",
+        // Auto-clear status hint.
+        let auto_clear_note = if self.settings.clipboard_auto_clear {
+            format!(
+                "Auto-clear active: text is zeroized after {} s of inactivity. \
+                 Configure in Settings → Clipboard.",
+                self.settings.clipboard_clear_secs
             )
-            .size(12.0)
-            .color(c_subtext(dark)),
+        } else {
+            "Auto-clear is off. Enable it in Settings → Clipboard.".to_owned()
+        };
+        ui.label(
+            RichText::new(auto_clear_note)
+                .size(11.5)
+                .color(c_subtext(dark)),
         );
-        ui.add_space(8.0);
+        ui.add_space(10.0);
 
         // ── Encrypt plain → cipher ────────────────────────────────────────
         section_label(ui, "ENCRYPT TEXT", dark);
@@ -513,6 +369,7 @@ impl PqfileApp {
 
         // ── Decrypt cipher → plain ────────────────────────────────────────
         section_label(ui, "DECRYPT TEXT", dark);
+        let mut clip_pp_submitted = false;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             file_row(
                 ui,
@@ -523,7 +380,7 @@ impl PqfileApp {
                 dark,
             );
             ui.add_space(4.0);
-            passphrase_row(
+            clip_pp_submitted = passphrase_row(
                 ui,
                 "Key passphrase:",
                 &mut self.clipboard_passphrase,
@@ -562,6 +419,9 @@ impl PqfileApp {
                 .min_size(Vec2::new(140.0, 32.0)),
             )
             .clicked()
+            || (dec_ready
+                && (clip_pp_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
         {
             self.do_clipboard_decrypt();
         }
@@ -652,9 +512,3 @@ impl PqfileApp {
         }
     }
 }
-
-// Keep the `c_green` and `c_overlay` color references used by the clipboard status display.
-const _: () = {
-    let _ = c_green;
-    let _ = c_overlay;
-};

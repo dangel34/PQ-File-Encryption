@@ -3,8 +3,9 @@ use crate::colors::{
 };
 use crate::theme::apply_theme;
 use crate::types::{
-    pem_variant_name, ArchiveSubTab, BatchPending, FileInput, KeygenAlgorithm, MultiFileEntry,
-    OpStatus, PickedFile, RecipientEntry, Settings, ShamirSubTab, SignSubTab, SigncryptSubTab, Tab,
+    pem_variant_name, ArchiveSubTab, BatchPending, DecryptSubTab, FileInput, KeygenAlgorithm,
+    MultiFileEntry, OpStatus, PickedFile, RecipientEntry, Settings, ShamirSubTab, SignSubTab,
+    SigncryptSubTab, Tab,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry};
@@ -78,16 +79,13 @@ pub struct PqfileApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) decrypt_batch_job: Option<DecryptBatchJobHandle>,
 
-    pub(crate) inspect_pqf: FileInput,
-    pub(crate) inspect_result: String,
-    pub(crate) inspect_status: OpStatus,
+    // ── Inspect tab (key/file health check) ──────────────────────────────
+    pub(crate) doctor_file: FileInput,
+    pub(crate) doctor_passphrase: Zeroizing<String>,
+    pub(crate) doctor_result: Vec<crate::tabs::doctor::DoctorRow>,
+    pub(crate) doctor_status: OpStatus,
 
     // ── Sign tab ──────────────────────────────────────────────────────────
-    pub(crate) sign_keygen_use_passphrase: bool,
-    pub(crate) sign_keygen_passphrase: Zeroizing<String>,
-    pub(crate) sign_keygen_passphrase_confirm: Zeroizing<String>,
-    pub(crate) sign_keygen_passphrase_visible: bool,
-    pub(crate) sign_keygen_status: OpStatus,
     pub(crate) sign_sk: FileInput,
     pub(crate) sign_sk_passphrase: Zeroizing<String>,
     pub(crate) sign_sk_passphrase_visible: bool,
@@ -145,11 +143,6 @@ pub struct PqfileApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keygen_hardware_label: String,
 
-    // ── Sign hardware signing key fields ──────────────────────────────────
-    pub(crate) sign_keygen_use_hardware: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) sign_keygen_hardware_label: String,
-
     // ── Tools tab (Revoke + Rekey + Repassphrase) ─────────────────────────
     pub(crate) repassphrase_key: FileInput,
     pub(crate) repassphrase_old_passphrase: Zeroizing<String>,
@@ -173,7 +166,12 @@ pub struct PqfileApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keys: Vec<KeyEntry>,
 
+    /// WASM-only: public keys persisted via localStorage. Each entry is (label, pem).
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) wasm_saved_pubkeys: Vec<(String, String)>,
+
     // ── Sub-tab selection ─────────────────────────────────────────────────
+    pub(crate) decrypt_sub_tab: DecryptSubTab,
     pub(crate) sign_sub_tab: SignSubTab,
     pub(crate) signcrypt_sub_tab: SigncryptSubTab,
     pub(crate) archive_sub_tab: ArchiveSubTab,
@@ -257,14 +255,10 @@ impl Default for PqfileApp {
             decrypt_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
             decrypt_batch_job: None,
-            inspect_pqf: FileInput::default(),
-            inspect_result: String::new(),
-            inspect_status: OpStatus::None,
-            sign_keygen_use_passphrase: false,
-            sign_keygen_passphrase: Zeroizing::new(String::new()),
-            sign_keygen_passphrase_confirm: Zeroizing::new(String::new()),
-            sign_keygen_passphrase_visible: false,
-            sign_keygen_status: OpStatus::None,
+            doctor_file: FileInput::default(),
+            doctor_passphrase: Zeroizing::new(String::new()),
+            doctor_result: Vec::new(),
+            doctor_status: OpStatus::None,
             sign_sk: FileInput::default(),
             sign_sk_passphrase: Zeroizing::new(String::new()),
             sign_sk_passphrase_visible: false,
@@ -311,9 +305,6 @@ impl Default for PqfileApp {
             keygen_use_hardware: false,
             #[cfg(not(target_arch = "wasm32"))]
             keygen_hardware_label: String::new(),
-            sign_keygen_use_hardware: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            sign_keygen_hardware_label: String::new(),
             repassphrase_key: FileInput::default(),
             repassphrase_old_passphrase: Zeroizing::new(String::new()),
             repassphrase_old_passphrase_visible: false,
@@ -333,6 +324,7 @@ impl Default for PqfileApp {
             rekey_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
             keys: Vec::new(),
+            decrypt_sub_tab: DecryptSubTab::default(),
             sign_sub_tab: SignSubTab::default(),
             signcrypt_sub_tab: SigncryptSubTab::default(),
             archive_sub_tab: ArchiveSubTab::default(),
@@ -378,6 +370,8 @@ impl Default for PqfileApp {
             encrypt_wasm_total: 0,
             #[cfg(target_arch = "wasm32")]
             loader_hidden: false,
+            #[cfg(target_arch = "wasm32")]
+            wasm_saved_pubkeys: Vec::new(),
         }
     }
 }
@@ -388,6 +382,13 @@ impl PqfileApp {
         apply_theme(&cc.egui_ctx, settings.dark_mode);
         #[cfg(not(target_arch = "wasm32"))]
         let keys = cc.storage.map(load_keys).unwrap_or_default();
+        #[cfg(target_arch = "wasm32")]
+        let wasm_saved_pubkeys = cc.storage.map(load_wasm_pubkeys).unwrap_or_default();
+        // Read URL hash on startup to select the initial tab (e.g. "/#encrypt").
+        #[cfg(target_arch = "wasm32")]
+        let initial_tab_from_hash: Option<Tab> = web_sys::window()
+            .and_then(|w| w.location().hash().ok())
+            .and_then(|h| tab_from_hash(&h));
         #[cfg(not(target_arch = "wasm32"))]
         let (recent_encrypt_files, recent_decrypt_files, recent_privkeys, recent_pubkeys) = {
             let s = cc.storage;
@@ -413,12 +414,19 @@ impl PqfileApp {
                 )
             });
         let default_algorithm = settings.default_algorithm;
+        #[cfg(target_arch = "wasm32")]
+        let initial_tab = initial_tab_from_hash.unwrap_or(Tab::Keygen);
+        #[cfg(not(target_arch = "wasm32"))]
+        let initial_tab = Tab::Keygen;
         Self {
+            tab: initial_tab,
             settings,
             app_icon,
             keygen_algorithm: default_algorithm,
             #[cfg(not(target_arch = "wasm32"))]
             keys,
+            #[cfg(target_arch = "wasm32")]
+            wasm_saved_pubkeys,
             #[cfg(not(target_arch = "wasm32"))]
             recent_encrypt_files,
             #[cfg(not(target_arch = "wasm32"))]
@@ -439,6 +447,8 @@ impl eframe::App for PqfileApp {
         self.settings.save(storage);
         #[cfg(not(target_arch = "wasm32"))]
         save_keys(&self.keys, storage);
+        #[cfg(target_arch = "wasm32")]
+        save_wasm_pubkeys(&self.wasm_saved_pubkeys, storage);
         #[cfg(not(target_arch = "wasm32"))]
         {
             save_recent(storage, "recent_enc", &self.recent_encrypt_files);
@@ -628,6 +638,7 @@ impl eframe::App for PqfileApp {
                     .inner_margin(Margin::symmetric(14, 7))
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
+                            tab_btn(ui, &mut self.tab, Tab::Keys, "🗝 Keys", dark);
                             tab_btn(ui, &mut self.tab, Tab::Keygen, "🔑 Keygen", dark);
                             tab_btn(ui, &mut self.tab, Tab::Encrypt, "🔒 Encrypt", dark);
                             tab_btn(ui, &mut self.tab, Tab::Decrypt, "🔓 Decrypt", dark);
@@ -635,9 +646,8 @@ impl eframe::App for PqfileApp {
                             tab_btn(ui, &mut self.tab, Tab::Signcrypt, "🔏 Signcrypt", dark);
                             tab_btn(ui, &mut self.tab, Tab::Archive, "📦 Archive", dark);
                             tab_btn(ui, &mut self.tab, Tab::Shamir, "🔀 Shamir", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Tools, "🔧 Tools", dark);
                             tab_btn(ui, &mut self.tab, Tab::Inspect, "🔍 Inspect", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Keys, "🗝 Keys", dark);
+                            tab_btn(ui, &mut self.tab, Tab::Clipboard, "📋 Clipboard", dark);
                             tab_btn(ui, &mut self.tab, Tab::Settings, "⚙ Settings", dark);
                         });
                     });
@@ -648,6 +658,7 @@ impl eframe::App for PqfileApp {
                         egui::Frame::NONE
                             .inner_margin(Margin::symmetric(18, 14))
                             .show(ui, |ui| match self.tab {
+                                Tab::Keys => self.show_keys(ui, dark),
                                 Tab::Keygen => self.show_keygen(ui, dark),
                                 Tab::Encrypt => self.show_encrypt(ui, dark),
                                 Tab::Decrypt => self.show_decrypt(ui, dark),
@@ -655,9 +666,8 @@ impl eframe::App for PqfileApp {
                                 Tab::Signcrypt => self.show_signcrypt(ui, dark),
                                 Tab::Archive => self.show_archive(ui, dark),
                                 Tab::Shamir => self.show_shamir(ui, dark),
-                                Tab::Tools => self.show_tools(ui, dark),
                                 Tab::Inspect => self.show_inspect(ui, dark),
-                                Tab::Keys => self.show_keys(ui, dark),
+                                Tab::Clipboard => self.show_clipboard_tab(ui, dark),
                                 Tab::Settings => self.show_settings(ui, &ctx, dark),
                             });
                     });
@@ -778,7 +788,7 @@ impl PqfileApp {
                 }
             }
             Tab::Inspect => {
-                *self.inspect_pqf.pending.lock().unwrap() = Some(picked);
+                *self.doctor_file.pending.lock().unwrap() = Some(picked);
             }
             _ => {}
         }
@@ -953,7 +963,7 @@ impl PqfileApp {
         self.encrypt_pubkey.poll();
         self.promote_staged_pubkey();
         self.decrypt_privkey.poll();
-        self.inspect_pqf.poll();
+        self.doctor_file.poll();
 
         // Sign tab
         self.sign_sk.poll();
@@ -1018,7 +1028,6 @@ impl PqfileApp {
         let singles_pending = [
             &self.encrypt_pubkey,
             &self.decrypt_privkey,
-            &self.inspect_pqf,
             &self.sign_sk,
             &self.sign_input_file,
             &self.sign_vk,
@@ -1509,7 +1518,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              of recipient entries, so an observer cannot tell how many or what kind of keys \
              were used.",
         ]),
-        Tab::Decrypt => ("Decrypt Files", &[
+        Tab::Decrypt => ("Decrypt / Rekey", &[
             "Decryption recovers the original file from a .pqf ciphertext using your private \
              key. Each chunk is authenticated before any plaintext is written, so you can trust \
              that what you receive is exactly what was encrypted.",
@@ -1528,33 +1537,36 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              encryption, the wrong private key was used, or the file was not a valid .pqf file. \
              pqfile reports the failure immediately rather than producing potentially \
              compromised output.",
+            "## REKEY",
+            "Rekeying transfers an encrypted file to a new recipient without decrypting the \
+             payload. The session key is decapsulated using the old private key and then \
+             re-encapsulated for the new recipient. The encrypted content itself is untouched. \
+             Only supported for files using the default 64 KiB chunk size.",
         ]),
-        Tab::Inspect => ("Inspect File Header", &[
-            "Inspection lets you examine the header of a .pqf file without decrypting its \
-             contents. This is useful for verifying format details, checking which key was \
-             used, and diagnosing compatibility issues before attempting decryption.",
-            "## WHAT YOU CAN SEE",
-            "The format version byte tells you which pqfile feature set was used. For \
-             single-recipient files, you see the KEM variant, base nonce, and the original \
-             file size recorded at encryption time. For multi-recipient files you see the \
-             number of recipient slots and their key types.",
-            "## ANONYMOUS FILES",
-            "Files encrypted with the anonymous multi-recipient format (v8) show only a slot \
-             count. The key type for each slot is intentionally hidden, so inspection cannot \
-             reveal who the recipients are.",
-            "## WHAT YOU CANNOT SEE",
-            "The encrypted payload is not touched during inspection, so no private key is \
-             required. You will not see the plaintext content, the filename, or any metadata \
-             about the encrypted data itself.",
+        Tab::Inspect => ("Inspect File or Key", &[
+            "Inspect runs health checks on a key file (.pem) or encrypted file (.pqf) and \
+             shows all header metadata. No decryption key is required.",
+            "## KEY HEALTH CHECKS",
+            "For key files: passphrase protection, hardware-backed status, expiry with days \
+             remaining, revocation sidecar check (desktop), and Argon2 parameter version \
+             (enter passphrase to detect pqfile <4.0 legacy p=1 keys).",
+            "## FILE CHECKS",
+            "For .pqf files: format version, KEM algorithm, original size, compression, \
+             header validity, and recipient anonymity grade. The Raw Details section shows \
+             the nonce and hex version codes.",
+            "## ICONS",
+            "✓ = pass, ⚠ = warning (action recommended), ✗ = fail (action required), \
+             · = informational or not applicable.",
         ]),
         Tab::Sign => ("Digital Signatures", &[
             "Signing lets you prove that a file came from you and has not been modified. \
              pqfile uses ML-DSA-65 (NIST FIPS 204), a post-quantum digital signature \
              algorithm that remains secure against quantum computers.",
             "## KEY GENERATION",
-            "A signing key pair consists of a private signing key and a public verifying key. \
-             Share your verifying key with anyone who needs to confirm your signatures. Keep \
-             your signing key private and optionally protect it with a passphrase.",
+            "Generate an ML-DSA-65 signing key pair from the Keygen tab (select ML-DSA-65 \
+             as the algorithm). A signing key pair consists of a private signing key and a \
+             public verifying key. Share your verifying key with anyone who needs to confirm \
+             your signatures.",
             "## SIGNING A FILE",
             "Signing produces a small detached .sig file alongside the original. The signature \
              covers the entire file content. If even one byte changes after signing, \
@@ -1639,24 +1651,20 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              key fingerprint against the stored value. The result is an unencrypted private key \
              that you can then protect with a passphrase if needed.",
         ]),
-        Tab::Tools => ("Tools", &[
-            "The Tools tab collects utilities for managing your keys and encrypted files over \
-             time. These operations are less frequent than everyday encryption and decryption \
-             but are important for maintaining a healthy key lifecycle.",
-            "## CHANGE OR UPGRADE PASSPHRASE",
-            "Use the Repassphrase section to change the passphrase protecting a private key, \
-             or to upgrade a key created with pqfile 3.x (Argon2id p=1) to the stronger \
-             p=4 parameters used by pqfile 4.0. Enable the legacy option if the key was \
-             created before version 4.0.",
-            "## REVOKE A KEY",
-            "If your private key is lost or compromised, revocation creates a sidecar file \
-             alongside the public key that prevents future encryption to that key. Anyone who \
-             holds the public key file path will see the revocation when they attempt to \
-             encrypt. Revocation requires the native desktop app.",
-            "## REKEY A FILE",
-            "Rekeying transfers an encrypted file to a new recipient without decrypting the \
-             payload. The session key is decapsulated using the old private key and then \
-             re-encapsulated for the new recipient. The encrypted content is untouched.",
+        Tab::Clipboard => ("Clipboard", &[
+            "The Clipboard tab lets you encrypt or decrypt small pieces of text without \
+             writing any file to disk. This is useful for sharing secrets via messaging \
+             apps, email, or other text channels.",
+            "## ENCRYPT TEXT",
+            "Load a recipient public key, type or paste your plaintext, then click \
+             Encrypt & Copy. The ciphertext is copied to your clipboard and shown in the \
+             decrypt area so you can verify it immediately.",
+            "## DECRYPT TEXT",
+            "Paste a PEM ciphertext block, load your private key, and click Decrypt. \
+             The recovered plaintext appears in the encrypt area.",
+            "## AUTO-CLEAR",
+            "An optional timer zeroizes both text areas after a configurable period of \
+             inactivity. Configure it in Settings → Clipboard.",
         ]),
         Tab::Settings => ("Settings", &[
             "Settings let you configure how pqfile behaves across sessions. Preferences are \
@@ -1732,6 +1740,40 @@ pub(crate) fn load_keys(storage: &dyn eframe::Storage) -> Vec<KeyEntry> {
             privkey_path,
             fingerprint,
         });
+    }
+    out
+}
+
+// ── WASM public key persistence ────────────────────────────────────────────
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn save_wasm_pubkeys(keys: &[(String, String)], storage: &mut dyn eframe::Storage) {
+    let n = keys.len().min(50);
+    storage.set_string("wpk_count", n.to_string());
+    for (i, (label, pem)) in keys.iter().take(50).enumerate() {
+        storage.set_string(&format!("wpk_{i}_label"), label.clone());
+        storage.set_string(&format!("wpk_{i}_pem"), pem.clone());
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn load_wasm_pubkeys(storage: &dyn eframe::Storage) -> Vec<(String, String)> {
+    let count: usize = storage
+        .get_string("wpk_count")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+        .min(50);
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let label = storage
+            .get_string(&format!("wpk_{i}_label"))
+            .unwrap_or_default();
+        let pem = storage
+            .get_string(&format!("wpk_{i}_pem"))
+            .unwrap_or_default();
+        if !pem.is_empty() {
+            out.push((label, pem));
+        }
     }
     out
 }
@@ -2005,4 +2047,25 @@ pub(crate) fn push_recent(list: &mut Vec<String>, path: String) {
     list.retain(|p| p != &path);
     list.insert(0, path);
     list.truncate(5);
+}
+
+// ── URL hash tab routing (WASM) ────────────────────────────────────────────
+
+/// Map a URL fragment (e.g. `"#encrypt"`) to a `Tab` variant for deep-linking.
+#[cfg(target_arch = "wasm32")]
+fn tab_from_hash(hash: &str) -> Option<Tab> {
+    match hash.trim_start_matches('#').to_lowercase().as_str() {
+        "keys" => Some(Tab::Keys),
+        "keygen" | "generate" => Some(Tab::Keygen),
+        "encrypt" => Some(Tab::Encrypt),
+        "decrypt" => Some(Tab::Decrypt),
+        "sign" => Some(Tab::Sign),
+        "signcrypt" => Some(Tab::Signcrypt),
+        "archive" => Some(Tab::Archive),
+        "shamir" => Some(Tab::Shamir),
+        "inspect" | "doctor" => Some(Tab::Inspect),
+        "clipboard" | "tools" => Some(Tab::Clipboard),
+        "settings" => Some(Tab::Settings),
+        _ => None,
+    }
 }

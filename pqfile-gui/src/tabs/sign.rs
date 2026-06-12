@@ -1,7 +1,7 @@
 use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 #[cfg(not(target_arch = "wasm32"))]
-use crate::colors::{c_overlay, c_surface0, c_text};
+use crate::colors::{c_surface0, c_text};
 use crate::types::SignSubTab;
 use crate::types::{OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
@@ -12,8 +12,6 @@ use crate::widgets::{
 };
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::sign;
-#[cfg(not(target_arch = "wasm32"))]
-use pqfile::sign::sign_keygen_hardware;
 
 impl PqfileApp {
     pub(crate) fn show_sign(&mut self, ui: &mut egui::Ui, dark: bool) {
@@ -22,8 +20,8 @@ impl PqfileApp {
         }
         ui.label(
             RichText::new(
-                "Generate ML-DSA-65 signing key pairs, sign any file with a private key, \
-                 and verify detached .sig signatures.",
+                "Sign any file with an ML-DSA-65 private key and verify detached .sig \
+                 signatures. To generate signing key pairs, use the Keygen tab.",
             )
             .size(13.0)
             .color(c_subtext(dark)),
@@ -34,7 +32,6 @@ impl PqfileApp {
             ui,
             &mut self.sign_sub_tab,
             &[
-                ("Key Generation", SignSubTab::KeyGen),
                 ("Sign File", SignSubTab::Sign),
                 ("Verify Signature", SignSubTab::Verify),
             ],
@@ -42,223 +39,8 @@ impl PqfileApp {
         );
 
         match self.sign_sub_tab {
-            SignSubTab::KeyGen => self.show_sign_keygen_section(ui, dark),
             SignSubTab::Sign => self.show_sign_file_section(ui, dark),
             SignSubTab::Verify => self.show_verify_section(ui, dark),
-        }
-    }
-
-    // ── Key generation ─────────────────────────────────────────────────────
-
-    fn show_sign_keygen_section(&mut self, ui: &mut egui::Ui, dark: bool) {
-        section_label(ui, "KEY GENERATION", dark);
-        card(ui, c_card(dark), c_surface1(dark), |ui| {
-            // Output directory (native) or download note (WASM)
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                ui.horizontal(|ui| {
-                    let display = if self.settings.output_dir.is_empty() {
-                        RichText::new("Not set - click Browse to choose a directory")
-                            .size(13.0)
-                            .color(c_overlay(dark))
-                    } else {
-                        RichText::new(&self.settings.output_dir)
-                            .size(13.0)
-                            .color(c_text(dark))
-                    };
-                    ui.label(
-                        RichText::new("Output dir:")
-                            .size(13.0)
-                            .color(c_subtext(dark)),
-                    );
-                    ui.add_space(4.0);
-                    ui.label(display);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("Browse…").size(13.0).color(c_text(dark)),
-                                )
-                                .fill(c_surface0(dark)),
-                            )
-                            .clicked()
-                        {
-                            if let Some(p) = rfd::FileDialog::new()
-                                .set_title("Choose output directory")
-                                .pick_folder()
-                            {
-                                self.settings.output_dir = p.to_string_lossy().into_owned();
-                            }
-                        }
-                    });
-                });
-                ui.add_space(6.0);
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                ui.label(
-                    RichText::new(
-                        "sign_pubkey.pem and sign_privkey.pem will be downloaded to your downloads folder.",
-                    )
-                    .size(13.0)
-                    .color(c_subtext(dark)),
-                );
-                ui.add_space(6.0);
-            }
-
-            // Hardware option (native only).
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                ui.checkbox(
-                    &mut self.sign_keygen_use_hardware,
-                    RichText::new("Store signing key in OS credential store (hardware-backed)")
-                        .size(13.0)
-                        .color(c_subtext(dark)),
-                );
-                if self.sign_keygen_use_hardware {
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.sign_keygen_hardware_label)
-                            .hint_text("Key label (e.g. my-signing-key)...")
-                            .desired_width(f32::INFINITY),
-                    );
-                    self.sign_keygen_use_passphrase = false;
-                    ui.add_space(4.0);
-                }
-            }
-
-            let hw_active = self.sign_keygen_use_hardware;
-            ui.add_enabled_ui(!hw_active, |ui| {
-                ui.checkbox(
-                    &mut self.sign_keygen_use_passphrase,
-                    RichText::new("Protect private signing key with passphrase")
-                        .size(13.0)
-                        .color(c_subtext(dark)),
-                );
-            });
-
-            if !hw_active && self.sign_keygen_use_passphrase {
-                ui.add_space(6.0);
-                passphrase_row(
-                    ui,
-                    "Passphrase:",
-                    &mut self.sign_keygen_passphrase,
-                    &mut self.sign_keygen_passphrase_visible,
-                    "Enter passphrase",
-                    dark,
-                );
-                ui.add_space(2.0);
-                passphrase_row(
-                    ui,
-                    "Confirm:",
-                    &mut self.sign_keygen_passphrase_confirm,
-                    &mut self.sign_keygen_passphrase_visible,
-                    "Confirm passphrase",
-                    dark,
-                );
-            }
-        });
-        ui.add_space(8.0);
-
-        if ui
-            .add(
-                egui::Button::new(
-                    RichText::new("🔑  Generate Signing Keys")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(200.0, 32.0)),
-            )
-            .clicked()
-        {
-            self.do_sign_keygen();
-        }
-
-        show_status(ui, &self.sign_keygen_status, dark);
-    }
-
-    fn do_sign_keygen(&mut self) {
-        let passphrase: Option<String> = if self.sign_keygen_use_passphrase {
-            let pp = (*self.sign_keygen_passphrase).clone();
-            let pc = (*self.sign_keygen_passphrase_confirm).clone();
-            if pp != pc {
-                self.sign_keygen_status = OpStatus::Err("Passphrases do not match.".to_owned());
-                return;
-            }
-            if pp.is_empty() {
-                self.sign_keygen_status =
-                    OpStatus::Err("Enter a passphrase or uncheck the option.".to_owned());
-                return;
-            }
-            Some(pp)
-        } else {
-            None
-        };
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let out_dir = if self.settings.output_dir.is_empty() {
-                std::env::current_dir().unwrap_or_default()
-            } else {
-                std::path::PathBuf::from(&self.settings.output_dir)
-            };
-            let force = !self.settings.confirm_overwrite;
-
-            if self.sign_keygen_use_hardware {
-                let label = self.sign_keygen_hardware_label.trim().to_owned();
-                if label.is_empty() {
-                    self.sign_keygen_status =
-                        OpStatus::Err("Enter a label for the hardware signing key.".to_owned());
-                    return;
-                }
-                match sign_keygen_hardware(&out_dir, force, &label) {
-                    Ok(r) => {
-                        self.sign_keygen_status = OpStatus::Ok(format!(
-                            "Hardware-backed signing keys saved to {}   Fingerprint: {}",
-                            out_dir.display(),
-                            r.vk_fingerprint,
-                        ));
-                    }
-                    Err(e) => {
-                        self.sign_keygen_status = OpStatus::Err(e.to_string());
-                    }
-                }
-            } else {
-                match sign::sign_keygen(&out_dir, force, passphrase.as_deref()) {
-                    Ok(r) => {
-                        self.sign_keygen_passphrase.clear();
-                        self.sign_keygen_passphrase_confirm.clear();
-                        self.sign_keygen_status = OpStatus::Ok(format!(
-                            "Saved to {}   Fingerprint: {}",
-                            out_dir.display(),
-                            r.vk_fingerprint,
-                        ));
-                    }
-                    Err(e) => {
-                        self.sign_keygen_status = OpStatus::Err(e.to_string());
-                    }
-                }
-            }
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            use crate::widgets::download_bytes;
-            match sign::sign_keygen_bytes(passphrase.as_deref()) {
-                Ok(r) => {
-                    download_bytes("sign_pubkey.pem", r.vk_pem.as_bytes());
-                    download_bytes("sign_privkey.pem", r.sk_pem.as_bytes());
-                    self.sign_keygen_passphrase.clear();
-                    self.sign_keygen_passphrase_confirm.clear();
-                    self.sign_keygen_status =
-                        OpStatus::Ok(format!("Downloaded   Fingerprint: {}", r.vk_fingerprint));
-                }
-                Err(e) => {
-                    self.sign_keygen_status = OpStatus::Err(e.to_string());
-                }
-            }
         }
     }
 
@@ -266,6 +48,7 @@ impl PqfileApp {
 
     fn show_sign_file_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "SIGN FILE", dark);
+        let mut pp_submitted = false;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             file_row(
                 ui,
@@ -276,7 +59,7 @@ impl PqfileApp {
                 dark,
             );
             ui.add_space(4.0);
-            passphrase_row(
+            pp_submitted = passphrase_row(
                 ui,
                 "Passphrase (if encrypted key):",
                 &mut self.sign_sk_passphrase,
@@ -310,6 +93,9 @@ impl PqfileApp {
                 .min_size(Vec2::new(120.0, 32.0)),
             )
             .clicked()
+            || (ready
+                && (pp_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
         {
             self.do_sign_file();
         }
@@ -438,7 +224,7 @@ impl PqfileApp {
             .add_enabled(
                 ready,
                 egui::Button::new(
-                    RichText::new("✔  Verify Signature")
+                    RichText::new("✓  Verify Signature")
                         .size(14.0)
                         .color(c_chrome(dark))
                         .strong(),

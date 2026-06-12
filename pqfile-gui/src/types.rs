@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(PartialEq, Default, Clone, Copy)]
 pub(crate) enum Tab {
+    Keys,
     #[default]
     Keygen,
     Encrypt,
@@ -11,9 +12,8 @@ pub(crate) enum Tab {
     Signcrypt,
     Archive,
     Shamir,
-    Tools,
     Inspect,
-    Keys,
+    Clipboard,
     Settings,
 }
 
@@ -86,7 +86,7 @@ pub(crate) struct MultiFileEntry {
     pub(crate) status: OpStatus,
 }
 
-/// Which KEM algorithm to use when generating a key pair.
+/// Which algorithm to use when generating a key pair.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub(crate) enum KeygenAlgorithm {
     MlKem512,
@@ -94,6 +94,7 @@ pub(crate) enum KeygenAlgorithm {
     MlKem768,
     MlKem1024,
     HybridX25519MlKem768,
+    MlDsa65,
 }
 
 impl KeygenAlgorithm {
@@ -102,10 +103,14 @@ impl KeygenAlgorithm {
             Self::MlKem512 => 512,
             Self::MlKem768 | Self::HybridX25519MlKem768 => 768,
             Self::MlKem1024 => 1024,
+            Self::MlDsa65 => 0,
         }
     }
     pub(crate) fn hybrid(self) -> bool {
         self == Self::HybridX25519MlKem768
+    }
+    pub(crate) fn is_signing(self) -> bool {
+        self == Self::MlDsa65
     }
 }
 
@@ -234,10 +239,17 @@ pub(crate) struct KeyDragPayload {
     pub(crate) priv_path: Option<std::path::PathBuf>,
 }
 
+/// Which sub-section is active in the Decrypt tab.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum DecryptSubTab {
+    #[default]
+    Decrypt,
+    Rekey,
+}
+
 /// Which sub-section is active in the Sign tab.
 #[derive(PartialEq, Default, Clone, Copy)]
 pub(crate) enum SignSubTab {
-    KeyGen,
     #[default]
     Sign,
     Verify,
@@ -322,6 +334,7 @@ impl Settings {
             "512" => KeygenAlgorithm::MlKem512,
             "1024" => KeygenAlgorithm::MlKem1024,
             "hybrid768" => KeygenAlgorithm::HybridX25519MlKem768,
+            "dsa65" => KeygenAlgorithm::MlDsa65,
             _ => KeygenAlgorithm::MlKem768,
         };
         let default_expiry_days = storage
@@ -360,6 +373,7 @@ impl Settings {
             KeygenAlgorithm::MlKem768 => "768",
             KeygenAlgorithm::MlKem1024 => "1024",
             KeygenAlgorithm::HybridX25519MlKem768 => "hybrid768",
+            KeygenAlgorithm::MlDsa65 => "dsa65",
         };
         storage.set_string("default_algorithm", alg_str.to_owned());
         storage.set_string("default_expiry_days", self.default_expiry_days.to_string());

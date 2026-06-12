@@ -54,6 +54,11 @@ enum Command {
         /// Human-readable label for the hardware key (required with --hardware).
         #[arg(long, value_name = "LABEL")]
         label: Option<String>,
+        /// Embed an expiry date comment in the PEM files (format: YYYY-MM-DD).
+        /// Purely informational — pqfile checks and displays expiry but does not
+        /// enforce it cryptographically. Cannot be combined with --hardware.
+        #[arg(long, value_name = "DATE")]
+        expiry: Option<String>,
     },
     Encrypt {
         /// Recipient public key(s). Repeat -r for multiple recipients (v4 format).
@@ -409,7 +414,10 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             hybrid,
             hardware,
             label,
-        } => run_keygen(out, force, level, hybrid, passphrase, hardware, label, json),
+            expiry,
+        } => run_keygen(
+            out, force, level, hybrid, passphrase, hardware, label, expiry, json,
+        ),
         Command::Encrypt {
             recipients,
             input,
@@ -521,6 +529,7 @@ fn run_keygen(
     passphrase: bool,
     hardware: bool,
     label: Option<String>,
+    expiry: Option<String>,
     json: bool,
 ) -> Result<(), PqfileError> {
     if hardware && passphrase {
@@ -528,6 +537,27 @@ fn run_keygen(
             std::io::ErrorKind::InvalidInput,
             "--hardware and --passphrase are mutually exclusive",
         )));
+    }
+    if hardware && expiry.is_some() {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "--hardware and --expiry are mutually exclusive (hardware key stubs have no PEM header)",
+        )));
+    }
+    // Validate expiry format (YYYY-MM-DD).
+    if let Some(ref date) = expiry {
+        let parts: Vec<&str> = date.splitn(4, '-').collect();
+        let valid = parts.len() == 3
+            && parts[0].len() == 4
+            && parts[1].len() == 2
+            && parts[2].len() == 2
+            && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()));
+        if !valid {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("--expiry must be in YYYY-MM-DD format, got {date:?}"),
+            )));
+        }
     }
     let fp = if hardware {
         let lbl = label.ok_or_else(|| {
@@ -547,13 +577,29 @@ fn run_keygen(
         } else {
             None
         };
-        keygen::keygen(
+        let fp = keygen::keygen(
             &out,
             force,
             level,
             pp.as_deref().map(|z| z.as_str()),
             hybrid,
-        )?
+        )?;
+        // Prepend expiry comment to both PEM files if requested.
+        if let Some(ref date) = expiry {
+            let pub_path = out.join("pubkey.pem");
+            let priv_path = out.join("privkey.pem");
+            let pub_pem = std::fs::read_to_string(&pub_path)?;
+            let priv_pem = std::fs::read_to_string(&priv_path)?;
+            std::fs::write(
+                &pub_path,
+                format!("# Expires: {date}\n{pub_pem}").as_bytes(),
+            )?;
+            std::fs::write(
+                &priv_path,
+                format!("# Expires: {date}\n{priv_pem}").as_bytes(),
+            )?;
+        }
+        fp
     };
     if json {
         println!(
@@ -564,6 +610,7 @@ fn run_keygen(
                 kv_str("privkey_path", &out.join("privkey.pem").to_string_lossy()),
                 kv_str("fingerprint", &fp),
                 kv_str("storage", if hardware { "hardware" } else { "disk" }),
+                kv_str("expiry", expiry.as_deref().unwrap_or("")),
             ])
         );
     } else {
@@ -574,6 +621,9 @@ fn run_keygen(
             println!("Keys written to {}", out.display());
         }
         println!("Public key fingerprint: {fp}");
+        if let Some(ref date) = expiry {
+            println!("Expiry: {date}");
+        }
     }
     Ok(())
 }

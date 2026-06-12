@@ -470,6 +470,7 @@ fn walk_dir_recursive(root: &std::path::Path, dir: &std::path::Path, out: &mut V
 }
 
 /// A single-row passphrase input with a show/hide toggle (eye icon).
+/// Returns `true` if the user pressed Enter while the field had focus (submit signal).
 pub(crate) fn passphrase_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -477,14 +478,13 @@ pub(crate) fn passphrase_row(
     visible: &mut bool,
     hint: &str,
     dark: bool,
-) {
+) -> bool {
+    let mut submitted = false;
     let w = ui.available_width();
     ui.allocate_ui(egui::vec2(w, 26.0), |ui| {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.label(RichText::new(label).size(13.0).color(c_subtext(dark)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Eye icon: "👁" = currently hidden (click to show); "🙈" would be silly,
-                // so we use text labels that are universally readable.
                 let toggle_label = if *visible { "hide" } else { "👁 show" };
                 if ui
                     .add(
@@ -505,16 +505,20 @@ pub(crate) fn passphrase_row(
                 {
                     *visible = !*visible;
                 }
-                ui.add(
+                let resp = ui.add(
                     egui::TextEdit::singleline(&mut **value)
                         .password(!*visible)
                         .hint_text(hint)
                         .font(egui::TextStyle::Body)
                         .desired_width(ui.available_width()),
                 );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    submitted = true;
+                }
             });
         });
     });
+    submitted
 }
 
 /// Opens the containing folder in the OS file manager.

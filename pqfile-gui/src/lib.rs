@@ -10,7 +10,7 @@ pub use app::PqfileApp;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-pub(crate) const APP_VERSION: &str = "4.2.3";
+pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
@@ -422,12 +422,12 @@ mod tests {
     }
 
     #[test]
-    fn drop_inspect_tab_any_file_goes_to_inspect_slot() {
+    fn drop_inspect_tab_any_file_goes_to_doctor_slot() {
         let mut app = PqfileApp::default();
         app.tab = Tab::Inspect;
         app.route_drop("anything.pqf".to_owned(), b"data".to_vec(), None);
-        app.inspect_pqf.poll();
-        assert!(app.inspect_pqf.loaded());
+        app.doctor_file.poll();
+        assert!(app.doctor_file.loaded());
     }
 
     #[test]
@@ -436,7 +436,7 @@ mod tests {
         app.route_drop("key.pem".to_owned(), b"data".to_vec(), None);
         app.encrypt_pubkey.poll();
         app.decrypt_privkey.poll();
-        app.inspect_pqf.poll();
+        app.doctor_file.poll();
         assert!(!app.encrypt_pubkey.loaded());
         assert!(
             app.encrypt_files.is_empty(),
@@ -447,7 +447,7 @@ mod tests {
             app.decrypt_files.is_empty(),
             "decrypt file list should be empty"
         );
-        assert!(!app.inspect_pqf.loaded());
+        assert!(!app.doctor_file.loaded());
     }
 
     #[test]

@@ -218,6 +218,10 @@ criteria = "safe-to-deploy"
 version = "0.12.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.block-buffer]]
+version = "0.12.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.block2]]
 version = "0.5.1"
 criteria = "safe-to-deploy"
@@ -782,6 +786,10 @@ criteria = "safe-to-deploy"
 version = "0.3.99"
 criteria = "safe-to-deploy"
 
+[[exemptions.js-sys]]
+version = "0.3.100"
+criteria = "safe-to-deploy"
+
 [[exemptions.keccak]]
 version = "0.2.0"
 criteria = "safe-to-deploy"
@@ -1294,12 +1302,20 @@ criteria = "safe-to-deploy"
 version = "1.12.3"
 criteria = "safe-to-deploy"
 
+[[exemptions.regex]]
+version = "1.12.4"
+criteria = "safe-to-deploy"
+
 [[exemptions.regex-automata]]
 version = "0.4.14"
 criteria = "safe-to-deploy"
 
 [[exemptions.regex-syntax]]
 version = "0.8.10"
+criteria = "safe-to-deploy"
+
+[[exemptions.regex-syntax]]
+version = "0.8.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.renderdoc-sys]]
@@ -1448,6 +1464,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.slotmap]]
 version = "1.1.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.smallvec]]
+version = "1.15.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.smithay-client-toolkit]]
@@ -1606,6 +1626,10 @@ criteria = "safe-to-deploy"
 version = "1.23.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.uuid]]
+version = "1.23.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.vello_common]]
 version = "0.0.6"
 criteria = "safe-to-deploy"
@@ -1638,32 +1662,64 @@ criteria = "safe-to-deploy"
 version = "0.2.122"
 criteria = "safe-to-deploy"
 
+[[exemptions.wasm-bindgen]]
+version = "0.2.123"
+criteria = "safe-to-deploy"
+
 [[exemptions.wasm-bindgen-futures]]
 version = "0.4.72"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasm-bindgen-futures]]
+version = "0.4.73"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-macro]]
 version = "0.2.122"
 criteria = "safe-to-deploy"
 
+[[exemptions.wasm-bindgen-macro]]
+version = "0.2.123"
+criteria = "safe-to-deploy"
+
 [[exemptions.wasm-bindgen-macro-support]]
 version = "0.2.122"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasm-bindgen-macro-support]]
+version = "0.2.123"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-shared]]
 version = "0.2.122"
 criteria = "safe-to-deploy"
 
+[[exemptions.wasm-bindgen-shared]]
+version = "0.2.123"
+criteria = "safe-to-deploy"
+
 [[exemptions.wasm-bindgen-test]]
 version = "0.3.72"
+criteria = "safe-to-run"
+
+[[exemptions.wasm-bindgen-test]]
+version = "0.3.73"
 criteria = "safe-to-run"
 
 [[exemptions.wasm-bindgen-test-macro]]
 version = "0.3.72"
 criteria = "safe-to-run"
 
+[[exemptions.wasm-bindgen-test-macro]]
+version = "0.3.73"
+criteria = "safe-to-run"
+
 [[exemptions.wasm-bindgen-test-shared]]
 version = "0.2.122"
+criteria = "safe-to-run"
+
+[[exemptions.wasm-bindgen-test-shared]]
+version = "0.2.123"
 criteria = "safe-to-run"
 
 [[exemptions.wasm-encoder]]
@@ -1724,6 +1780,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.web-sys]]
 version = "0.3.99"
+criteria = "safe-to-deploy"
+
+[[exemptions.web-sys]]
+version = "0.3.100"
 criteria = "safe-to-deploy"
 
 [[exemptions.web-time]]
@@ -2038,8 +2098,16 @@ criteria = "safe-to-deploy"
 version = "0.8.50"
 criteria = "safe-to-deploy"
 
+[[exemptions.zerocopy]]
+version = "0.8.52"
+criteria = "safe-to-deploy"
+
 [[exemptions.zerocopy-derive]]
 version = "0.8.50"
+criteria = "safe-to-deploy"
+
+[[exemptions.zerocopy-derive]]
+version = "0.8.52"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerofrom]]

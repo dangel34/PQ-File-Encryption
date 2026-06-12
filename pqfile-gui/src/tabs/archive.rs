@@ -202,6 +202,7 @@ impl PqfileApp {
 
     fn show_archive_extract_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "EXTRACT / LIST ARCHIVE", dark);
+        let mut pp_submitted = false;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             file_row(
                 ui,
@@ -212,7 +213,7 @@ impl PqfileApp {
                 dark,
             );
             ui.add_space(4.0);
-            passphrase_row(
+            pp_submitted = passphrase_row(
                 ui,
                 "Key passphrase:",
                 &mut self.extract_privkey_passphrase,
@@ -258,6 +259,9 @@ impl PqfileApp {
                 .min_size(Vec2::new(180.0, 32.0)),
             )
             .clicked()
+            || (ready
+                && (pp_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
         {
             self.do_archive_extract();
         }

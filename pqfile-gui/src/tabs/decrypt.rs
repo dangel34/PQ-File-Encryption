@@ -5,15 +5,15 @@ use crate::colors::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::KeyDragPayload;
-use crate::types::{OpStatus, Tab};
+use crate::types::{DecryptSubTab, OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_pqf;
 use crate::widgets::{
-    card, file_row, pick_pqf_files, save_result, scrollable_list, section_label, show_status,
-    tab_heading_help,
+    card, file_row, passphrase_row, pick_pqf_files, save_result, scrollable_list, section_label,
+    seg_tabs, show_status, tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-use pqfile::{decrypt, keygen};
+use pqfile::{decrypt, keygen, rekey};
 use std::io::Cursor;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
@@ -85,11 +85,12 @@ impl PqfileApp {
                     let result: Result<Vec<u8>, _> = {
                         let mut cursor = Cursor::new(&data);
                         let mut out = Vec::new();
-                        decrypt::decrypt_stream_with_progress(
+                        decrypt::decrypt_stream_parallel_with_progress(
                             &priv_pem,
                             &mut cursor,
                             &mut out,
                             pp,
+                            8, // parallel batch size (matches CLI default)
                             0, // total_hint unknown until header is parsed
                             &move |done: u64, total: u64| {
                                 let mut g = job_progress.lock().unwrap();
@@ -168,15 +169,37 @@ impl PqfileApp {
     }
 
     pub(crate) fn show_decrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
-        if tab_heading_help(ui, "Decrypt File", dark) {
+        if tab_heading_help(ui, "Decrypt / Rekey", dark) {
             self.help_modal_open = Some(Tab::Decrypt);
         }
         ui.label(
-            RichText::new("Decrypt one or more .pqf files using your private key.")
-                .size(13.0)
-                .color(c_subtext(dark)),
+            RichText::new(
+                "Decrypt .pqf files with your private key, or use Rekey to transfer a \
+                 ciphertext to a new recipient without decrypting the payload.",
+            )
+            .size(13.0)
+            .color(c_subtext(dark)),
         );
-        ui.add_space(14.0);
+        ui.add_space(10.0);
+
+        seg_tabs(
+            ui,
+            &mut self.decrypt_sub_tab,
+            &[
+                ("Decrypt Files", DecryptSubTab::Decrypt),
+                ("Rekey File", DecryptSubTab::Rekey),
+            ],
+            dark,
+        );
+
+        match self.decrypt_sub_tab {
+            DecryptSubTab::Decrypt => self.show_decrypt_section(ui, dark),
+            DecryptSubTab::Rekey => self.show_rekey_section(ui, dark),
+        }
+    }
+
+    fn show_decrypt_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        ui.add_space(4.0);
 
         #[cfg(not(target_arch = "wasm32"))]
         let job_running = self.decrypt_batch_job.is_some();
@@ -357,46 +380,49 @@ impl PqfileApp {
                         let w = ui.available_width();
                         ui.allocate_ui(egui::vec2(w, 22.0), |ui| {
                             ui.with_layout(
-                                egui::Layout::left_to_right(egui::Align::Center),
+                                egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    ui.label(
-                                        RichText::new(&entry.name).size(13.0).color(c_text(dark)),
-                                    );
+                                    if !job_running {
+                                        remove = ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new("x")
+                                                        .size(11.0)
+                                                        .color(c_overlay(dark)),
+                                                )
+                                                .fill(Color32::TRANSPARENT)
+                                                .stroke(Stroke::NONE),
+                                            )
+                                            .clicked();
+                                    }
+                                    match &entry.status {
+                                        OpStatus::None => {}
+                                        OpStatus::Ok(_) => {
+                                            ui.label(
+                                                RichText::new("OK").size(12.0).color(c_green(dark)),
+                                            );
+                                        }
+                                        OpStatus::Err(m) => {
+                                            let display: String = m.chars().take(32).collect();
+                                            ui.label(
+                                                RichText::new(display)
+                                                    .size(12.0)
+                                                    .color(c_red(dark)),
+                                            );
+                                        }
+                                    }
                                     ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        egui::Layout::left_to_right(egui::Align::Center),
                                         |ui| {
-                                            if !job_running {
-                                                remove = ui
-                                                    .add(
-                                                        egui::Button::new(
-                                                            RichText::new("x")
-                                                                .size(11.0)
-                                                                .color(c_overlay(dark)),
-                                                        )
-                                                        .fill(Color32::TRANSPARENT)
-                                                        .stroke(Stroke::NONE),
-                                                    )
-                                                    .clicked();
-                                            }
-                                            match &entry.status {
-                                                OpStatus::None => {}
-                                                OpStatus::Ok(_) => {
-                                                    ui.label(
-                                                        RichText::new("OK")
-                                                            .size(12.0)
-                                                            .color(c_green(dark)),
-                                                    );
-                                                }
-                                                OpStatus::Err(m) => {
-                                                    let display: String =
-                                                        m.chars().take(32).collect();
-                                                    ui.label(
-                                                        RichText::new(display)
-                                                            .size(12.0)
-                                                            .color(c_red(dark)),
-                                                    );
-                                                }
-                                            }
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(&entry.name)
+                                                        .size(13.0)
+                                                        .color(c_text(dark)),
+                                                )
+                                                .truncate(),
+                                            )
+                                            .on_hover_text(&entry.name);
                                         },
                                     );
                                 },
@@ -423,22 +449,29 @@ impl PqfileApp {
         } else {
             format!("🔓  Decrypt All ({n})")
         };
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new(btn_label)
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    ready,
+                    egui::Button::new(
+                        RichText::new(&btn_label)
+                            .size(14.0)
+                            .color(c_chrome(dark))
+                            .strong(),
+                    )
+                    .fill(c_accent(dark))
+                    .min_size(Vec2::new(170.0, 32.0)),
                 )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(170.0, 32.0)),
-            )
-            .clicked()
-        {
-            self.handle_decrypt_batch(ui.ctx());
-        }
+                .clicked()
+                || (ready
+                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)))
+            {
+                self.handle_decrypt_batch(ui.ctx());
+            }
+            if job_running {
+                ui.add(egui::Spinner::new().size(20.0).color(c_accent(dark)));
+            }
+        });
 
         if !ready && !job_running {
             ui.add_space(4.0);
@@ -497,5 +530,157 @@ impl PqfileApp {
         }
 
         show_status(ui, &self.decrypt_status, dark);
+    }
+
+    // ── Rekey ─────────────────────────────────────────────────────────────
+
+    fn show_rekey_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        ui.add_space(4.0);
+        section_label(ui, "REKEY FILE", dark);
+        ui.label(
+            RichText::new(
+                "Transfer a .pqf file to a new recipient without decrypting the payload. \
+                 The session key is decapsulated with the old private key and re-encapsulated \
+                 for the new recipient. The encrypted content is untouched.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(6.0);
+        let mut pp_submitted = false;
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            file_row(
+                ui,
+                "Old private key (for decapsulation)",
+                &mut self.rekey_privkey,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            pp_submitted = passphrase_row(
+                ui,
+                "Old key passphrase:",
+                &mut self.rekey_privkey_passphrase,
+                &mut self.rekey_privkey_passphrase_visible,
+                "Leave empty for an unencrypted key",
+                dark,
+            );
+            ui.add_space(4.0);
+            file_row(
+                ui,
+                "New recipient public key",
+                &mut self.rekey_new_pubkey,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            file_row(
+                ui,
+                "Encrypted file to rekey (.pqf)",
+                &mut self.rekey_input,
+                "PQF",
+                &["pqf"],
+                dark,
+            );
+        });
+        ui.add_space(8.0);
+
+        let ready = self.rekey_privkey.loaded()
+            && self.rekey_new_pubkey.loaded()
+            && self.rekey_input.loaded();
+        if ui
+            .add_enabled(
+                ready,
+                egui::Button::new(
+                    RichText::new("🔄  Rekey File")
+                        .size(14.0)
+                        .color(c_chrome(dark))
+                        .strong(),
+                )
+                .fill(c_accent(dark))
+                .min_size(Vec2::new(160.0, 32.0)),
+            )
+            .clicked()
+            || (ready
+                && (pp_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
+        {
+            self.do_rekey();
+        }
+
+        show_status(ui, &self.rekey_status, dark);
+    }
+
+    fn do_rekey(&mut self) {
+        let old_priv = match self.rekey_privkey.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.rekey_status = OpStatus::Err("Load the old private key first.".to_owned());
+                return;
+            }
+        };
+        let new_pub = match self.rekey_new_pubkey.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.rekey_status =
+                    OpStatus::Err("Load the new recipient public key first.".to_owned());
+                return;
+            }
+        };
+        let data = match self.rekey_input.data.clone() {
+            Some(d) => d,
+            None => {
+                self.rekey_status =
+                    OpStatus::Err("Choose the .pqf file to rekey first.".to_owned());
+                return;
+            }
+        };
+        let passphrase = if self.rekey_privkey_passphrase.is_empty() {
+            None
+        } else {
+            Some((*self.rekey_privkey_passphrase).clone())
+        };
+
+        let mut output = Vec::new();
+        let mut reader = Cursor::new(&data);
+        match rekey::rekey_stream(
+            &old_priv,
+            &new_pub,
+            &mut reader,
+            &mut output,
+            passphrase.as_deref(),
+        ) {
+            Ok(()) => {
+                let out_name = self.rekey_input.name.clone();
+                #[cfg(not(target_arch = "wasm32"))]
+                let native_path = {
+                    let base = self
+                        .rekey_input
+                        .path
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from(&out_name));
+                    let path = if self.settings.output_dir.is_empty() {
+                        base
+                    } else {
+                        PathBuf::from(&self.settings.output_dir)
+                            .join(base.file_name().unwrap_or_default())
+                    };
+                    Some(path)
+                };
+                #[cfg(target_arch = "wasm32")]
+                let native_path: Option<PathBuf> = None;
+                self.rekey_status = save_result(
+                    &out_name,
+                    &output,
+                    native_path,
+                    self.settings.confirm_overwrite,
+                );
+            }
+            Err(e) => {
+                self.rekey_status = OpStatus::Err(e.to_string());
+            }
+        }
     }
 }

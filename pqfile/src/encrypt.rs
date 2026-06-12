@@ -232,7 +232,9 @@ pub(crate) fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u1
                     got: raw.len(),
                 });
             }
-            let x25519_pk_bytes: [u8; 32] = raw[..32].try_into().unwrap();
+            let x25519_pk_bytes: [u8; 32] = raw[..32]
+                .try_into()
+                .expect("HYBRID_EK_LEN_768 > 32; length checked above");
             let ml_raw = &raw[32..];
             let ml_arr = Array::try_from(ml_raw).map_err(|_| PqfileError::InvalidKeyLength {
                 expected: EK_LEN_768,
@@ -1128,7 +1130,9 @@ pub fn encrypt_stream_parallel(
     header.write(writer)?;
     let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
 
-    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into().unwrap();
+    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN");
     let key_bytes = Zeroizing::new(*ss_bytes);
 
     // Prime: read the very first chunk

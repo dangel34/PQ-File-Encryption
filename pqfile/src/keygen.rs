@@ -67,6 +67,9 @@ pub fn keygen(
     let priv_path = out_dir.join("privkey.pem");
     fs::write(&pub_path, pub_pem.as_bytes())?;
     if let Err(e) = fs::write(&priv_path, priv_pem.as_bytes()) {
+        // Best-effort: remove the orphaned public key. The caller already receives
+        // the write error; if removal also fails (e.g. disk full) there is nothing
+        // more we can do from a library crate without a logging dependency.
         let _ = fs::remove_file(&pub_path);
         return Err(e.into());
     }
@@ -373,6 +376,9 @@ pub fn keygen_hardware(
     let priv_path = out_dir.join("privkey.pem");
     fs::write(&pub_path, pub_pem.as_bytes())?;
     if let Err(e) = fs::write(&priv_path, hw_pem.as_bytes()) {
+        // Best-effort: remove the orphaned public key. The caller already receives
+        // the write error; if removal also fails there is nothing more we can do
+        // from a library crate without a logging dependency.
         let _ = fs::remove_file(&pub_path);
         return Err(e.into());
     }

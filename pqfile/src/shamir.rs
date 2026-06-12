@@ -271,7 +271,9 @@ fn load_64byte_seed(
 fn pubkey_fp(kem_variant: u16, seed: &[u8]) -> Result<[u8; 16], PqfileError> {
     let pub_bytes = pubkey_bytes(kem_variant, seed)?;
     let hash = Sha3_256::digest(&pub_bytes);
-    Ok(hash[..16].try_into().unwrap())
+    Ok(hash[..16]
+        .try_into()
+        .expect("SHA3-256 produces 32 bytes; slicing to 16 is always valid"))
 }
 
 fn pubkey_bytes(kem_variant: u16, seed: &[u8]) -> Result<Vec<u8>, PqfileError> {
@@ -295,7 +297,10 @@ fn pubkey_bytes(kem_variant: u16, seed: &[u8]) -> Result<Vec<u8>, PqfileError> {
             if seed.len() != HYBRID_SEED_LEN_768 {
                 return Err(bad_len(HYBRID_SEED_LEN_768, seed.len()));
             }
-            let x25519_sk = X25519StaticSecret::from(<[u8; 32]>::try_from(&seed[..32]).unwrap());
+            let x25519_sk = X25519StaticSecret::from(
+                <[u8; 32]>::try_from(&seed[..32])
+                    .expect("seed length validated above; 32 bytes always available"),
+            );
             let x25519_pk = X25519PublicKey::from(&x25519_sk);
             let ml_s = Seed::try_from(&seed[32..]).map_err(|_| bad_len(64, seed.len() - 32))?;
             let ml_dk = DecapsulationKey768::from_seed(ml_s);
@@ -407,7 +412,9 @@ fn decode_share_pem(pem_str: &str) -> Result<DecodedShare, PqfileError> {
     let threshold = body[3];
     let total = body[4];
     let x = body[5];
-    let pubkey_fp: [u8; 16] = body[6..22].try_into().unwrap();
+    let pubkey_fp: [u8; 16] = body[6..22]
+        .try_into()
+        .expect("SHARE_HEADER_LEN = 22; length >= 23 checked above");
     let y = Zeroizing::new(body[22..].to_vec());
     Ok(DecodedShare {
         kem_variant,

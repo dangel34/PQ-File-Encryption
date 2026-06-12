@@ -1,6 +1,6 @@
 use crate::app::PqfileApp;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::colors::{c_accent, c_chrome, c_overlay, c_red, c_surface0, c_text};
+use crate::colors::{c_accent, c_chrome, c_overlay, c_red, c_surface0, c_text, c_yellow};
 use crate::colors::{c_card, c_subtext, c_surface1};
 use crate::types::Tab;
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,8 +29,7 @@ impl PqfileApp {
         }
         ui.label(
             RichText::new(
-                "Remember key pairs for quick access. \
-                 Click Use to load a key into the Encrypt or Decrypt tab.",
+                "Remember key pairs for quick access, change passphrases, and revoke keys.",
             )
             .size(13.0)
             .color(c_subtext(dark)),
@@ -41,15 +40,98 @@ impl PqfileApp {
         self.show_keys_native(ui, dark);
 
         #[cfg(target_arch = "wasm32")]
-        {
-            card(ui, c_card(dark), c_surface1(dark), |ui| {
+        self.show_keys_wasm(ui, dark);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn show_keys_wasm(&mut self, ui: &mut egui::Ui, dark: bool) {
+        use crate::colors::{c_accent, c_chrome, c_overlay, c_surface0, c_text};
+        use crate::types::RecipientEntry;
+        use crate::widgets::section_label;
+
+        section_label(ui, "REMEMBERED PUBLIC KEYS", dark);
+        ui.label(
+            RichText::new(
+                "Public keys saved here persist across sessions in browser localStorage \
+                 and can be loaded into Encrypt at any time.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(6.0);
+
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            if self.wasm_saved_pubkeys.is_empty() {
                 ui.label(
-                    RichText::new("Key management is not available in the browser version.")
-                        .size(13.0)
-                        .color(c_subtext(dark)),
+                    RichText::new(
+                        "No saved keys yet. Use the ☆ Remember button in the Encrypt tab \
+                         recipients list to save a public key here.",
+                    )
+                    .size(13.0)
+                    .color(c_subtext(dark)),
                 );
-            });
-        }
+            } else {
+                let mut forget_idx: Option<usize> = None;
+                let mut use_idx: Option<usize> = None;
+                for (i, (label, _pem)) in self.wasm_saved_pubkeys.iter().enumerate() {
+                    if i > 0 {
+                        ui.separator();
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(label).size(13.0).color(c_text(dark)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Forget").size(11.5).color(c_overlay(dark)),
+                                    )
+                                    .fill(c_surface0(dark)),
+                                )
+                                .on_hover_text("Remove from saved keys")
+                                .clicked()
+                            {
+                                forget_idx = Some(i);
+                            }
+                            ui.add_space(4.0);
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("🔒 Use for Encrypt")
+                                            .size(11.5)
+                                            .color(c_chrome(dark)),
+                                    )
+                                    .fill(c_accent(dark)),
+                                )
+                                .on_hover_text(
+                                    "Add to Encrypt recipients and switch to Encrypt tab",
+                                )
+                                .clicked()
+                            {
+                                use_idx = Some(i);
+                            }
+                        });
+                    });
+                }
+                if let Some(i) = forget_idx {
+                    self.wasm_saved_pubkeys.remove(i);
+                }
+                if let Some(i) = use_idx {
+                    if let Some((label, pem)) = self.wasm_saved_pubkeys.get(i) {
+                        let label = label.clone();
+                        let pem = pem.clone();
+                        let variant_name = crate::types::pem_variant_name(&pem);
+                        if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
+                            self.encrypt_recipients.push(RecipientEntry {
+                                name: label,
+                                pem,
+                                variant_name,
+                            });
+                        }
+                        self.tab = crate::types::Tab::Encrypt;
+                    }
+                }
+            }
+        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -169,6 +251,21 @@ impl PqfileApp {
             .size(12.0)
             .color(c_overlay(dark)),
         );
+
+        ui.add_space(20.0);
+        egui::CollapsingHeader::new("🔑  Change Passphrase")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.add_space(8.0);
+                self.show_repassphrase_section(ui, dark);
+            });
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("🚫  Revoke Key")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.add_space(8.0);
+                self.show_revoke_section(ui, dark);
+            });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -249,7 +346,7 @@ fn key_entry_row(
                     "⚠ Expires {date} (in {days} day{})",
                     if days == 1 { "" } else { "s" }
                 ),
-                eframe::egui::Color32::from_rgb(200, 140, 0),
+                c_yellow(dark),
             )
         } else {
             (
@@ -264,6 +361,8 @@ fn key_entry_row(
     });
 
     ui.horizontal(|ui| {
+        fingerprint_identicon(ui, &entry.fingerprint, dark);
+        ui.add_space(6.0);
         ui.vertical(|ui| {
             ui.label(
                 RichText::new(&entry.label)
@@ -363,4 +462,71 @@ fn key_entry_row(
         });
     });
     action
+}
+
+/// Draw a small 5×5 identicon derived from a fingerprint hex string.
+/// Each key gets a unique color+pattern so they are visually distinct at a glance.
+#[cfg(not(target_arch = "wasm32"))]
+fn fingerprint_identicon(ui: &mut egui::Ui, fingerprint: &str, dark: bool) {
+    const CELL: f32 = 5.0;
+    const GRID: usize = 5;
+    const PAD: f32 = 2.0;
+    let total = PAD * 2.0 + GRID as f32 * CELL;
+
+    let hex_bytes: Vec<u8> = fingerprint
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .as_bytes()
+        .chunks(2)
+        .filter_map(|ch| u8::from_str_radix(std::str::from_utf8(ch).ok()?, 16).ok())
+        .collect();
+
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(total, total), egui::Sense::hover());
+    if !ui.is_rect_visible(rect) || hex_bytes.len() < 4 {
+        return;
+    }
+
+    let hue = hex_bytes[0] as f32 / 255.0;
+    let (fg_v, bg_v) = if dark { (0.80, 0.18) } else { (0.65, 0.88) };
+    let on_color: egui::Color32 = egui::epaint::Hsva {
+        h: hue,
+        s: 0.65,
+        v: fg_v,
+        a: 1.0,
+    }
+    .into();
+    let bg_color: egui::Color32 = egui::epaint::Hsva {
+        h: hue,
+        s: 0.15,
+        v: bg_v,
+        a: 1.0,
+    }
+    .into();
+
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3.0, bg_color);
+
+    // 5×5 grid with left–right symmetry: 15 unique cells (5 rows × 3 left cols mirrored).
+    for row in 0..GRID {
+        for col in 0..GRID {
+            let sym_col = col.min(GRID - 1 - col);
+            let bit_idx = row * 3 + sym_col;
+            let byte_idx = 1 + bit_idx / 8;
+            let bit_pos = bit_idx % 8;
+            let on = hex_bytes
+                .get(byte_idx)
+                .map(|b| (b >> bit_pos) & 1 == 1)
+                .unwrap_or(false);
+            if on {
+                let x = rect.min.x + PAD + col as f32 * CELL;
+                let y = rect.min.y + PAD + row as f32 * CELL;
+                painter.rect_filled(
+                    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(CELL - 1.0, CELL - 1.0)),
+                    1.0,
+                    on_color,
+                );
+            }
+        }
+    }
 }

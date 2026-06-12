@@ -334,6 +334,29 @@ pub fn decrypt_stream_with_progress(
     decrypt_stream(privkey_pem, reader, &mut tracked, passphrase)
 }
 
+/// Decrypts a streaming `.pqf` file using parallel chunk decryption, reporting
+/// byte progress via callback after each batch is written.
+///
+/// For v3/v5 files, chunks are decrypted in batches of `batch_size` rayon tasks.
+/// For all other format versions (and when `batch_size` <= 1) this falls back to
+/// sequential decryption with progress identical to [`decrypt_stream_with_progress`].
+///
+/// The `progress` callback receives `(bytes_written, total_hint)`.
+/// Pass `total_hint = 0` when the plaintext size is unknown.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn decrypt_stream_parallel_with_progress(
+    privkey_pem: &str,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    passphrase: Option<&str>,
+    batch_size: usize,
+    total_hint: u64,
+    progress: &dyn Fn(u64, u64),
+) -> Result<(), PqfileError> {
+    let mut tracked = crate::progress::ProgressWriter::new(writer, total_hint, progress);
+    decrypt_stream_parallel(privkey_pem, reader, &mut tracked, passphrase, batch_size)
+}
+
 fn find_session_key(
     dk: &DkVariant,
     entries: &[(u16, &[u8], &[u8; WRAPPED_KEY_LEN])],
@@ -639,7 +662,9 @@ fn decrypt_v3_chunks(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    let base_nonce: &[u8; BASE_NONCE_LEN] = header_nonce[..BASE_NONCE_LEN].try_into().unwrap();
+    let base_nonce: &[u8; BASE_NONCE_LEN] = header_nonce[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN; parameter type guarantees 12 bytes");
 
     let max_chunk = chunk_size + 16;
     let mut current = vec![0u8; max_chunk];
@@ -821,7 +846,9 @@ fn derive_dk(privkey_pem: &str, passphrase: Option<&str>) -> Result<DkVariant, P
 }
 
 fn derive_hybrid_dk_from_seed(seed: &[u8; HYBRID_SEED_LEN_768]) -> Result<DkVariant, PqfileError> {
-    let x25519_scalar: [u8; 32] = seed[..32].try_into().unwrap();
+    let x25519_scalar: [u8; 32] = seed[..32]
+        .try_into()
+        .expect("HYBRID_SEED_LEN_768 = X25519_SCALAR_LEN + 64 > 32; parameter type guarantees sufficient length");
     let ml_seed_bytes = &seed[32..];
 
     let x25519_sk = X25519StaticSecret::from(x25519_scalar);
@@ -882,7 +909,9 @@ fn decapsulate_shared_secret(
                     got: kem_ct_bytes.len(),
                 });
             }
-            let eph_pk_bytes: [u8; 32] = kem_ct_bytes[..32].try_into().unwrap();
+            let eph_pk_bytes: [u8; 32] = kem_ct_bytes[..32]
+                .try_into()
+                .expect("HYBRID_CT_LEN_768 > 32; length checked above");
             let eph_pk = X25519PublicKey::from(eph_pk_bytes);
             let x25519_ss = Zeroizing::new(x25519_sk.diffie_hellman(&eph_pk));
 
@@ -940,7 +969,9 @@ pub fn decrypt_stream_parallel(
     let key_bytes = Zeroizing::new(*ss_bytes);
     let chunk_size = header.chunk_size as usize;
     let max_chunk = chunk_size + 16;
-    let base_nonce: [u8; BASE_NONCE_LEN] = header.nonce[..BASE_NONCE_LEN].try_into().unwrap();
+    let base_nonce: [u8; BASE_NONCE_LEN] = header.nonce[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN; field type guarantees 12 bytes");
 
     let key_commitment =
         compute_key_commitment(key_bytes.as_ref(), &header.nonce, header.original_size);

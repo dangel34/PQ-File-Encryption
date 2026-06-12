@@ -1,7 +1,7 @@
 use crate::app::PqfileApp;
 use crate::colors::{
     c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1,
-    c_text,
+    c_text, c_yellow,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::KeyDragPayload;
@@ -321,11 +321,11 @@ impl PqfileApp {
                         let color = if msg.starts_with('✓') {
                             c_green(dark)
                         } else if msg.starts_with('⚠') {
-                            eframe::egui::Color32::from_rgb(200, 140, 0)
+                            c_yellow(dark)
                         } else {
                             c_red(dark)
                         };
-                        ui.label(RichText::new(msg).size(11.5).color(color).monospace());
+                        ui.label(RichText::new(msg).size(11.5).color(color));
                     }
                 });
             }
@@ -461,14 +461,47 @@ impl PqfileApp {
             });
             if !self.encrypt_recipients.is_empty() {
                 ui.add_space(6.0);
+                #[cfg(target_arch = "wasm32")]
+                let mut remember_idx: Option<usize> = None;
                 scrollable_list(ui, 154.0, c_card(dark), |ui| {
                     for (i, r) in self.encrypt_recipients.iter().enumerate() {
                         let remove = recipient_row(ui, &r.variant_name, &r.name, job_running, dark);
                         if remove && matches!(action, ListAction::None) {
                             action = ListAction::Remove(i);
                         }
+                        #[cfg(target_arch = "wasm32")]
+                        if !job_running
+                            && ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("☆ Remember")
+                                            .size(11.0)
+                                            .color(c_subtext(dark)),
+                                    )
+                                    .fill(Color32::TRANSPARENT),
+                                )
+                                .on_hover_text(
+                                    "Save this public key in the Keys tab for future sessions",
+                                )
+                                .clicked()
+                        {
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                remember_idx = Some(i);
+                            }
+                        }
                     }
                 });
+                #[cfg(target_arch = "wasm32")]
+                if let Some(i) = remember_idx {
+                    if let Some(r) = self.encrypt_recipients.get(i) {
+                        let label = r.name.clone();
+                        let pem = r.pem.clone();
+                        if !self.wasm_saved_pubkeys.iter().any(|(_, p)| p == &pem) {
+                            self.wasm_saved_pubkeys.push((label, pem));
+                        }
+                    }
+                }
             }
         });
         action
@@ -624,9 +657,11 @@ impl PqfileApp {
                 if single_recipient && self.encrypt_compress {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(
-                            egui::Slider::new(&mut self.encrypt_compress_level, 1..=19).text(""),
+                            egui::Slider::new(&mut self.encrypt_compress_level, 1..=22).text(""),
                         )
-                        .on_hover_text("Compression level (1=fastest, 19=best)");
+                        .on_hover_text(
+                            "Compression level (1=fastest, 22=best; levels 20-22 are very slow)",
+                        );
                         ui.label(RichText::new("Level:").size(12.0).color(c_subtext(dark)));
                     });
                 }
@@ -665,22 +700,29 @@ impl PqfileApp {
         } else {
             format!("🔒  Encrypt All ({n})")
         };
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new(btn_label)
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    ready,
+                    egui::Button::new(
+                        RichText::new(&btn_label)
+                            .size(14.0)
+                            .color(c_chrome(dark))
+                            .strong(),
+                    )
+                    .fill(c_accent(dark))
+                    .min_size(Vec2::new(170.0, 32.0)),
                 )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(170.0, 32.0)),
-            )
-            .clicked()
-        {
-            self.handle_encrypt_all(ui.ctx());
-        }
+                .clicked()
+                || (ready
+                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)))
+            {
+                self.handle_encrypt_all(ui.ctx());
+            }
+            if job_running {
+                ui.add(egui::Spinner::new().size(20.0).color(c_accent(dark)));
+            }
+        });
         if !ready && !job_running {
             ui.add_space(4.0);
             ui.label(
@@ -878,26 +920,29 @@ fn recipient_row(
     let mut remove = false;
     let w = ui.available_width();
     ui.allocate_ui(egui::vec2(w, 22.0), |ui| {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            let badge_color = variant_badge_color(variant_name, dark);
-            ui.label(
-                RichText::new(variant_name)
-                    .size(11.0)
-                    .color(badge_color)
-                    .monospace(),
-            );
-            ui.add_space(6.0);
-            ui.label(RichText::new(name).size(13.0).color(c_text(dark)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !job_running {
-                    remove = ui
-                        .add(
-                            egui::Button::new(RichText::new("x").size(11.0).color(c_overlay(dark)))
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE),
-                        )
-                        .clicked();
-                }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if !job_running {
+                remove = ui
+                    .add(
+                        egui::Button::new(RichText::new("x").size(11.0).color(c_overlay(dark)))
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::NONE),
+                    )
+                    .clicked();
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let badge_color = variant_badge_color(variant_name, dark);
+                ui.label(
+                    RichText::new(variant_name)
+                        .size(11.0)
+                        .color(badge_color)
+                        .monospace(),
+                );
+                ui.add_space(6.0);
+                ui.add(
+                    egui::Label::new(RichText::new(name).size(13.0).color(c_text(dark))).truncate(),
+                )
+                .on_hover_text(name);
             });
         });
     });
@@ -914,28 +959,31 @@ fn file_entry_row(
     let mut remove = false;
     let w = ui.available_width();
     ui.allocate_ui(egui::vec2(w, 22.0), |ui| {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(RichText::new(name).size(13.0).color(c_text(dark)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !job_running {
-                    remove = ui
-                        .add(
-                            egui::Button::new(RichText::new("x").size(11.0).color(c_overlay(dark)))
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE),
-                        )
-                        .clicked();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if !job_running {
+                remove = ui
+                    .add(
+                        egui::Button::new(RichText::new("x").size(11.0).color(c_overlay(dark)))
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::NONE),
+                    )
+                    .clicked();
+            }
+            match status {
+                OpStatus::None => {}
+                OpStatus::Ok(_) => {
+                    ui.label(RichText::new("OK").size(12.0).color(c_green(dark)));
                 }
-                match status {
-                    OpStatus::None => {}
-                    OpStatus::Ok(_) => {
-                        ui.label(RichText::new("OK").size(12.0).color(c_green(dark)));
-                    }
-                    OpStatus::Err(m) => {
-                        let display: String = m.chars().take(32).collect();
-                        ui.label(RichText::new(display).size(12.0).color(c_red(dark)));
-                    }
+                OpStatus::Err(m) => {
+                    let display: String = m.chars().take(32).collect();
+                    ui.label(RichText::new(display).size(12.0).color(c_red(dark)));
                 }
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(name).size(13.0).color(c_text(dark))).truncate(),
+                )
+                .on_hover_text(name);
             });
         });
     });

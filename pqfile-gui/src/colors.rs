@@ -99,3 +99,11 @@ pub(crate) fn c_red(d: bool) -> Color32 {
         L_RED
     }
 }
+// Catppuccin Peach (dark) / Yellow (light) — used for warnings.
+pub(crate) fn c_yellow(d: bool) -> Color32 {
+    if d {
+        Color32::from_rgb(250, 179, 135)
+    } else {
+        Color32::from_rgb(223, 142, 29)
+    }
+}

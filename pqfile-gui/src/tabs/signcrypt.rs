@@ -50,6 +50,7 @@ impl PqfileApp {
 
     fn show_signcrypt_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "SIGN + ENCRYPT", dark);
+        let mut pp_submitted = false;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             file_row(
                 ui,
@@ -60,7 +61,7 @@ impl PqfileApp {
                 dark,
             );
             ui.add_space(4.0);
-            passphrase_row(
+            pp_submitted = passphrase_row(
                 ui,
                 "Signing key passphrase:",
                 &mut self.signcrypt_sk_passphrase,
@@ -105,6 +106,9 @@ impl PqfileApp {
                 .min_size(Vec2::new(180.0, 32.0)),
             )
             .clicked()
+            || (ready
+                && (pp_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
         {
             self.do_signcrypt();
         }
@@ -207,6 +211,7 @@ impl PqfileApp {
         });
         ui.add_space(6.0);
 
+        let mut pp_submitted = false;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             file_row(
                 ui,
@@ -217,7 +222,7 @@ impl PqfileApp {
                 dark,
             );
             ui.add_space(4.0);
-            passphrase_row(
+            pp_submitted = passphrase_row(
                 ui,
                 "Decryption key passphrase:",
                 &mut self.signdecrypt_privkey_passphrase,
@@ -262,6 +267,9 @@ impl PqfileApp {
                 .min_size(Vec2::new(180.0, 32.0)),
             )
             .clicked()
+            || (ready
+                && (pp_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
         {
             self.do_signdecrypt();
         }
