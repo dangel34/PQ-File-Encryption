@@ -4,5 +4,5 @@ use std::io::Cursor;
 
 fuzz_target!(|data: &[u8]| {
     let mut cursor = Cursor::new(data);
-    let _ = pqfile::format::PqfHeader::read(&mut cursor);
+    let _ = pqfile::inspect_stream(&mut cursor);
 });
