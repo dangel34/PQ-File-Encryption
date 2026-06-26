@@ -20,6 +20,9 @@ install -D -m 755 %{_builddir}/pqfile %{buildroot}%{_bindir}/pqfile
 
 %changelog
 * Fri Jun 26 2026 dangel34 <dma38091@protonmail.com> - 4.2.4-1
+- Dependency and GitHub Actions updates; fixed release version-consistency check; QR clipboard security fix
+
+* Fri Jun 26 2026 dangel34 <dma38091@protonmail.com> - 4.2.4-1
 - Dependency updates, CI/GitHub Actions updates, security audit fixes
 
 * Mon Jun 08 2026 dangel34 <dma38091@protonmail.com> - 4.2.3-1
