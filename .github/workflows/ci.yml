@@ -72,7 +72,13 @@ jobs:
       - name: Install cargo-vet
         uses: taiki-e/install-action@682e7d9e49c5e653d371fc6adbda67653461378a # v2.82.4
         with:
-          tool: cargo-vet
+          # Pinned: no GitHub release binary exists past v0.10.0, so an
+          # unpinned "latest" silently resolves to that stale binary. Pinning
+          # to the crates.io-latest version here forces a from-source build
+          # via cargo install, keeping CI's TOML formatter in sync with what
+          # `cargo vet fmt` produces locally (the on-disk format changed
+          # between patch releases) instead of fighting itself every run.
+          tool: cargo-vet@0.10.2
 
       - name: Run cargo vet
         run: cargo vet --locked
