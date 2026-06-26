@@ -36,7 +36,7 @@ The script does the following automatically, aborting early if anything fails:
 
 1. **Pre-flight**: verifies you are on `main` with a clean working tree.
 2. **Tests**: runs `cargo test --workspace`; the bump will not proceed if any test fails.
-3. **Version replacements**: updates all version fields across the codebase (`Cargo.toml` package versions, inter-crate dependency version constraints, `APP_VERSION` constant, `Formula/pqfile.rb`, Inno Setup `.iss`, RPM `.spec` version + changelog entry).
+3. **Version replacements**: updates all version fields across the codebase (`Cargo.toml` package versions, inter-crate dependency version constraints, Inno Setup `.iss`, RPM `.spec` version + changelog entry). `pqfile-gui`'s `APP_VERSION` reads `env!("CARGO_PKG_VERSION")` and needs no manual update.
 4. **Lock file**: regenerates `Cargo.lock` via `cargo build --workspace`.
 5. **Commit, tag, push**: creates a `chore: bump version to X.Y.Z` commit, tags it `vX.Y.Z`, and pushes both to `origin`.
 

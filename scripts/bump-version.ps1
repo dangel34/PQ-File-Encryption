@@ -81,10 +81,8 @@ Replace-InFile "$root\pqfile-desktop\Cargo.toml" `
     '(pqfile-gui\s*=\s*\{[^}]*version\s*=\s*)"[\d.]+"' `
     ('${1}"' + $Version + '"')
 
-# pqfile-gui/src/lib.rs - APP_VERSION constant
-Replace-InFile "$root\pqfile-gui\src\lib.rs" `
-    'pub\(crate\) const APP_VERSION: &str = "\d+\.\d+\.\d+";' `
-    "pub(crate) const APP_VERSION: &str = `"$Version`";"
+# pqfile-gui/src/lib.rs's APP_VERSION is env!("CARGO_PKG_VERSION") - no manual edit needed,
+# it tracks pqfile-gui/Cargo.toml automatically.
 
 # Inno Setup
 Replace-InFile "$root\pqfile-desktop\packaging\setup.iss" `
@@ -135,7 +133,6 @@ $filesToStage = @(
     "pqfile-desktop/Cargo.toml",
     "Cargo.toml",
     "Cargo.lock",
-    "pqfile-gui/src/lib.rs",
     "pqfile-desktop/packaging/setup.iss",
     "pqfile-cli/packaging/pqfile.spec",
     "docs/BUILDING.md",

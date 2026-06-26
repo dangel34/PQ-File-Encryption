@@ -4,6 +4,23 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [4.2.4] - 2026-06-26
+
+### Fixes
+
+- **Release workflow version-consistency check**: the check for `pqfile-gui`'s `APP_VERSION` grepped for a literal string that no longer exists (`APP_VERSION` now reads `env!("CARGO_PKG_VERSION")`), so every tag push since that refactor failed the `check-versions` job before any artifacts were built. Removed the now-redundant check from `release.yml` and `scripts/bump-version.ps1`.
+- **WASM build**: `decrypt.rs` referenced `PathBuf` in a `#[cfg(target_arch = "wasm32")]` branch, but the import was gated to `#[cfg(not(target_arch = "wasm32"))]`, which would have failed the `pqfile-gui` WASM build.
+- **QR code modal**: removed automatic clipboard copy when opening a QR code. Viewing a Shamir secret-share's QR silently placed the raw key-share plaintext on the shared OS clipboard with no auto-clear, undermining the air-gapped-transfer purpose of the feature. Copying is now only via the explicit "Copy" button.
+- `eframe`/`egui` 0.34 → 0.35 compile fixes: `Panel`/`CentralPanel::show_inside` renamed to `show`; `eframe::Storage` gained a required `remove_string` method.
+
+### Dependencies
+
+- `eframe` / `egui` 0.34 → 0.35
+- Routine patch-level `cargo update` across the workspace and `fuzz/`
+- GitHub Actions: `actions/cache` v5.0.5 → v6.0.0, `taiki-e/install-action` v2.82.2 → v2.82.4, `dtolnay/rust-toolchain`'s `stable` pin refreshed to the current branch head
+
+---
+
 ## [4.2.3] - 2026-06-08
 
 ### New features

@@ -32,7 +32,6 @@ jobs:
           check "pqfile-cli/Cargo.toml"               "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-cli/Cargo.toml)"
           check "pqfile-gui/Cargo.toml"               "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-gui/Cargo.toml)"
           check "pqfile-desktop/Cargo.toml"           "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-desktop/Cargo.toml)"
-          check "pqfile-gui/src/lib.rs"               "$(grep -oP '(?<=APP_VERSION: &str = ")[^"]+' pqfile-gui/src/lib.rs)"
           check "pqfile-desktop/packaging/setup.iss"  "$(grep -oP '#define AppVersion\s+"\K[^"]+' pqfile-desktop/packaging/setup.iss)"
           check "pqfile-cli/packaging/pqfile.spec"    "$(grep -oP '^Version:\s+\K\S+' pqfile-cli/packaging/pqfile.spec)"
 
@@ -68,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
@@ -86,7 +85,7 @@ jobs:
             libssl-dev
 
       - name: Cache Cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: |
             ~/.cargo/registry
@@ -144,7 +143,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
@@ -157,7 +156,7 @@ jobs:
         run: sudo apt-get install -y binaryen brotli
 
       - name: Cache Cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: |
             ~/.cargo/registry
@@ -221,12 +220,12 @@ jobs:
         #   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
         #   artifacts/checksums.txt
 
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: stable
 
       - name: Install cargo-cyclonedx
-        uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
+        uses: taiki-e/install-action@682e7d9e49c5e653d371fc6adbda67653461378a # v2.82.4
         with:
           tool: cargo-cyclonedx
 

@@ -15,7 +15,6 @@ use crate::widgets::{
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::{decrypt, keygen, rekey};
 use std::io::Cursor;
-#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};

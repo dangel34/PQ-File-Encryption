@@ -120,7 +120,7 @@ cargo build --release -p pqfile-desktop
 # 2. Open Inno Setup and compile, or run from command line:
 iscc pqfile-desktop\packaging\setup.iss
 
-# Output: pqfile-desktop\packaging\output\pqfile-setup-4.3.0.exe
+# Output: pqfile-desktop\packaging\output\pqfile-setup-4.2.4.exe
 ```
 
 Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed.

@@ -29,6 +29,7 @@ pub(crate) struct WatchHandle {
 pub(crate) struct QrModal {
     pub(crate) title: String,
     pub(crate) texture: egui::TextureHandle,
+    pub(crate) data: String,
 }
 
 pub struct PqfileApp {
@@ -526,7 +527,7 @@ impl eframe::App for PqfileApp {
                     .fill(chrome)
                     .inner_margin(Margin::symmetric(14, 0)),
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     if let Some(ref tex) = self.app_icon {
                         let pad = 4.0_f32;
@@ -571,7 +572,7 @@ impl eframe::App for PqfileApp {
                     .fill(chrome)
                     .inner_margin(Margin::symmetric(14, 0)),
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(format!("v{APP_VERSION}"))
@@ -631,7 +632,7 @@ impl eframe::App for PqfileApp {
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(bg))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 // Tab strip
                 egui::Frame::NONE
                     .fill(chrome)
@@ -1801,7 +1802,11 @@ impl PqfileApp {
         let pixels: Vec<u8> = qr_img.into_raw();
         let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &pixels);
         let texture = ctx.load_texture("qr_code", color_image, egui::TextureOptions::NEAREST);
-        self.qr_modal = Some(QrModal { title, texture });
+        self.qr_modal = Some(QrModal {
+            title,
+            texture,
+            data: data.to_owned(),
+        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1840,21 +1845,41 @@ impl PqfileApp {
                     .paint_at(ui, img_rect);
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("Scan to load this key on another device.")
-                        .size(12.0)
-                        .color(c_subtext(dark)),
+                    RichText::new(
+                        "Scan to load this key on another device, \
+                         or copy it to paste directly.",
+                    )
+                    .size(12.0)
+                    .color(c_subtext(dark)),
                 );
                 ui.add_space(8.0);
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Close").size(13.0).color(c_text(dark)))
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("⎘  Copy").size(13.0).color(c_text(dark)),
+                            )
                             .fill(c_surface0(dark))
                             .min_size(Vec2::new(80.0, 28.0)),
-                    )
-                    .clicked()
-                {
-                    keep_open = false;
-                }
+                        )
+                        .on_hover_text("Copy to clipboard again")
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(modal.data.clone());
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Close").size(13.0).color(c_text(dark)),
+                            )
+                            .fill(c_surface0(dark))
+                            .min_size(Vec2::new(80.0, 28.0)),
+                        )
+                        .clicked()
+                    {
+                        keep_open = false;
+                    }
+                });
                 ui.add_space(4.0);
             });
         });
