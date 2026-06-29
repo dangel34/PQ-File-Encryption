@@ -13,7 +13,7 @@ categories = ["cryptography", "filesystem"]
 
 [dependencies]
 ml-kem = { version = "0.3", features = ["getrandom", "zeroize"] }
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 getrandom = { workspace = true }
 zeroize = { version = "1", features = ["derive"] }
 pem = "3"
