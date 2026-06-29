@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782489387688,
+  "lastUpdate": 1782762154614,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -1019,6 +1019,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 44699,
             "range": "± 599",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "53411dfe52a5eada99a7a823837df4d9cbe2b005",
+          "message": "feat: enhance security and usability in file handling\n\n- Implemented bounded reads in decryption and encryption paths to prevent unbounded memory allocation.\n- Introduced a new `write_private_file` helper to ensure private key and Shamir share files are created with 0600 permissions on Unix.\n- Updated Shamir share handling to zeroize sensitive data and improved passphrase handling in the GUI.\n- Enhanced the CLI with atomic output file creation and interactive mode for user prompts.\n- Fixed various issues related to file permissions and memory safety across multiple modules.",
+          "timestamp": "2026-06-29T15:39:12-04:00",
+          "tree_id": "6085566efcbdd7c168629b8f8863182c087e8b12",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/53411dfe52a5eada99a7a823837df4d9cbe2b005"
+        },
+        "date": 1782762153656,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 63122,
+            "range": "± 483",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1001640,
+            "range": "± 5557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 112754805,
+            "range": "± 1047936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 101169,
+            "range": "± 164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1002997,
+            "range": "± 50461",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 98161905,
+            "range": "± 327920",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 64573,
+            "range": "± 292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 974087,
+            "range": "± 4856",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 101364423,
+            "range": "± 347249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 104004,
+            "range": "± 1103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1015206,
+            "range": "± 33172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 100694380,
+            "range": "± 234487",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 52329,
+            "range": "± 269",
             "unit": "ns/iter"
           }
         ]
