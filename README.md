@@ -2,7 +2,7 @@
   <img src="pqfile-gui/icon.png" alt="pqfile logo" width="112" height="112">
 </p>
 
-<h1 align="center">pqfile — Post-Quantum File Encryption</h1>
+<h1 align="center">pqfile: Post-Quantum File Encryption</h1>
 
 <p align="center">
   <a href="https://github.com/dangel34/PQ-File-Encryption/actions/workflows/ci.yml"><img src="https://github.com/dangel34/PQ-File-Encryption/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
