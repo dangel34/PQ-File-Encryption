@@ -99,12 +99,18 @@ fn gf_div(a: u8, b: u8) -> u8 {
 
 // ── Shamir core ───────────────────────────────────────────────────────────────
 
+/// A share's `(x, y_bytes)` pair; `y_bytes` is genuine secret material.
+type RawShare = (u8, Zeroizing<Vec<u8>>);
+
 /// Splits `secret` into `total` shares requiring `threshold` to reconstruct.
-/// Returns (x, y_bytes) pairs; x values are 1..=total.
-fn split_raw(secret: &[u8], threshold: u8, total: u8) -> Result<Vec<(u8, Vec<u8>)>, PqfileError> {
+/// Returns (x, y_bytes) pairs; x values are 1..=total. Each share's y-bytes are
+/// genuine secret material (any `threshold` of them reconstruct the input), so
+/// they are wrapped in `Zeroizing` rather than returned as plain `Vec<u8>`.
+fn split_raw(secret: &[u8], threshold: u8, total: u8) -> Result<Vec<RawShare>, PqfileError> {
     let degree = (threshold - 1) as usize;
-    let mut shares: Vec<(u8, Vec<u8>)> =
-        (1..=total).map(|x| (x, vec![0u8; secret.len()])).collect();
+    let mut shares: Vec<RawShare> = (1..=total)
+        .map(|x| (x, Zeroizing::new(vec![0u8; secret.len()])))
+        .collect();
 
     // Polynomial coefficients are secret material: wrap in Zeroizing so they are
     // overwritten before the allocation is released.
@@ -362,7 +368,6 @@ fn encode_share_pem(
     Ok(pem::encode(&Pem::new(tag, body)))
 }
 
-#[derive(Debug)]
 struct DecodedShare {
     kem_variant: u16,
     threshold: u8,
@@ -371,6 +376,21 @@ struct DecodedShare {
     x: u8,
     pubkey_fp: [u8; 16],
     y: Zeroizing<Vec<u8>>,
+}
+
+// `Zeroizing<T>`'s `Debug` impl forwards to `T`'s, so deriving `Debug` here
+// would print the raw share bytes in `y`. Redact it explicitly instead.
+impl std::fmt::Debug for DecodedShare {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecodedShare")
+            .field("kem_variant", &self.kem_variant)
+            .field("threshold", &self.threshold)
+            .field("total", &self.total)
+            .field("x", &self.x)
+            .field("pubkey_fp", &self.pubkey_fp)
+            .field("y", &"<redacted>")
+            .finish()
+    }
 }
 
 fn seed_len_for_variant(kem_variant: u16) -> Option<usize> {
@@ -467,7 +487,7 @@ pub fn split_key(
     let raw_shares = split_raw(&seed, threshold, total)?;
     let share_pems: Result<Vec<_>, _> = raw_shares
         .iter()
-        .map(|(x, y)| encode_share_pem(variant, threshold, total, *x, &fp16, y))
+        .map(|(x, y)| encode_share_pem(variant, threshold, total, *x, &fp16, y.as_slice()))
         .collect();
 
     Ok(SplitResult {
@@ -539,7 +559,7 @@ pub fn write_shares(
         if !force && path.exists() {
             return Err(PqfileError::OutputExists(path));
         }
-        std::fs::write(&path, pem_str.as_bytes())?;
+        crate::fsutil::write_private_file(&path, pem_str.as_bytes())?;
         paths.push(path);
     }
     Ok(paths)
@@ -562,7 +582,7 @@ mod tests {
     use super::*;
     use crate::keygen::keygen_bytes;
 
-    fn as_slices(shares: &[(u8, Vec<u8>)]) -> Vec<(u8, &[u8])> {
+    fn as_slices(shares: &[RawShare]) -> Vec<(u8, &[u8])> {
         shares.iter().map(|(x, y)| (*x, y.as_slice())).collect()
     }
 

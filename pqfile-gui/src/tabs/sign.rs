@@ -141,16 +141,17 @@ impl PqfileApp {
         let passphrase = if self.sign_sk_passphrase.is_empty() {
             None
         } else {
-            Some((*self.sign_sk_passphrase).clone())
+            Some(zeroize::Zeroizing::new((*self.sign_sk_passphrase).clone()))
         };
 
-        let sig_bytes = match sign::sign_bytes(&sk_pem, &data, passphrase.as_deref()) {
-            Ok(b) => b,
-            Err(e) => {
-                self.sign_status = OpStatus::Err(e.to_string());
-                return;
-            }
-        };
+        let sig_bytes =
+            match sign::sign_bytes(&sk_pem, &data, passphrase.as_deref().map(String::as_str)) {
+                Ok(b) => b,
+                Err(e) => {
+                    self.sign_status = OpStatus::Err(e.to_string());
+                    return;
+                }
+            };
 
         let sig_pem = sign::encode_sig_pem(&sig_bytes);
         let sig_filename = format!("{}.sig", self.sign_input_file.name);

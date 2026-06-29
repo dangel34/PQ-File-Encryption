@@ -111,7 +111,7 @@ pub fn repassphrase_file(
 ) -> Result<(), PqfileError> {
     let pem_str = std::fs::read_to_string(path)?;
     let result = repassphrase(&pem_str, old_passphrase, new_passphrase, from_legacy)?;
-    std::fs::write(path, result.privkey_pem.as_bytes())?;
+    crate::fsutil::write_private_file(path, result.privkey_pem.as_bytes())?;
     Ok(())
 }
 

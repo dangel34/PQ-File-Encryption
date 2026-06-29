@@ -35,10 +35,10 @@ impl PqfileApp {
         self.decrypt_status = OpStatus::None;
         self.decrypt_batch_summary = None;
 
-        let passphrase: Option<String> = if self.decrypt_passphrase.is_empty() {
+        let passphrase: Option<zeroize::Zeroizing<String>> = if self.decrypt_passphrase.is_empty() {
             None
         } else {
-            Some((*self.decrypt_passphrase).clone())
+            Some(zeroize::Zeroizing::new((*self.decrypt_passphrase).clone()))
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -72,7 +72,7 @@ impl PqfileApp {
             let ctx = ctx.clone();
             std::thread::spawn(move || {
                 for (i, name, data, path) in files {
-                    let pp = passphrase.as_deref();
+                    let pp = passphrase.as_deref().map(String::as_str);
                     // Reset per-file byte progress.
                     {
                         let mut g = job.lock().unwrap();
@@ -135,7 +135,7 @@ impl PqfileApp {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = ctx;
-            let pp = passphrase.as_deref();
+            let pp = passphrase.as_deref().map(String::as_str);
             for entry in &mut self.decrypt_files {
                 let result: Result<Vec<u8>, _> = {
                     let mut cursor = Cursor::new(&entry.data);
@@ -639,7 +639,9 @@ impl PqfileApp {
         let passphrase = if self.rekey_privkey_passphrase.is_empty() {
             None
         } else {
-            Some((*self.rekey_privkey_passphrase).clone())
+            Some(zeroize::Zeroizing::new(
+                (*self.rekey_privkey_passphrase).clone(),
+            ))
         };
 
         let mut output = Vec::new();
@@ -649,7 +651,7 @@ impl PqfileApp {
             &new_pub,
             &mut reader,
             &mut output,
-            passphrase.as_deref(),
+            passphrase.as_deref().map(String::as_str),
         ) {
             Ok(()) => {
                 let out_name = self.rekey_input.name.clone();

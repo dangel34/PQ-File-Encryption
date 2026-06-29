@@ -633,8 +633,12 @@ fn decrypt_v2_payload(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
+    // Cap the read to MAX_ORIGINAL_SIZE + AEAD tag to prevent DoS via a stream
+    // whose true length is unbounded (mirrors the same cap in decapsulate_stream_init).
     let mut payload = Vec::new();
-    reader.read_to_end(&mut payload)?;
+    reader
+        .take(crate::format::MAX_ORIGINAL_SIZE + 16)
+        .read_to_end(&mut payload)?;
     if payload.len() < 16 {
         return Err(PqfileError::DecryptionFailure);
     }

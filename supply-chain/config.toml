@@ -10,6 +10,12 @@ url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
+[policy.pqfile]
+audit-as-crates-io = true
+
+[policy.pqfile-cli]
+audit-as-crates-io = true
+
 [[exemptions.ab_glyph]]
 version = "0.2.32"
 criteria = "safe-to-deploy"

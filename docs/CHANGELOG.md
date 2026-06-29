@@ -4,6 +4,26 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [Unreleased]
+
+### Security
+
+- **Bounded reads in v2 and `async`-feature decrypt/encrypt paths** (`decrypt.rs`, `async_io.rs`): `decrypt_v2_payload` and the `async` feature's `encrypt_stream_async`/`decrypt_stream_async` called `read_to_end` with no cap, so a stream with an unbounded tail could force unbounded memory allocation before any size check ran. All three now cap the read with `.take(MAX_ORIGINAL_SIZE + ...)`, matching the existing bound already used in `decapsulate_stream_init`.
+- **Private key and Shamir share files written 0600 on Unix** (new `fsutil.rs`; `keygen.rs`, `sign.rs`, `shamir.rs`, `repassphrase.rs`, `pqfile-cli/src/main.rs`): these files were previously created with the process umask (typically world-readable). A new `write_private_file` helper writes the file and then restricts it to owner read/write only.
+- **Shamir `split_raw` shares zeroized** (`shamir.rs`): the random polynomial coefficients were already wrapped in `Zeroizing` (v4.1.1), but the output shares themselves — genuine secret material, since any `threshold` of them reconstruct the key — were returned as plain `Vec<u8>`. They are now `Zeroizing<Vec<u8>>`.
+- **GUI passphrase clones zeroized** (`pqfile-gui/src/tabs/*.rs`): 11 call sites cloned a passphrase out of its `Zeroizing<String>` field into a bare `String` before passing it to a library call. Each clone is now re-wrapped in `Zeroizing`.
+- **Hardware credential store uses byte-native secret storage** (`hardware/credential_store.rs`): the seed was hex-encoded and stored via the credential store's string `set_password`/`get_password` API, adding unnecessary non-zeroized copies along the way. It now uses the byte-native `set_secret`/`get_secret` API directly. `load_seed` transparently detects and decodes seeds stored by older pqfile versions in the legacy hex format, so existing hardware keys keep working after upgrading.
+- **v9 recipient shuffle retry loop bounded** (`encrypt.rs`): `encrypt_stream_multi_anon_padded`'s Fisher-Yates shuffle used an unbounded rejection-sampling loop; the sibling v8 function (`encrypt_stream_multi_anon`) already bounds this at 1000 retries per position to guard against a malfunctioning entropy source. Both now share the same bound.
+- **`cargo vet` policy gap fixed** (`supply-chain/config.toml`): added the missing `policy.*.audit-as-crates-io` entries for `pqfile` and `pqfile-cli`, which are published to crates.io under the same versions as the workspace's local path dependencies. `cargo vet check` was failing on this ever since, unnoticed because `cargo-vet` is not a required CI status check.
+
+### Improvements
+
+- **`AsyncPqfWriter` drop guard** (`async_io.rs`): added the same debug-mode drop panic that `PqfWriter` already has, so dropping an `AsyncPqfWriter` without calling `finish()`/`shutdown()` is caught during development instead of silently discarding the buffered plaintext.
+- **CLI atomic output uses `O_EXCL`** (`main.rs`): `AtomicOutput::new` created its temp file with `File::create` (truncate-if-exists); it now uses `create_new`, refusing to follow a pre-existing file or symlink at the temp path.
+- **`DecodedShare` Debug redaction** (`shamir.rs`): `Zeroizing<Vec<u8>>`'s `Debug` impl forwards to the inner type's, so the derived `Debug` on `DecodedShare` would have printed raw share bytes if ever logged. It now has a hand-written `Debug` impl that redacts the share field.
+
+---
+
 ## [4.2.4] - 2026-06-26
 
 ### Fixes

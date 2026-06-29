@@ -92,6 +92,7 @@ pub mod format;
 /// Key generation: ML-KEM (512/768/1024), hybrid X25519+ML-KEM-768.
 pub mod keygen;
 
+pub(crate) mod fsutil;
 pub(crate) mod passphrase;
 pub(crate) mod progress;
 

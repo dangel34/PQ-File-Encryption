@@ -183,14 +183,16 @@ impl PqfileApp {
         let passphrase = if self.shamir_split_passphrase.is_empty() {
             None
         } else {
-            Some((*self.shamir_split_passphrase).clone())
+            Some(zeroize::Zeroizing::new(
+                (*self.shamir_split_passphrase).clone(),
+            ))
         };
 
         match shamir::split_key(
             &priv_pem,
             self.shamir_split_threshold,
             self.shamir_split_shares,
-            passphrase.as_deref(),
+            passphrase.as_deref().map(String::as_str),
         ) {
             Ok(result) => {
                 let mut saved = 0usize;

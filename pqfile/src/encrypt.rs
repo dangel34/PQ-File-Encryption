@@ -480,17 +480,24 @@ pub fn encrypt_stream_multi_anon_padded(
         });
     }
 
-    // Fisher-Yates shuffle so dummy positions are unpredictable.
+    // Fisher-Yates shuffle so dummy positions are unpredictable. Rejection sampling
+    // is bounded the same way as in encrypt_stream_multi_anon above: a hard limit of
+    // 1000 retries per position guards against a malfunctioning entropy source
+    // causing an infinite loop instead of returning an error.
+    const MAX_REJECTION_RETRIES: u32 = 1000;
     for i in (1..recipients.len()).rev() {
         let range = (i + 1) as u64;
         let threshold = (1u64 << 32) - ((1u64 << 32) % range);
-        let j = loop {
-            let mut r = [0u8; 4];
-            getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
-            let v = u32::from_le_bytes(r) as u64;
-            if v < threshold {
-                break (v % range) as usize;
+        let j = 'sample: {
+            for _ in 0..MAX_REJECTION_RETRIES {
+                let mut r = [0u8; 4];
+                getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
+                let v = u32::from_le_bytes(r) as u64;
+                if v < threshold {
+                    break 'sample (v % range) as usize;
+                }
             }
+            return Err(PqfileError::EncryptionFailure);
         };
         recipients.swap(i, j);
     }

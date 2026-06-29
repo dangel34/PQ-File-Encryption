@@ -594,7 +594,7 @@ fn run_keygen(
                 &pub_path,
                 format!("# Expires: {date}\n{pub_pem}").as_bytes(),
             )?;
-            std::fs::write(
+            write_private_file(
                 &priv_path,
                 format!("# Expires: {date}\n{priv_pem}").as_bytes(),
             )?;
@@ -1042,6 +1042,20 @@ fn open_reader(input: &str) -> Result<Box<dyn io::Read>, PqfileError> {
     }
 }
 
+/// Writes `contents` to `path`, then (on Unix) restricts the file to owner
+/// read/write only. Private key material written directly by the CLI (not
+/// through the `pqfile` library's own key-writing functions) should go
+/// through this helper rather than `std::fs::write` directly.
+fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+    std::fs::write(path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 /// Buffered writer that writes to a temp file in the same directory as `target`
 /// and atomically renames it to `target` when `commit()` is called.
 /// If dropped without committing, the temp file is deleted.
@@ -1062,7 +1076,12 @@ impl AtomicOutput {
         let mut tmp_name = target.file_name().unwrap_or_default().to_owned();
         tmp_name.push(format!(".{pid}-{ts}.tmp"));
         let tmp = target.with_file_name(tmp_name);
-        let f = std::fs::File::create(&tmp)?;
+        // create_new (O_EXCL) rather than create(): refuse to follow a pre-existing
+        // file or symlink at the temp path instead of silently truncating it.
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
         Ok(Self {
             writer: BufWriter::new(f),
             tmp,
@@ -1849,7 +1868,7 @@ fn run_reconstruct_key(
             return Err(PqfileError::OutputExists(p.clone()));
         }
     }
-    std::fs::write(&priv_path, priv_pem.as_bytes())?;
+    write_private_file(&priv_path, priv_pem.as_bytes())?;
     std::fs::write(&pub_path, pub_pem.as_bytes())?;
 
     let fp = keygen::fingerprint_pem(&pub_pem);
@@ -2122,7 +2141,7 @@ fn run_import_key(
     let fp = keygen::fingerprint_pem(&pub_pem);
     std::fs::create_dir_all(&out)?;
     std::fs::write(&pub_path, pub_pem.as_bytes())?;
-    std::fs::write(&priv_path, priv_pem.as_bytes())?;
+    write_private_file(&priv_path, priv_pem.as_bytes())?;
 
     if json {
         println!(

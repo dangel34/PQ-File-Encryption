@@ -22,6 +22,20 @@ user-id = 1281
 user-login = "nical"
 user-name = "Nicolas Silva"
 
+[[publisher.pqfile]]
+version = "4.2.4"
+when = "2026-06-26"
+user-id = 419333
+user-login = "dangel34"
+user-name = "Derek"
+
+[[publisher.pqfile-cli]]
+version = "4.2.4"
+when = "2026-06-26"
+user-id = 419333
+user-login = "dangel34"
+user-name = "Derek"
+
 [[publisher.unicode-segmentation]]
 version = "1.13.3"
 when = "2026-06-01"

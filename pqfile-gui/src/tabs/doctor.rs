@@ -104,9 +104,9 @@ impl PqfileApp {
                 let pp = if self.doctor_passphrase.is_empty() {
                     None
                 } else {
-                    Some((*self.doctor_passphrase).clone())
+                    Some(zeroize::Zeroizing::new((*self.doctor_passphrase).clone()))
                 };
-                match run_inspect(&data, path.as_deref(), pp.as_deref()) {
+                match run_inspect(&data, path.as_deref(), pp.as_deref().map(String::as_str)) {
                     Ok(rows) => {
                         self.doctor_result = rows;
                         self.doctor_status = OpStatus::None;
