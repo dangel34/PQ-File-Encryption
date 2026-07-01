@@ -121,6 +121,11 @@ Replace-InFile "$root\docs\CHANGELOG.md" `
     "\[$Version\] - unreleased[^\n]*" `
     "[$Version] - $today"
 
+# sonar-project.properties - keep the reported project version in sync
+Replace-InFile "$root\sonar-project.properties" `
+    '(?m)^sonar\.projectVersion=[\d.]+' `
+    "sonar.projectVersion=$Version"
+
 # Regenerate Cargo.lock - cargo check is much faster than cargo build
 # (no codegen or linking, but still resolves and writes the lockfile)
 Write-Host "Regenerating Cargo.lock..."
@@ -142,7 +147,8 @@ $filesToStage = @(
     "pqfile-desktop/packaging/setup.iss",
     "pqfile-cli/packaging/pqfile.spec",
     "docs/BUILDING.md",
-    "docs/CHANGELOG.md"
+    "docs/CHANGELOG.md",
+    "sonar-project.properties"
 )
 foreach ($f in $filesToStage) {
     git add "$root\$f"
