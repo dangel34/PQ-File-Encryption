@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782924441966,
+  "lastUpdate": 1782944740795,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -1223,6 +1223,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 52160,
             "range": "± 250",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "1ca45c40a1a3822a8ca400c5851f13036af719c6",
+          "message": "feat: add SonarQube configuration for project analysis\n\n- Introduced `sonar-project.properties` to define project metadata and coverage exclusions for SonarQube analysis.\n- Created a GitHub Actions workflow (`sonarqube.yml`) to automate SonarQube scans on push and pull request events.\n- Updated `bump-version.ps1` to synchronize the project version in `sonar-project.properties` with the main versioning scheme.",
+          "timestamp": "2026-07-01T18:22:19-04:00",
+          "tree_id": "f67efb1de30ef00e8a7dc21f9ee23045e6d36694",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/1ca45c40a1a3822a8ca400c5851f13036af719c6"
+        },
+        "date": 1782944740323,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 60585,
+            "range": "± 228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1030228,
+            "range": "± 15654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 132339589,
+            "range": "± 1063208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 100400,
+            "range": "± 552",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1003387,
+            "range": "± 10343",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 108921490,
+            "range": "± 1080076",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 62977,
+            "range": "± 274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1023758,
+            "range": "± 14219",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 113455121,
+            "range": "± 548254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 104389,
+            "range": "± 224",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1052730,
+            "range": "± 9463",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 111921120,
+            "range": "± 399669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 52758,
+            "range": "± 174",
             "unit": "ns/iter"
           }
         ]
