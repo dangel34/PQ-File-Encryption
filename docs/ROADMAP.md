@@ -45,6 +45,11 @@ All features from v2.x through v4.2.2 are complete and shipped. A full history i
 - Chunk boundary property tests at 16 KiB, 64 KiB, 256 KiB tier edges (off-by-one coverage)
 - CLI integration tests: truncated ciphertext and bit-flipped ciphertext both correctly rejected
 - `--threads N` global CLI flag caps Rayon worker threads for `--parallel` operations; default 0 uses all cores
+- Security hardening pass: bounded the previously-unbounded reads in v2 and `async`-feature decrypt/encrypt; private key and Shamir share files now written with 0600 permissions on Unix; Shamir `split_raw` shares zeroized; GUI passphrase clones re-wrapped in `Zeroizing` before use; hardware credential store moved to byte-native secret storage with transparent legacy-format migration; v9 recipient shuffle retry loop bounded to match v8; `AsyncPqfWriter` gained a debug-mode drop guard; CLI atomic output uses `O_EXCL`; `cargo vet` `audit-as-crates-io` policy gap fixed
+- **Passphrase-only encryption (v10 format)**: `--passphrase` encrypt/decrypt mode with no ML-KEM step; Argon2id parameters in-header; `KdfLimitExceeded` ceiling; `--max-kdf-mem`/`--max-kdf-time` CLI flags
+- **Compact recipient strings (`pqf1…`)**: `pqfile keygen` prints a Bech32m recipient string; `-r` accepts either PEM path or `pqf1…`; `pqfile fingerprint` subcommand
+- **`#![deny(unsafe_code)]` at crate root** with narrow `#[allow(unsafe_code)]` on the sanctioned mmap call
+- **Archive mtime and permissions restore**: `extract()` restores `mtime_secs` and `mode` from the PQFA manifest per entry
 
 ---
 
@@ -54,6 +59,21 @@ All features from v2.x through v4.2.2 are complete and shipped. A full history i
 
 - **Minimal encrypt-only WASM build**
   Split the `pqfile-gui` WASM output into a full build and a stripped variant that includes only the encrypt path (no Argon2 KDF, no zstd, no Shamir, no signing). The smaller build loads faster for web deployments that only need to encrypt. Publish both from the release workflow.
+
+### Key sharing UX
+
+- **Passphrase on recipient strings**
+  `pqfile fingerprint` and `pqfile keygen` already emit `pqf1…` strings; consider a `--qr` flag that produces a scannable QR code for the recipient string without requiring the Shamir tab.
+
+### CLI UX
+
+- **Interactive mode with no arguments**
+  Running `pqfile` with no subcommand currently prints clap's help text. Add a guided prompt flow instead (pick encrypt/decrypt/keygen, then fill in the missing pieces interactively), matching FerroCrypt's no-args mode. CLI-layer only; no library changes.
+
+### Archives
+
+- **Recursive directory packing with symlink/special-file rejection**
+  `pqfile archive` only accepts an explicit file list today (`run_archive` in `pqfile-cli/src/main.rs`); passing a directory fails because `archive::create` opens every entry as a plain file. Add `--recursive` to walk a directory tree (reusing the walk already written for `encrypt --recursive`'s `collect_files`), rejecting symlinks, device files, FIFOs, and sockets during the walk, and rejecting duplicate archive paths including case-insensitive collisions.
 
 ---
 
@@ -140,7 +160,7 @@ Expose core `pqfile::encrypt` and `pqfile::decrypt` as a Python wheel (via PyO3)
 
 ### Native OS installer packaging
 
-Automate production of signed OS-native installers from the release workflow: MSI via WiX (Windows), DMG via create-dmg (macOS), and .deb via cargo-deb (Linux). Currently desktop users must build from source or use the WASM web app.
+Automate production of signed OS-native installers from the release workflow: MSI via WiX (Windows), DMG via create-dmg (macOS), .deb/.rpm via cargo-deb/rpmbuild (already documented manually in the README), and AppImage via appimagetool (Linux, requires `squashfs-tools`). Currently desktop users must build from source or use the WASM web app. Code-signing and macOS notarization are the long pole here, which is why this stays unscheduled rather than in v4.x Planned.
 
 ---
 

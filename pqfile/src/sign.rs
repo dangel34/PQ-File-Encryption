@@ -91,7 +91,7 @@ pub fn sign_keygen(
 
     let result = sign_keygen_bytes(passphrase)?;
     fs::write(&vk_path, &result.vk_pem)?;
-    fs::write(&sk_path, &result.sk_pem)?;
+    crate::fsutil::write_private_file(&sk_path, result.sk_pem.as_bytes())?;
 
     Ok(result)
 }
@@ -121,7 +121,7 @@ pub fn sign_keygen_hardware(
 
     let result = sign_keygen_hardware_bytes(label)?;
     fs::write(&vk_path, &result.vk_pem)?;
-    fs::write(&sk_path, &result.sk_pem)?;
+    crate::fsutil::write_private_file(&sk_path, result.sk_pem.as_bytes())?;
     Ok(result)
 }
 

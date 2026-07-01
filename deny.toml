@@ -17,7 +17,11 @@ version = 2
 yanked = "deny"
 # Ignored advisories are unmaintained-crate notices from dev-only or indirect
 # transitive dependencies that cannot be updated from this repo.
-ignore = []
+ignore = [
+    # ttf-parser is unmaintained (RUSTSEC-2026-0192); it is a transitive dependency
+    # of eframe/egui and cannot be updated from this repo.
+    "RUSTSEC-2026-0192",
+]
 
 # ---------------------------------------------------------------------------
 # License policy

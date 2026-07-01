@@ -21,7 +21,7 @@
 /// ```
 use std::io::{self, Write};
 
-use chacha20poly1305::{aead::AeadInPlace, ChaCha20Poly1305, Key, KeyInit, Nonce};
+use chacha20poly1305::{aead::AeadInOut, ChaCha20Poly1305, Key, KeyInit};
 use zeroize::Zeroizing;
 
 use crate::encrypt::{encapsulate, parse_encapsulation_key};
@@ -88,8 +88,10 @@ impl<W: Write> PqfWriter<W> {
         header.write(&mut sink)?;
 
         let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
-        let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN].try_into().unwrap();
-        let key = Key::from_slice(ss_bytes.as_ref());
+        let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+            .try_into()
+            .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
+        let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
         let cipher = ChaCha20Poly1305::new(key);
 
         Ok(Self {
@@ -122,10 +124,10 @@ impl<W: Write> PqfWriter<W> {
             crate::format::make_chunk_aad(self.counter, is_last, &self.key_commitment);
         let tag = self
             .cipher
-            .encrypt_in_place_detached(
-                Nonce::from_slice(&cn),
+            .encrypt_inout_detached(
+                cn.as_slice().try_into().expect("12-byte nonce"),
                 &aad_buf[..aad_len],
-                self.buf.as_mut_slice(),
+                self.buf.as_mut_slice().into(),
             )
             .map_err(|_| io::Error::other("encryption failure"))?;
         let inner = self.inner.as_mut().unwrap();

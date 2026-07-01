@@ -1,6 +1,6 @@
 # pqfile Format Specification
 
-This document is the authoritative byte-level description of all `.pqf` file format versions (v2 through v7). All multi-byte integers are little-endian unless stated otherwise.
+This document is the authoritative byte-level description of all `.pqf` file format versions (v2 through v10). All multi-byte integers are little-endian unless stated otherwise.
 
 ---
 
@@ -15,6 +15,9 @@ This document is the authoritative byte-level description of all `.pqf` file for
 | VERSION_V5 | `0x05` | Chunked STREAM, configurable chunk size |
 | VERSION_V6 | `0x06` | Compress-then-encrypt |
 | VERSION_V7 | `0x07` | Anonymous multi-recipient |
+| VERSION_V8 | `0x08` | Variant-blind anonymous multi-recipient |
+| VERSION_V9 | `0x09` | Padded anonymous multi-recipient |
+| VERSION_V10 | `0x0A` | Passphrase-only (no KEM) |
 | CHUNK_SIZE | 65536 | Default chunk size (bytes) |
 | BASE_NONCE_LEN | 8 | Random base-nonce bytes stored in header |
 | NONCE_LEN | 12 | Full per-chunk nonce length (base + counter) |
@@ -54,9 +57,9 @@ WRAPPED_KEY = AES-256-GCM(
 
 ---
 
-## 4. STREAM Chunk Construction (v3, v4, v5, v6, v7)
+## 4. STREAM Chunk Construction (v3–v10)
 
-The payload is split into chunks of at most `chunk_size` bytes (default 65536). Each chunk is authenticated independently. The last chunk is explicitly flagged to prevent truncation attacks.
+The payload is split into chunks of at most `chunk_size` bytes (default 65536). Each chunk is authenticated independently. The last chunk is explicitly flagged to prevent truncation attacks. Applies to v3 through v10 (v10 always uses the default 65536 chunk size).
 
 ### 4.1 Per-chunk nonce
 
@@ -231,7 +234,7 @@ Entry size per variant:
 
 v4 always uses `chunk_size = 65536`. Configurable chunk size is not supported in v4.
 
-Decoders MUST reject files with COUNT greater than 1000. The limit protects against crafted files that trigger large allocations before any I/O validation.
+Decoders MUST reject files with COUNT greater than 256. The limit protects against crafted files that trigger large allocations before any I/O validation.
 
 ---
 
@@ -263,7 +266,7 @@ Len   Field
 
 Decryptors read all 1568 bytes per slot, truncate to `ct_len[KEM_VARIANT]`, and try decapsulation. Entries that do not match the decryptor's key variant are skipped without error.
 
-Decoders MUST reject files with COUNT greater than 1000 (same limit as v4).
+Decoders MUST reject files with COUNT greater than 256 (same limit as v4).
 
 ---
 
@@ -314,7 +317,65 @@ For each slot in the header:
 5. Otherwise: continue to the next slot.
 6. If no slot matches: return `NoMatchingRecipient`.
 
-Decoders MUST reject files with COUNT greater than 1000 (same limit as v4/v7).
+Decoders MUST reject files with COUNT greater than 256 (same limit as v4/v7).
+
+---
+
+### 5.8 v9 - Padded anonymous multi-recipient
+
+Supersedes v8 when `--pad-recipients` is used. The slot count is rounded up to the next power of two (1, 2, 4, 8, ...) by appending random dummy entries. An observer learns only the padded slot count, not the true recipient count.
+
+```
+Offset  Len         Field
+0       4           MAGIC
+4       1           VERSION (0x09)
+5       2           COUNT (u16 LE; padded to next power of two ≥ actual recipient count)
+7       var         RECIPIENT SLOTS (COUNT x 1616 bytes each)
+7+N*E   12          BASE_NONCE
+19+N*E  8           ORIGINAL_SIZE
+27+N*E  var         STREAM chunks (chunk_size = 65536)
+```
+
+Each slot is identical to v8 (1568-byte padded CT + 48-byte wrapped key). Dummy slots contain random bytes in both fields.
+
+**Decryption algorithm:** identical to v8; try every slot, skip AEAD failures silently, return `NoMatchingRecipient` only if all slots fail.
+
+Decoders MUST reject files with COUNT greater than 256 (same limit as v4/v7/v8).
+
+---
+
+### 5.9 v10 - Passphrase-only
+
+No KEM step. The 32-byte session key is derived from a passphrase via Argon2id. Argon2 parameters are stored in the header because the sender chose them; the recipient cannot assume fixed parameters.
+
+```
+Offset  Len   Field
+0       4     MAGIC
+4       1     VERSION (0x0A)
+5       16    SALT (random, for Argon2id)
+21      4     M_KIB (u32 LE; Argon2id memory cost in kibibytes)
+25      4     T_COST (u32 LE; Argon2id time cost / iterations)
+29      4     P_COST (u32 LE; Argon2id parallelism lanes)
+33      12    BASE_NONCE (first 8 bytes random; bytes 8-11 are 0x00)
+45      8     ORIGINAL_SIZE (u64 LE; informational)
+53      var   STREAM chunks (chunk_size = 65536; identical to v3)
+```
+
+KDF:
+```
+session_key = Argon2id(
+    password = passphrase bytes (UTF-8),
+    salt     = SALT (16 bytes),
+    m_cost   = M_KIB,
+    t_cost   = T_COST,
+    p_cost   = P_COST,
+    output   = 32 bytes
+)
+```
+
+The 32-byte output is used directly as the ChaCha20-Poly1305 session key for the STREAM payload.
+
+**Security note:** M_KIB, T_COST, and P_COST are attacker-controlled. Decryptors MUST enforce a ceiling before calling the KDF. Exceeding the ceiling returns `PqfileError::KdfLimitExceeded`. The default ceiling matches the encrypt-side default: 64 MiB / t=3.
 
 ---
 
@@ -390,7 +451,9 @@ Offset  Len   Field
 | Hybrid X25519+ML-KEM-768 | 96 bytes | 140 bytes |
 | ML-DSA-65 signing | 32 bytes | 76 bytes |
 
-KDF: **Argon2id** (RFC 9106), parameters m=65536 (64 MiB), t=3, p=1, output=32 bytes.
+KDF: **Argon2id** (RFC 9106), parameters m=65536 (64 MiB), t=3, p=4, output=32 bytes.
+
+**Legacy parameters (pre-4.0):** Keys created before v4.0 used p=1. These are detected at load time and rejected with `PqfileError::LegacyKeyFormat`; run `pqfile repassphrase --from-legacy` to migrate.
 
 Encryption: **AES-256-GCM** with the 32-byte KDF output as key and a 12-byte random nonce. AAD is empty.
 
@@ -459,14 +522,40 @@ Decoders MUST reject archives with COUNT greater than 65536.
 
 ---
 
-## 10. Compliance Notes
+## 10. Bech32 Recipient Strings
 
-- An implementation MUST accept v2 through v7 on read.
+Public keys may be distributed as a compact, human-readable Bech32m string instead of a PEM file. This is purely a key-transport encoding; it has no effect on the `.pqf` wire format.
+
+**Encoding:**
+```
+pqf1<bech32m-data-characters>
+```
+
+The human-readable part (HRP) is `pqf`. The payload encodes:
+
+```
+Offset  Len   Field
+0       2     KEM_VARIANT (u16 little-endian; same values as Section 2)
+2       var   RAW_KEY_BYTES (encapsulation key; length per variant in Section 2)
+```
+
+**Checksum:** Bech32m polynomial (BIP350) with `CODE_LENGTH = usize::MAX`. The standard Bech32m limit of 1023 characters is lifted because ML-KEM-768 encapsulation keys encode to approximately 1900 characters.
+
+**Produced by:** `pqfile keygen` (printed after the fingerprint line); `pqfile fingerprint <path-or-string>`.
+
+**Consumed by:** `-r` flag on `pqfile encrypt` (accepts either a PEM file path or a `pqf1…` string); `pqfile fingerprint`.
+
+---
+
+## 11. Compliance Notes
+
+- An implementation MUST accept v2 through v10 on read.
 - An implementation MAY refuse to write any deprecated version.
 - A decryptor for v4/v7 MUST iterate all recipient entries before returning `NoMatchingRecipient`; it MUST NOT short-circuit on a failed decapsulation for the correct variant.
-- A v7 decryptor MUST treat entry order as meaningless and MUST NOT assume any mapping between position and identity.
+- A v7/v8/v9 decryptor MUST treat entry order as meaningless and MUST NOT assume any mapping between position and identity.
 - `ORIGINAL_SIZE` is informational. Decryptors MUST NOT pre-allocate `ORIGINAL_SIZE` bytes without bounds checking, as the field is attacker-controlled.
 - Chunk counter overflow at `u32::MAX` is treated as an encryption error; files larger than approximately 256 TiB at the default 64 KiB chunk size are unsupported.
 - Decoders MUST reject v5/v6 files where `CHUNK_SIZE` is 0 or greater than 268435456 (256 MiB). A crafted value of `u32::MAX` would cause a multi-gigabyte allocation before any data is read.
-- Decoders MUST reject v4/v7 files where `COUNT` is greater than 1000. A crafted maximum value of 65535 would cause a large header allocation before any AEAD verification.
+- Decoders MUST reject v4/v7/v8/v9 files where `COUNT` is greater than 256. A crafted maximum value of 65535 would cause a large header allocation before any AEAD verification.
+- Decoders MUST enforce a ceiling on v10 `M_KIB`, `T_COST`, and `P_COST` before calling the KDF. These fields are attacker-controlled; exceeding the ceiling MUST return an error rather than attempting derivation.
 - `rekey` MUST NOT accept v2 files as input. v2 uses a single whole-file AEAD whose payload format is incompatible with the v4 STREAM chunk layout that rekey produces. A v2 file rekeyed to v4 format cannot be decrypted.

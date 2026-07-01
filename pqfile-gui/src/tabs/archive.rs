@@ -305,13 +305,19 @@ impl PqfileApp {
         let passphrase = if self.extract_privkey_passphrase.is_empty() {
             None
         } else {
-            Some((*self.extract_privkey_passphrase).clone())
+            Some(zeroize::Zeroizing::new(
+                (*self.extract_privkey_passphrase).clone(),
+            ))
         };
 
         use std::io::Cursor;
 
         if self.extract_list_only {
-            match archive::list(&priv_pem, Cursor::new(&data), passphrase.as_deref()) {
+            match archive::list(
+                &priv_pem,
+                Cursor::new(&data),
+                passphrase.as_deref().map(String::as_str),
+            ) {
                 Ok(entries) => {
                     let mut listing = String::new();
                     for e in &entries {
@@ -349,7 +355,7 @@ impl PqfileApp {
                 &priv_pem,
                 Cursor::new(&data),
                 &out_dir,
-                passphrase.as_deref(),
+                passphrase.as_deref().map(String::as_str),
             ) {
                 Ok(paths) => {
                     self.extract_status = OpStatus::Ok(format!(
@@ -367,7 +373,11 @@ impl PqfileApp {
         #[cfg(target_arch = "wasm32")]
         {
             use crate::widgets::download_bytes;
-            match archive::extract_to_memory(&priv_pem, Cursor::new(&data), passphrase.as_deref()) {
+            match archive::extract_to_memory(
+                &priv_pem,
+                Cursor::new(&data),
+                passphrase.as_deref().map(String::as_str),
+            ) {
                 Ok(files) => {
                     for (path, bytes) in &files {
                         let filename = std::path::Path::new(path)

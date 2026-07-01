@@ -106,6 +106,26 @@ pub enum PqfileError {
     #[error("key share reconstruction failed: fingerprint mismatch, ensure you have the correct shares for this key")]
     ShareVerificationFailed,
 
+    /// Argon2id parameters in a v10 passphrase-only file exceed the configured ceiling.
+    ///
+    /// A crafted file could specify extreme Argon2 parameters to force excessive memory or
+    /// CPU use on decryption. The ceiling is checked before the KDF runs. Raise
+    /// `--max-kdf-mem` / `--max-kdf-time` flags to accept a higher cost, or reject the file.
+    #[error(
+        "KDF parameters in file (m={m_kib} KiB, t={t}) exceed ceiling \
+         (max_m={max_m_kib} KiB, max_t={max_t})"
+    )]
+    KdfLimitExceeded {
+        /// Memory cost (KiB) requested by the file.
+        m_kib: u32,
+        /// Time cost (iterations) requested by the file.
+        t: u32,
+        /// Maximum memory cost (KiB) the caller will allow.
+        max_m_kib: u32,
+        /// Maximum time cost the caller will allow.
+        max_t: u32,
+    },
+
     /// The `.pqf` stream ended without a terminal chunk (is_last flag never seen).
     /// The file was most likely truncated during download or transfer; re-downloading
     /// is the appropriate recovery action. Distinguished from [`DecryptionFailure`]

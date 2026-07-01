@@ -35,6 +35,11 @@ pub const VERSION_V8: u8 = 0x08;
 /// and are silently skipped by the decryptor.
 /// Format: MAGIC | 0x09 | COUNT(2) | [PADDED_CT(1568) | WRAPPED_KEY(48)]... | NONCE(12) | ORIGINAL_SIZE(8)
 pub const VERSION_V9: u8 = 0x09;
+/// Passphrase-only format: no key pair required. The session key is derived directly
+/// from a passphrase via Argon2id; the KDF parameters are stored in the header.
+/// Format: MAGIC | 0x0A | SALT(16) | ARGON2_PARAMS(12: m_kib/t/p as u32 LE each) | NONCE(12) | ORIGINAL_SIZE(8)
+/// Payload is chunked identically to v3 (standard AEAD AAD and key commitment).
+pub const VERSION_V10: u8 = 0x0A;
 
 /// Maximum KEM ciphertext length across all supported variants (ML-KEM-1024).
 /// All v7 recipient entries use this fixed CT slot size.
@@ -483,6 +488,58 @@ impl PqfHeaderV8 {
         let (nonce, original_size) = read_nonce_and_size(r)?;
         Ok(PqfHeaderV8 {
             recipients,
+            nonce,
+            original_size,
+        })
+    }
+}
+
+// ── Passphrase-only header (v10) ─────────────────────────────────────────
+
+/// Parsed header for v10 (passphrase-only) format.
+pub(crate) struct PqfHeaderV10 {
+    /// Random 16-byte Argon2id salt.
+    pub salt: [u8; 16],
+    /// Argon2id memory cost in KiB (stored in header by the sender).
+    pub m_kib: u32,
+    /// Argon2id time cost (iterations).
+    pub t_cost: u32,
+    /// Argon2id parallelism (lanes).
+    pub p_cost: u32,
+    /// Per-file base nonce (12 bytes; only first 8 are random, last 4 are the chunk counter).
+    pub nonce: [u8; NONCE_LEN],
+    /// Uncompressed plaintext size in bytes.
+    pub original_size: u64,
+}
+
+impl PqfHeaderV10 {
+    /// Serializes the v10 header to `w`.
+    pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
+        w.write_all(MAGIC)?;
+        w.write_all(&[VERSION_V10])?;
+        w.write_all(&self.salt)?;
+        w.write_all(&self.m_kib.to_le_bytes())?;
+        w.write_all(&self.t_cost.to_le_bytes())?;
+        w.write_all(&self.p_cost.to_le_bytes())?;
+        write_nonce_and_size(w, &self.nonce, self.original_size)
+    }
+
+    /// Reads the v10 header body (everything after MAGIC + VERSION byte).
+    pub fn read_body<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
+        let mut salt = [0u8; 16];
+        r.read_exact(&mut salt)?;
+        let mut m = [0u8; 4];
+        r.read_exact(&mut m)?;
+        let mut t = [0u8; 4];
+        r.read_exact(&mut t)?;
+        let mut p = [0u8; 4];
+        r.read_exact(&mut p)?;
+        let (nonce, original_size) = read_nonce_and_size(r)?;
+        Ok(PqfHeaderV10 {
+            salt,
+            m_kib: u32::from_le_bytes(m),
+            t_cost: u32::from_le_bytes(t),
+            p_cost: u32::from_le_bytes(p),
             nonce,
             original_size,
         })

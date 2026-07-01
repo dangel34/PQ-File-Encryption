@@ -5,8 +5,8 @@
 use std::io::{self, Read};
 
 use chacha20poly1305::{
-    aead::{AeadInPlace, Tag},
-    ChaCha20Poly1305, Nonce,
+    aead::{AeadInOut, Tag},
+    ChaCha20Poly1305,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -178,13 +178,14 @@ impl<R: Read> Read for PqfReader<R> {
                     ));
                 }
                 let ct_len = *current_ct_len - 16;
-                let tag =
-                    Tag::<ChaCha20Poly1305>::clone_from_slice(&current_ct[ct_len..*current_ct_len]);
+                let tag: Tag<ChaCha20Poly1305> = current_ct[ct_len..*current_ct_len]
+                    .try_into()
+                    .expect("16-byte tag");
                 if cipher
-                    .decrypt_in_place_detached(
-                        Nonce::from_slice(&cn),
+                    .decrypt_inout_detached(
+                        cn.as_slice().try_into().expect("12-byte nonce"),
                         &aad_buf[..aad_len],
-                        &mut current_ct[..ct_len],
+                        (&mut current_ct[..ct_len]).into(),
                         &tag,
                     )
                     .is_err()

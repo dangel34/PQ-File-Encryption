@@ -111,7 +111,7 @@ pub fn repassphrase_file(
 ) -> Result<(), PqfileError> {
     let pem_str = std::fs::read_to_string(path)?;
     let result = repassphrase(&pem_str, old_passphrase, new_passphrase, from_legacy)?;
-    std::fs::write(path, result.privkey_pem.as_bytes())?;
+    crate::fsutil::write_private_file(path, result.privkey_pem.as_bytes())?;
     Ok(())
 }
 
@@ -282,12 +282,12 @@ mod tests {
             argon2
                 .hash_password_into("pass".as_bytes(), &salt, &mut key_bytes)
                 .unwrap();
-            let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+            let key = Key::<Aes256Gcm>::try_from(key_bytes.as_slice()).expect("32-byte key");
+            let cipher = Aes256Gcm::new(&key);
             let mut nonce_bytes = [0u8; 12];
             getrandom::fill(&mut nonce_bytes).unwrap();
-            let ct = cipher
-                .encrypt(Nonce::from_slice(&nonce_bytes), seed.as_slice())
-                .unwrap();
+            let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("12-byte nonce");
+            let ct = cipher.encrypt(&nonce, seed.as_slice()).unwrap();
             let mut b = Vec::new();
             b.extend_from_slice(&salt);
             b.extend_from_slice(&nonce_bytes);

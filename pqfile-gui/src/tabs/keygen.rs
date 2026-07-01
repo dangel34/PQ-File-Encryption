@@ -350,8 +350,8 @@ impl PqfileApp {
         }
         let out_dir = std::path::Path::new(&self.settings.output_dir).to_owned();
         let force = !self.settings.confirm_overwrite;
-        let passphrase: Option<String> = if self.keygen_use_passphrase {
-            let pp = (*self.keygen_passphrase).clone();
+        let passphrase: Option<zeroize::Zeroizing<String>> = if self.keygen_use_passphrase {
+            let pp = zeroize::Zeroizing::new((*self.keygen_passphrase).clone());
             if pp.is_empty() {
                 self.keygen_status =
                     OpStatus::Err("Enter a passphrase or uncheck the option.".to_owned());
@@ -379,7 +379,10 @@ impl PqfileApp {
             }
         };
 
-        match pqfile::keygen::import_key_from_ssh(&ssh_pem, passphrase.as_deref()) {
+        match pqfile::keygen::import_key_from_ssh(
+            &ssh_pem,
+            passphrase.as_deref().map(String::as_str),
+        ) {
             Ok((pub_pem, priv_pem)) => {
                 // Apply expiry comment if set.
                 let expiry = self
@@ -547,10 +550,10 @@ impl PqfileApp {
     }
 
     pub(crate) fn handle_sign_keygen(&mut self) {
-        let passphrase: Option<String> = if self.keygen_use_passphrase {
-            let pp = (*self.keygen_passphrase).clone();
-            let pc = (*self.keygen_passphrase_confirm).clone();
-            if pp != pc {
+        let passphrase: Option<zeroize::Zeroizing<String>> = if self.keygen_use_passphrase {
+            let pp = zeroize::Zeroizing::new((*self.keygen_passphrase).clone());
+            let pc = zeroize::Zeroizing::new((*self.keygen_passphrase_confirm).clone());
+            if *pp != *pc {
                 self.keygen_status = OpStatus::Err("Passphrases do not match.".to_owned());
                 return;
             }
@@ -591,7 +594,11 @@ impl PqfileApp {
                     Err(e) => OpStatus::Err(e.to_string()),
                 };
             } else {
-                self.keygen_status = match sign::sign_keygen(dir, force, passphrase.as_deref()) {
+                self.keygen_status = match sign::sign_keygen(
+                    dir,
+                    force,
+                    passphrase.as_deref().map(String::as_str),
+                ) {
                     Ok(r) => {
                         self.keygen_passphrase.clear();
                         self.keygen_passphrase_confirm.clear();
@@ -609,7 +616,7 @@ impl PqfileApp {
         #[cfg(target_arch = "wasm32")]
         {
             use crate::widgets::download_bytes;
-            match sign::sign_keygen_bytes(passphrase.as_deref()) {
+            match sign::sign_keygen_bytes(passphrase.as_deref().map(String::as_str)) {
                 Ok(r) => {
                     download_bytes("sign_pubkey.pem", r.vk_pem.as_bytes());
                     download_bytes("sign_privkey.pem", r.sk_pem.as_bytes());
