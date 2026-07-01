@@ -473,7 +473,9 @@ impl PqfileApp {
         let passphrase = if self.clipboard_passphrase.is_empty() {
             None
         } else {
-            Some((*self.clipboard_passphrase).clone())
+            Some(zeroize::Zeroizing::new(
+                (*self.clipboard_passphrase).clone(),
+            ))
         };
 
         // Decode PEM wrapper to get raw .pqf bytes.
@@ -490,7 +492,7 @@ impl PqfileApp {
             &priv_pem,
             &mut Cursor::new(&cipher_bytes),
             &mut out,
-            passphrase.as_deref(),
+            passphrase.as_deref().map(String::as_str),
         ) {
             Ok(()) => {
                 match String::from_utf8(out) {

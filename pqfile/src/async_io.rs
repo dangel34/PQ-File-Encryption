@@ -77,9 +77,13 @@ where
 
     // Buffer the full plaintext then delegate to the sync encrypt path.
     // This keeps the cryptographic core as a single well-tested code path while
-    // providing a non-blocking interface for I/O.
+    // providing a non-blocking interface for I/O. The read itself is capped so a
+    // reader that produces more bytes than MAX_ORIGINAL_SIZE (e.g. a misbehaving
+    // or malicious peer in a proxy/server use case) can never force an unbounded
+    // allocation before the size check below runs.
     let mut plaintext = Vec::with_capacity(original_size.min(64 * 1024 * 1024) as usize);
     reader
+        .take(crate::format::MAX_ORIGINAL_SIZE + 1)
         .read_to_end(&mut plaintext)
         .await
         .map_err(PqfileError::Io)?;
@@ -131,15 +135,19 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    // Buffer the full ciphertext then delegate to sync decrypt.
-    let mut ct_reader = tokio::io::BufReader::new(reader);
+    // Buffer the full ciphertext then delegate to sync decrypt. The read is capped
+    // so a peer that keeps sending bytes (this API is documented for use in async
+    // servers/proxies, i.e. potentially attacker-controlled input) cannot force an
+    // unbounded allocation before the size check below runs.
+    const MAX_CT_LEN: u64 = crate::format::MAX_ORIGINAL_SIZE + (1 << 20);
+    let mut ct_reader = tokio::io::BufReader::new(reader).take(MAX_CT_LEN + 1);
     let mut ct = Vec::new();
     ct_reader
         .read_to_end(&mut ct)
         .await
         .map_err(PqfileError::Io)?;
     // Ciphertext is always slightly larger than plaintext; reject absurdly large inputs.
-    if ct.len() as u64 > crate::format::MAX_ORIGINAL_SIZE + (1 << 20) {
+    if ct.len() as u64 > MAX_CT_LEN {
         return Err(PqfileError::DecryptionFailure);
     }
 
@@ -273,6 +281,25 @@ impl<W: AsyncWrite + Unpin> AsyncPqfWriter<W> {
         sink.write_all(&ct).await.map_err(PqfileError::Io)?;
         sink.flush().await.map_err(PqfileError::Io)?;
         Ok(sink)
+    }
+}
+
+impl<W: AsyncWrite + Unpin> Drop for AsyncPqfWriter<W> {
+    fn drop(&mut self) {
+        // Unlike the sync `PqfWriter`, there is no best-effort seal we can perform
+        // here: writing the ciphertext requires polling the async sink, which Drop
+        // cannot do. In debug builds, panic loudly so callers notice they forgot
+        // finish()/shutdown() instead of silently losing the buffered plaintext.
+        #[allow(unused)]
+        let unfinished = !matches!(self.state, AsyncWriterState::Done);
+        #[cfg(debug_assertions)]
+        if unfinished && !std::thread::panicking() {
+            panic!(
+                "AsyncPqfWriter dropped without calling finish() or shutdown(); \
+                 the buffered plaintext was discarded and no ciphertext was written. \
+                 Call finish() to handle errors explicitly."
+            );
+        }
     }
 }
 
@@ -566,6 +593,10 @@ mod tests {
             AsyncPqfWriter::new(&mut ct, &pub_pem, plaintext.len() as u64, CHUNK_SIZE).unwrap();
         w.write_all(plaintext).await.unwrap();
         w.shutdown().await.unwrap();
+        // Drop explicitly: AsyncPqfWriter's Drop impl means the borrow checker
+        // extends w's borrow of `ct` to its lexical drop point, which would
+        // otherwise conflict with the immutable borrow below.
+        drop(w);
 
         let mut out = Vec::new();
         decrypt_stream_async(&priv_pem, ct.as_slice(), &mut out, None)

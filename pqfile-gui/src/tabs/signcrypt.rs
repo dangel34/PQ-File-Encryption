@@ -144,7 +144,9 @@ impl PqfileApp {
         let passphrase = if self.signcrypt_sk_passphrase.is_empty() {
             None
         } else {
-            Some((*self.signcrypt_sk_passphrase).clone())
+            Some(zeroize::Zeroizing::new(
+                (*self.signcrypt_sk_passphrase).clone(),
+            ))
         };
 
         let mut output = Vec::new();
@@ -154,7 +156,7 @@ impl PqfileApp {
             &data,
             &mut output,
             pqfile::format::CHUNK_SIZE,
-            passphrase.as_deref(),
+            passphrase.as_deref().map(String::as_str),
         ) {
             Ok(()) => {
                 let out_name = format!("{}.pqf", self.signcrypt_input.name);
@@ -325,7 +327,9 @@ impl PqfileApp {
         let passphrase = if self.signdecrypt_privkey_passphrase.is_empty() {
             None
         } else {
-            Some((*self.signdecrypt_privkey_passphrase).clone())
+            Some(zeroize::Zeroizing::new(
+                (*self.signdecrypt_privkey_passphrase).clone(),
+            ))
         };
 
         let mut plaintext = Vec::new();
@@ -335,7 +339,7 @@ impl PqfileApp {
             &vk_pem,
             reader,
             &mut plaintext,
-            passphrase.as_deref(),
+            passphrase.as_deref().map(String::as_str),
         ) {
             Ok(()) => {
                 let out_name = self

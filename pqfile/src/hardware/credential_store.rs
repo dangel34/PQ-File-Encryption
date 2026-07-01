@@ -6,8 +6,14 @@
 /// - **macOS**: macOS Keychain (user-session-bound)
 /// - **Linux**: Linux kernel keyutils (session keyring; no daemon required)
 ///
-/// The seed is hex-encoded before storage (credential stores expect string values).
-/// The credential is keyed by `"pqfile:{label}"` under the service name `"pqfile"`.
+/// The seed is stored as raw bytes via the credential store's byte-native secret
+/// API. The credential is keyed by `"pqfile:{label}"` under the service name
+/// `"pqfile"`.
+///
+/// Versions of pqfile prior to the byte-native storage switch hex-encoded the
+/// seed and stored it via the string-based password API; [`CredentialStoreBackend::load_seed`]
+/// detects and transparently decodes that legacy format so existing hardware
+/// keys keep working after an upgrade.
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -66,8 +72,7 @@ impl CredentialStoreBackend {
         ensure_store()?;
         let account = account_name(&key_ref.label);
         let entry = Entry::new("pqfile", &account).map_err(hw_err)?;
-        let encoded = Zeroizing::new(hex_encode(seed));
-        entry.set_password(encoded.as_str()).map_err(hw_err)
+        entry.set_secret(seed).map_err(hw_err)
     }
 
     /// Loads the seed from the credential store.
@@ -77,7 +82,7 @@ impl CredentialStoreBackend {
         ensure_store()?;
         let account = account_name(&key_ref.label);
         let entry = Entry::new("pqfile", &account).map_err(hw_err)?;
-        let encoded = Zeroizing::new(entry.get_password().map_err(|e| match e {
+        let secret = Zeroizing::new(entry.get_secret().map_err(|e| match e {
             KeyringError::NoEntry => PqfileError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!(
@@ -88,14 +93,7 @@ impl CredentialStoreBackend {
             )),
             other => hw_err(other),
         })?);
-        hex_decode(encoded.as_str()).map_err(|_| {
-            // Truncate the label to 32 chars in the error message so that
-            // sensitive identifiers embedded in label names do not appear in logs.
-            let label_preview = key_ref.label.chars().take(32).collect::<String>();
-            PqfileError::InvalidPem(format!(
-                "hardware key '{label_preview}' credential store entry is corrupted"
-            ))
-        })
+        Ok(decode_legacy_hex_seed(&secret).unwrap_or(secret))
     }
 
     /// Removes the credential from the store.
@@ -118,27 +116,34 @@ fn hw_err(e: impl std::fmt::Display) -> PqfileError {
     )))
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    // Write nibbles directly into a pre-sized buffer to avoid per-byte heap
-    // allocations that would not be zeroized on drop.
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0xF) as usize] as char);
+/// Detects and decodes a seed stored by pqfile versions that hex-encoded the
+/// seed before saving it via the string-based password API. Genuine raw seed
+/// bytes are effectively never an all-lowercase-hex-digit byte string of even
+/// length (each byte would need to fall in a 22/256 subrange), so this check
+/// cannot misclassify a real seed as legacy-encoded.
+fn decode_legacy_hex_seed(secret: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    if secret.is_empty() || !secret.len().is_multiple_of(2) {
+        return None;
     }
-    out
-}
-
-fn hex_decode(s: &str) -> Result<Zeroizing<Vec<u8>>, ()> {
-    if !s.len().is_multiple_of(2) {
-        return Err(());
+    if !secret
+        .iter()
+        .all(|&b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
     }
-    let bytes: Result<Vec<u8>, _> = (0..s.len())
+    let decoded: Vec<u8> = (0..secret.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ()))
+        .map(|i| {
+            let hi = (secret[i] as char)
+                .to_digit(16)
+                .expect("validated hex digit above");
+            let lo = (secret[i + 1] as char)
+                .to_digit(16)
+                .expect("validated hex digit above");
+            ((hi << 4) | lo) as u8
+        })
         .collect();
-    bytes.map(Zeroizing::new)
+    Some(Zeroizing::new(decoded))
 }
 
 #[cfg(test)]
@@ -146,21 +151,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hex_encode_decode_roundtrip() {
-        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF];
-        let encoded = hex_encode(&data);
-        assert_eq!(encoded, "deadbeef00ff");
-        let decoded = hex_decode(&encoded).unwrap();
+    fn decode_legacy_hex_seed_roundtrip() {
+        let data = vec![0xDEu8, 0xAD, 0xBE, 0xEF, 0x00, 0xFF];
+        let hex: String = data.iter().map(|b| format!("{b:02x}")).collect();
+        let decoded = decode_legacy_hex_seed(hex.as_bytes()).unwrap();
         assert_eq!(*decoded, data);
     }
 
     #[test]
-    fn hex_decode_rejects_odd_length() {
-        assert!(hex_decode("abc").is_err());
+    fn decode_legacy_hex_seed_rejects_odd_length() {
+        assert!(decode_legacy_hex_seed(b"abc").is_none());
     }
 
     #[test]
-    fn hex_decode_rejects_non_hex() {
-        assert!(hex_decode("zz").is_err());
+    fn decode_legacy_hex_seed_rejects_non_hex() {
+        assert!(decode_legacy_hex_seed(b"zzzz").is_none());
+    }
+
+    #[test]
+    fn decode_legacy_hex_seed_rejects_raw_seed_bytes() {
+        // A real seed is full-range random bytes; this is not a valid hex string
+        // (0x9A is outside the ASCII hex-digit range), so it must pass through
+        // unchanged rather than being misinterpreted as legacy hex.
+        let seed = [0x9Au8; 64];
+        assert!(decode_legacy_hex_seed(&seed).is_none());
     }
 }
