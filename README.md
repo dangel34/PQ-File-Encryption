@@ -147,7 +147,15 @@ pqfile keygen --out ./keys --passphrase
 pqfile keygen --out ./keys --hardware --label my-pqfile-key
 ```
 
-Key files written: `pubkey.pem` (share freely) and `privkey.pem` (keep secret; written with owner-only permissions on Unix). The fingerprint (SHA3-256, first 8 bytes) is printed at generation time. `--hardware` stores the seed in Windows Credential Manager / macOS Keychain / Linux Secret Service instead of writing it to `privkey.pem`, and is mutually exclusive with `--passphrase` and `--expiry`. The same `--hardware --label <LABEL>` flags work on `sign-keygen`.
+Key files written: `pubkey.pem` (share freely) and `privkey.pem` (keep secret; written with owner-only permissions on Unix). The fingerprint (SHA3-256, first 8 bytes) is printed at generation time, along with a compact `pqf1…` Bech32m recipient string that can be passed directly to `-r` without distributing a PEM file. `--hardware` stores the seed in Windows Credential Manager / macOS Keychain / Linux Secret Service instead of writing it to `privkey.pem`, and is mutually exclusive with `--passphrase` and `--expiry`. The same `--hardware --label <LABEL>` flags work on `sign-keygen`.
+
+```bash
+# Print fingerprint and recipient string for an existing key (accepts PEM path or pqf1… string)
+pqfile fingerprint pubkey.pem
+
+# Use a recipient string directly - no PEM file needed
+pqfile encrypt -r pqf1qyxhkc... secret.txt
+```
 
 ### Import an existing key
 
@@ -202,6 +210,9 @@ pqfile encrypt -r pubkey.pem --mmap huge_file.bin
 
 # Read from stdin, write to stdout
 cat secret.txt | pqfile encrypt -r pubkey.pem - > secret.txt.pqf
+
+# Passphrase-only encryption (v10 format, no key pair required)
+pqfile encrypt --passphrase secret.txt
 ```
 
 Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--anonymous-recipients` upgrades to v8 format, dropping the per-slot KEM variant field so key types are hidden. `--pad-recipients` upgrades to v9 format, which additionally pads the slot count to the next power of two with random dummy entries. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3. `--parallel` uses rayon for concurrent chunk processing and requires a single recipient.
@@ -220,9 +231,15 @@ pqfile decrypt -k privkey.pem large_file.bin.pqf --parallel
 
 # Stdin/stdout pipeline
 cat secret.txt.pqf | pqfile decrypt -k privkey.pem - -o -
+
+# Passphrase-only decryption (v10 format)
+pqfile decrypt --passphrase secret.txt.pqf
+
+# Cap Argon2 resource usage when decrypting untrusted v10 files
+pqfile decrypt --passphrase --max-kdf-mem 32 --max-kdf-time 2 secret.txt.pqf
 ```
 
-If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v9 files (all single-recipient variants) and v4/v7/v8/v9 (multi-recipient).
+If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v10 files (all single-recipient variants) and v4/v7/v8/v9 (multi-recipient).
 
 ### Rekey
 
@@ -394,16 +411,16 @@ Errors go to stderr as `{"status":"error","code":N,"message":"..."}`. The numeri
 
 The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egui code and expose nearly everything the CLI does, each tab with built-in "?" help text:
 
-- **🗝 Keys** — a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only)
-- **🔑 Keygen** — generates ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, or ML-DSA-65 signing key pairs, with optional passphrase or hardware-backed (OS credential store) protection, key expiry dates, and OpenSSH ed25519 key import (native only)
-- **🔒 Encrypt** — multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; a folder watcher that auto-encrypts new files (native only); drag-and-drop
-- **🔓 Decrypt** — loads any v2-v9 `.pqf` file, prompting for a passphrase only when the key requires one; includes a **Rekey** sub-tab to re-wrap a file for a new recipient without decrypting the payload
-- **✏ Sign** / **🔏 Signcrypt** — ML-DSA-65 sign and verify, plus combined sign-then-encrypt and decrypt-then-verify
-- **📦 Archive** — pack multiple files into one encrypted `.pqf` container and extract with path-traversal protection
-- **🔀 Shamir** — split a private key into M-of-N shares (with QR code export for air-gapped transfer) and reconstruct from shares
-- **🔍 Inspect** — header metadata for any `.pqf` file, or a key-file health check (passphrase/hardware status, expiry, legacy Argon2 detection, revocation sidecar), without decrypting
-- **📋 Clipboard** — encrypt/decrypt short text snippets without writing to disk, with an optional auto-clear timer
-- **⚙ Settings** — theme, default output directory, confirm-before-overwrite, and clipboard auto-clear preferences
+- **🗝 Keys**: a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only)
+- **🔑 Keygen**: generates ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, or ML-DSA-65 signing key pairs, with optional passphrase or hardware-backed (OS credential store) protection, key expiry dates, and OpenSSH ed25519 key import (native only)
+- **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; a folder watcher that auto-encrypts new files (native only); drag-and-drop
+- **🔓 Decrypt**: loads any v2-v9 `.pqf` file, prompting for a passphrase only when the key requires one; includes a **Rekey** sub-tab to re-wrap a file for a new recipient without decrypting the payload
+- **✏ Sign** / **🔏 Signcrypt**: ML-DSA-65 sign and verify, plus combined sign-then-encrypt and decrypt-then-verify
+- **📦 Archive**: pack multiple files into one encrypted `.pqf` container and extract with path-traversal protection
+- **🔀 Shamir**: split a private key into M-of-N shares (with QR code export for air-gapped transfer) and reconstruct from shares
+- **🔍 Inspect**: header metadata for any `.pqf` file, or a key-file health check (passphrase/hardware status, expiry, legacy Argon2 detection, revocation sidecar), without decrypting
+- **📋 Clipboard**: encrypt/decrypt short text snippets without writing to disk, with an optional auto-clear timer
+- **⚙ Settings**: theme, default output directory, confirm-before-overwrite, and clipboard auto-clear preferences
 
 Hardware-backed keys, the folder watcher, SSH key import, passphrase change, and revocation are native-only (not available in the WASM build, which cannot access the OS credential store or filesystem watch APIs).
 
@@ -411,7 +428,7 @@ Hardware-backed keys, the folder watcher, SSH key import, passphrase change, and
 
 ## The .pqf file format
 
-There are eight format versions (v2 through v9). The version byte at offset 4 selects the layout.
+There are nine format versions (v2 through v10). The version byte at offset 4 selects the layout.
 
 ### v2: single-recipient, whole-file AEAD
 
@@ -546,6 +563,27 @@ Offset   Length    Field
          ...       Chunked STREAM identical to v8
 ```
 
+### v10: passphrase-only
+
+No KEM step. The 32-byte session key is derived from a passphrase via Argon2id. Parameters are stored in the header (unlike private-key wrapping, which uses fixed parameters) because the recipient did not choose them.
+
+```
+Offset   Length    Field
+------   ------    -----
+0        4         Magic: "PQFL"
+4        1         Version: 0x0A
+5        16        Salt (random, for Argon2id)
+21       4         M_KIB (u32 little-endian; Argon2id memory in kibibytes)
+25       4         T_COST (u32 little-endian; Argon2id time cost)
+29       4         P_COST (u32 little-endian; Argon2id parallelism)
+33       12        Base nonce (bytes 8-11 are 0x00)
+45       8         Original plaintext size (u64 little-endian, informational)
+--- Payload -----------------------------------------------------
+53       ...       Chunked STREAM identical to v3, keyed by Argon2id output
+```
+
+**Security note:** M_KIB, T_COST, and P_COST are attacker-controlled fields. Decryptors must cap these before deriving. `decrypt_stream_passphrase` enforces a default ceiling (64 MiB / t=3); `decrypt_stream_passphrase_with_limits` accepts caller-specified ceilings. Exceeding the ceiling returns `PqfileError::KdfLimitExceeded`. The CLI exposes `--max-kdf-mem` and `--max-kdf-time`.
+
 ### KEM variant field
 
 | Value    | Algorithm               | CT bytes | EK bytes |
@@ -631,7 +669,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 |------------------------|---------------------------------------------------------------------------|
 | `Io`                   | File system or I/O failure                                                |
 | `InvalidMagic`         | File does not start with "PQFL"                                           |
-| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x09)                         |
+| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x0A)                         |
 | `UnsupportedKem`       | KEM variant field is not a recognised value                               |
 | `KemVariantMismatch`   | Private key KEM variant does not match the variant in the file header     |
 | `EncryptionFailure`    | AEAD encryption or nonce generation failed                                |
@@ -650,6 +688,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 | `LegacyKeyFormat`      | Key was encrypted with Argon2id p=1 (pre-4.0); run `repassphrase --from-legacy` |
 | `ShareVerificationFailed` | Reconstructed Shamir key fingerprint does not match the share fingerprint |
 | `Truncated`            | Stream ended without a final authenticated chunk; file was truncated      |
+| `KdfLimitExceeded`     | v10 file's Argon2 parameters exceed the configured ceiling (memory or time cost) |
 
 The `#[non_exhaustive]` enum may gain new variants in minor releases; match with a wildcard arm. See [docs/ERROR_CODES.md](docs/ERROR_CODES.md) for the stable numeric code each variant maps to in `--json` output.
 
@@ -661,7 +700,7 @@ The `#[non_exhaustive]` enum may gain new variants in minor releases; match with
 cargo test --workspace --all-features
 ```
 
-422 tests across all crates (280 unit + 98 integration + 32 GUI + 12 doc-tests). Run benchmarks with:
+417 tests across all crates. Run benchmarks with:
 
 ```
 cargo bench -p pqfile
@@ -710,8 +749,8 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 |------------------|---------|-----------------------------------------------------------------|
 | ml-kem           | 0.3     | ML-KEM-512/768/1024 key encapsulation (FIPS 203)               |
 | ml-dsa           | 0.1     | ML-DSA-65 digital signatures (FIPS 204)                        |
-| chacha20poly1305 | 0.10    | ChaCha20-Poly1305 authenticated encryption                     |
-| aes-gcm          | 0.10    | AES-256-GCM (passphrase key wrapping, multi-recipient session key wrapping) |
+| chacha20poly1305 | 0.11    | ChaCha20-Poly1305 authenticated encryption                     |
+| aes-gcm          | 0.11    | AES-256-GCM (passphrase key wrapping, multi-recipient session key wrapping) |
 | x25519-dalek     | 2       | X25519 Diffie-Hellman (hybrid mode)                             |
 | hkdf             | 0.13    | HKDF-SHA256 key derivation (hybrid mode)                        |
 | sha2             | 0.11    | SHA-256 (HKDF input)                                            |
@@ -720,6 +759,7 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 | zeroize          | 1       | Overwrite secret bytes on drop                                  |
 | argon2           | 0.5     | Argon2id KDF for passphrase-protected keys                      |
 | pem              | 3       | PEM encoding/decoding for key files                             |
+| bech32           | 0.12    | Bech32m encoding/decoding for compact recipient strings (`pqf1…`) |
 | rayon            | 1       | Parallel chunk processing (`--parallel`)                        |
 | thiserror        | 2       | Custom error type derivation                                    |
 | zstd             | 0.13    | Compression for v6 format (`--compress`)                        |

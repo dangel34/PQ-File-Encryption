@@ -13,19 +13,20 @@ categories = ["cryptography", "filesystem"]
 
 [dependencies]
 ml-kem = { version = "0.3", features = ["getrandom", "zeroize"] }
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 getrandom = { workspace = true }
 zeroize = { version = "1", features = ["derive"] }
 pem = "3"
 thiserror = "2"
 sha3 = "0.12"
 argon2 = { version = "0.5", features = ["zeroize"] }
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 ml-dsa = { version = "0.1.1", features = ["getrandom", "zeroize"] }
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 hkdf = "0.13"
 sha2 = "0.11"
 rayon = "1"
+bech32 = "0.12"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # getrandom 0.4 needs the wasm_js feature to use globalThis.crypto in a browser/Node.js context.

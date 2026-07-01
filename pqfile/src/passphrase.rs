@@ -1,6 +1,6 @@
 use aes_gcm::{
     aead::{Aead, KeyInit},
-    Aes256Gcm, Key, Nonce,
+    Aes256Gcm,
 };
 use argon2::{Argon2, Params};
 use zeroize::Zeroizing;
@@ -12,9 +12,9 @@ use crate::error::PqfileError;
 // p=4 (four lanes) forces each brute-force attempt to occupy 4× the memory
 // bandwidth compared to p=1, hampering parallel GPU attacks. OWASP 2023
 // recommends p=4 for the same m/t values.
-const ARGON2_M_COST: u32 = 65536; // 64 MiB
-const ARGON2_T_COST: u32 = 3;
-const ARGON2_P_COST: u32 = 4;
+pub(crate) const ARGON2_M_COST: u32 = 65536; // 64 MiB
+pub(crate) const ARGON2_T_COST: u32 = 3;
+pub(crate) const ARGON2_P_COST: u32 = 4;
 
 // Legacy Argon2id p-cost (pqfile < 4.0). Used only to detect and migrate old keys.
 const ARGON2_P_COST_LEGACY: u32 = 1;
@@ -45,11 +45,11 @@ pub fn encrypt_seed(seed: &[u8; SEED_LEN], passphrase: &str) -> Result<Vec<u8>, 
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
 
     let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
 
     let ciphertext = cipher
         .encrypt(nonce, seed.as_slice())
@@ -115,8 +115,8 @@ fn try_decrypt_seed(
     let ciphertext = &body[SALT_LEN + NONCE_LEN..];
 
     let key = derive_key_with_pcost(passphrase, salt, p_cost)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
+    let nonce = nonce_bytes.try_into().expect("12-byte nonce");
 
     let plaintext = Zeroizing::new(
         cipher
@@ -142,11 +142,11 @@ pub fn encrypt_hybrid_seed(
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
 
     let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
 
     let ciphertext = cipher
         .encrypt(nonce, seed.as_slice())
@@ -207,8 +207,8 @@ fn try_decrypt_hybrid_seed(
     let ciphertext = &body[SALT_LEN + NONCE_LEN..];
 
     let key = derive_key_with_pcost(passphrase, salt, p_cost)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
+    let nonce = nonce_bytes.try_into().expect("12-byte nonce");
 
     let plaintext = Zeroizing::new(
         cipher
@@ -243,11 +243,11 @@ pub fn encrypt_signing_seed(
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
 
     let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
 
     let ciphertext = cipher
         .encrypt(nonce, seed.as_slice())
@@ -308,8 +308,8 @@ fn try_decrypt_signing_seed(
     let ciphertext = &body[SALT_LEN + NONCE_LEN..];
 
     let key = derive_key_with_pcost(passphrase, salt, p_cost)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
+    let nonce = nonce_bytes.try_into().expect("12-byte nonce");
 
     let plaintext = Zeroizing::new(
         cipher
@@ -335,8 +335,20 @@ fn derive_key_with_pcost(
     salt: &[u8],
     p_cost: u32,
 ) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
-    let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, p_cost, Some(32))
-        .map_err(|_| PqfileError::EncryptionFailure)?;
+    derive_key_with_params(passphrase, salt, ARGON2_M_COST, ARGON2_T_COST, p_cost)
+}
+
+/// Derives a 32-byte key from `passphrase` using Argon2id with arbitrary parameters.
+/// Used by v10 passphrase-only format where the sender stores their chosen params in the header.
+pub(crate) fn derive_key_with_params(
+    passphrase: &str,
+    salt: &[u8],
+    m_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    let params =
+        Params::new(m_kib, t_cost, p_cost, Some(32)).map_err(|_| PqfileError::EncryptionFailure)?;
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut key = Zeroizing::new([0u8; 32]);
     argon2
@@ -355,11 +367,14 @@ mod tests {
         let mut salt = [0u8; SALT_LEN];
         getrandom::fill(&mut salt).unwrap();
         let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+        let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
         let mut nonce_bytes = [0u8; NONCE_LEN];
         getrandom::fill(&mut nonce_bytes).unwrap();
         let ct = cipher
-            .encrypt(Nonce::from_slice(&nonce_bytes), seed.as_slice())
+            .encrypt(
+                nonce_bytes.as_slice().try_into().expect("12-byte nonce"),
+                seed.as_slice(),
+            )
             .unwrap();
         let mut out = Vec::new();
         out.extend_from_slice(&salt);
@@ -372,11 +387,14 @@ mod tests {
         let mut salt = [0u8; SALT_LEN];
         getrandom::fill(&mut salt).unwrap();
         let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+        let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
         let mut nonce_bytes = [0u8; NONCE_LEN];
         getrandom::fill(&mut nonce_bytes).unwrap();
         let ct = cipher
-            .encrypt(Nonce::from_slice(&nonce_bytes), seed.as_slice())
+            .encrypt(
+                nonce_bytes.as_slice().try_into().expect("12-byte nonce"),
+                seed.as_slice(),
+            )
             .unwrap();
         let mut out = Vec::new();
         out.extend_from_slice(&salt);
@@ -389,11 +407,14 @@ mod tests {
         let mut salt = [0u8; SALT_LEN];
         getrandom::fill(&mut salt).unwrap();
         let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_ref()));
+        let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
         let mut nonce_bytes = [0u8; NONCE_LEN];
         getrandom::fill(&mut nonce_bytes).unwrap();
         let ct = cipher
-            .encrypt(Nonce::from_slice(&nonce_bytes), seed.as_slice())
+            .encrypt(
+                nonce_bytes.as_slice().try_into().expect("12-byte nonce"),
+                seed.as_slice(),
+            )
             .unwrap();
         let mut out = Vec::new();
         out.extend_from_slice(&salt);

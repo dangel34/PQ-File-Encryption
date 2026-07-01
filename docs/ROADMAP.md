@@ -46,6 +46,10 @@ All features from v2.x through v4.2.2 are complete and shipped. A full history i
 - CLI integration tests: truncated ciphertext and bit-flipped ciphertext both correctly rejected
 - `--threads N` global CLI flag caps Rayon worker threads for `--parallel` operations; default 0 uses all cores
 - Security hardening pass: bounded the previously-unbounded reads in v2 and `async`-feature decrypt/encrypt; private key and Shamir share files now written with 0600 permissions on Unix; Shamir `split_raw` shares zeroized; GUI passphrase clones re-wrapped in `Zeroizing` before use; hardware credential store moved to byte-native secret storage with transparent legacy-format migration; v9 recipient shuffle retry loop bounded to match v8; `AsyncPqfWriter` gained a debug-mode drop guard; CLI atomic output uses `O_EXCL`; `cargo vet` `audit-as-crates-io` policy gap fixed
+- **Passphrase-only encryption (v10 format)**: `--passphrase` encrypt/decrypt mode with no ML-KEM step; Argon2id parameters in-header; `KdfLimitExceeded` ceiling; `--max-kdf-mem`/`--max-kdf-time` CLI flags
+- **Compact recipient strings (`pqf1…`)**: `pqfile keygen` prints a Bech32m recipient string; `-r` accepts either PEM path or `pqf1…`; `pqfile fingerprint` subcommand
+- **`#![deny(unsafe_code)]` at crate root** with narrow `#[allow(unsafe_code)]` on the sanctioned mmap call
+- **Archive mtime and permissions restore**: `extract()` restores `mtime_secs` and `mode` from the PQFA manifest per entry
 
 ---
 
@@ -56,36 +60,20 @@ All features from v2.x through v4.2.2 are complete and shipped. A full history i
 - **Minimal encrypt-only WASM build**
   Split the `pqfile-gui` WASM output into a full build and a stripped variant that includes only the encrypt path (no Argon2 KDF, no zstd, no Shamir, no signing). The smaller build loads faster for web deployments that only need to encrypt. Publish both from the release workflow.
 
-### Passphrase-only encryption (new v10 format)
-
-- **Direct passphrase encryption, no key pair required**
-  Add a third top-level mode alongside single- and multi-recipient encryption: `pqfile encrypt --passphrase secret.txt` derives the session key straight from a passphrase via Argon2id, with no ML-KEM step at all. New format version `0x0A`: `MAGIC | 0x0A | SALT(16) | ARGON2_PARAMS(12: m_kib/t/p as u32 LE each) | NONCE(12) | ORIGINAL_SIZE(8)`, payload chunked identically to v3. Argon2 parameters travel in the header (unlike the existing private-key passphrase wrapping in `passphrase.rs`, which uses fixed local parameters) because the recipient didn't choose them — the sender did. Library entry points: `encrypt_stream_passphrase` / `decrypt_stream_passphrase`. CLI: `--passphrase` is mutually exclusive with `-r`/`-k`; GUI gets a "Passphrase" toggle alongside the existing recipient-list UI on the Encrypt tab.
-
-- **KDF resource ceiling on decrypt**
-  Because v10's Argon2 parameters are attacker-influenced (they arrive in a file you received, not one you created), decrypting must cap memory/time before deriving, or a crafted header can force an unbounded allocation. Add `PqfileError::KdfLimitExceeded` and `--max-kdf-mem` / `--max-kdf-time` CLI flags (default ceiling matches the encrypt-side default: 64 MiB / t=3). Only relevant to v10; the existing private-key passphrase path isn't attacker-influenced and is unaffected.
-
 ### Key sharing UX
 
-- **Compact recipient strings**
-  Encode an ML-KEM/hybrid public key as a single Bech32 line (`pqf1...`) instead of a PEM file, similar to FerroCrypt's `fcr1...` strings. Pure presentation layer: decodes to the same KEM-variant + raw-key bytes `keygen.rs` already produces, so there's no wire-format impact. `-r`/`-k` accept either a PEM path or a recipient string; `pqfile keygen` prints both; `pqfile fingerprint` accepts either.
+- **Passphrase on recipient strings**
+  `pqfile fingerprint` and `pqfile keygen` already emit `pqf1…` strings; consider a `--qr` flag that produces a scannable QR code for the recipient string without requiring the Shamir tab.
 
 ### CLI UX
 
 - **Interactive mode with no arguments**
   Running `pqfile` with no subcommand currently prints clap's help text. Add a guided prompt flow instead (pick encrypt/decrypt/keygen, then fill in the missing pieces interactively), matching FerroCrypt's no-args mode. CLI-layer only; no library changes.
 
-### Hardening
-
-- **`#![forbid(unsafe_code)]` at the crate root**
-  Add the attribute to `pqfile/src/lib.rs` with a narrowly scoped `#[allow(unsafe_code)]` on the single `mmap` call in `encrypt.rs` (the `--mmap` path) — currently the only `unsafe` block in the crate. Makes the one sanctioned exception explicit and auditable, and fails the build if anything else introduces unsafe code. No behavior change.
-
 ### Archives
 
 - **Recursive directory packing with symlink/special-file rejection**
   `pqfile archive` only accepts an explicit file list today (`run_archive` in `pqfile-cli/src/main.rs`); passing a directory fails because `archive::create` opens every entry as a plain file. Add `--recursive` to walk a directory tree (reusing the walk already written for `encrypt --recursive`'s `collect_files`), rejecting symlinks, device files, FIFOs, and sockets during the walk, and rejecting duplicate archive paths including case-insensitive collisions.
-
-- **Restore permissions and mtime on extract**
-  `ArchiveEntry::mtime_secs` and `ArchiveEntry::mode` are already captured into the manifest on `create()` (`archive.rs:13-32`) but `extract()` (`archive.rs:90-125`) never applies them back — every extracted file gets fresh `File::create` defaults instead of the original permissions. Apply `set_permissions` and mtime per entry on Unix after writing each file (no-op on Windows, matching the existing `mode: 0` convention). Purely additive — the manifest already carries the fields, so no PQFA format change is needed.
 
 ---
 

@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use std::io::{Read, Write};
 
 use chacha20poly1305::{
-    aead::{Aead, AeadInPlace, KeyInit, Payload},
+    aead::{Aead, AeadInOut, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
 };
 use ml_kem::{
@@ -12,7 +12,7 @@ use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSec
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
-use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
+use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
 
 use crate::format::{
     chunk_nonce, compute_key_commitment, fill_chunk, hybrid_hkdf, make_chunk_aad, PqfHeader,
@@ -61,8 +61,8 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
     let mut output = Vec::with_capacity(HEADER_LEN_768 + plaintext.len() + 16);
     header.write(&mut output)?;
 
-    let key = Key::from_slice(ss_bytes.as_ref());
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
+    let nonce: &Nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
     let cipher = ChaCha20Poly1305::new(key);
     let ciphertext = cipher
         .encrypt(
@@ -126,7 +126,7 @@ pub fn encrypt_stream(
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
-    let key = Key::from_slice(ss_bytes.as_ref());
+    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
     let cipher = ChaCha20Poly1305::new(key);
     encrypt_chunks(
         &cipher,
@@ -343,7 +343,7 @@ pub fn encrypt_stream_multi(
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
-    let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
+    let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
     let cipher = ChaCha20Poly1305::new(key);
     encrypt_chunks(
         &cipher,
@@ -422,7 +422,7 @@ pub fn encrypt_stream_multi_anon(
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
-    let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
+    let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
     let cipher = ChaCha20Poly1305::new(key);
     encrypt_chunks(
         &cipher,
@@ -518,7 +518,7 @@ pub fn encrypt_stream_multi_anon_padded(
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN");
-    let key = chacha20poly1305::Key::from_slice(session_key.as_ref());
+    let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
     let cipher = ChaCha20Poly1305::new(key);
     encrypt_chunks(
         &cipher,
@@ -713,7 +713,7 @@ pub fn encrypt_stream_compressed(
         let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
             .try_into()
             .expect("BASE_NONCE_LEN <= NONCE_LEN");
-        let key = Key::from_slice(ss_bytes.as_ref());
+        let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
         let cipher = ChaCha20Poly1305::new(key);
         // Stream through a zstd encoder instead of buffering the full compressed payload.
         let mut zstd_src =
@@ -741,6 +741,64 @@ pub fn encrypt_stream_compressed(
     }
 }
 
+/// Encrypts a stream of plaintext using a passphrase directly, with no key pair required (v10 format).
+///
+/// The session key is derived from `passphrase` via Argon2id (m=64 MiB, t=3, p=4). The
+/// KDF parameters are stored in the header so the decryptor can reproduce them without
+/// out-of-band configuration. Use [`crate::decrypt::decrypt_stream_passphrase`] to decrypt.
+///
+/// The default KDF parameters match the default ceiling enforced by
+/// [`crate::decrypt::decrypt_stream_passphrase`], so files written by this function are
+/// always decryptable without adjusting `--max-kdf-mem` / `--max-kdf-time`.
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_passphrase(
+    passphrase: &str,
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::format::PqfHeaderV10;
+    use crate::passphrase::{derive_key_with_params, ARGON2_M_COST, ARGON2_P_COST, ARGON2_T_COST};
+
+    let m_kib = ARGON2_M_COST;
+    let t_cost = ARGON2_T_COST;
+    let p_cost = ARGON2_P_COST;
+
+    let mut salt = [0u8; 16];
+    getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let session_key = derive_key_with_params(passphrase, &salt, m_kib, t_cost, p_cost)?;
+
+    let header = PqfHeaderV10 {
+        salt,
+        m_kib,
+        t_cost,
+        p_cost,
+        nonce: nonce_bytes,
+        original_size,
+    };
+    header.write(writer).map_err(PqfileError::Io)?;
+
+    let key_commitment = compute_key_commitment(session_key.as_ref(), &nonce_bytes, original_size);
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN");
+    let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
+    let cipher = ChaCha20Poly1305::new(key);
+    encrypt_chunks(
+        &cipher,
+        base_nonce,
+        CHUNK_SIZE,
+        &key_commitment,
+        reader,
+        writer,
+    )
+}
+
 fn encrypt_chunks(
     cipher: &ChaCha20Poly1305,
     base_nonce: &[u8; BASE_NONCE_LEN],
@@ -759,10 +817,10 @@ fn encrypt_chunks(
         let cn = chunk_nonce(base_nonce, counter);
         let (aad_buf, aad_len) = make_chunk_aad(counter, is_last, key_commitment);
         let tag = cipher
-            .encrypt_in_place_detached(
-                Nonce::from_slice(&cn),
+            .encrypt_inout_detached(
+                cn.as_slice().try_into().expect("12-byte nonce"),
                 &aad_buf[..aad_len],
-                &mut current[..current_len],
+                (&mut current[..current_len]).into(),
             )
             .map_err(|_| PqfileError::EncryptionFailure)?;
         writer.write_all(&current[..current_len])?;
@@ -838,7 +896,7 @@ pub fn encrypt_mmap(
     let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN");
-    let key = Key::from_slice(ss_bytes.as_ref());
+    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
     let cipher = ChaCha20Poly1305::new(key);
 
     if original_size == 0 {
@@ -859,6 +917,7 @@ pub fn encrypt_mmap(
     // encrypt_chunks, the OS may deliver SIGBUS on Unix or raise a structured
     // exception on Windows - this is an inherent mmap caveat and the caller is
     // responsible for ensuring the source file is stable during the call.
+    #[allow(unsafe_code)]
     let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(PqfileError::Io)?;
     // Hint to the OS that we will read the mapping sequentially (Unix only).
     // best-effort: ignore errors.
@@ -938,7 +997,7 @@ where
     let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN");
-    let key = Key::from_slice(ss_bytes.as_ref());
+    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
     let cipher = ChaCha20Poly1305::new(key);
 
     encrypt_chunks_pipelined(
@@ -1000,12 +1059,11 @@ where
                 // Empty input: emit a single zero-length chunk.
                 let cn = chunk_nonce(base_nonce, 0);
                 let (aad_buf, aad_len) = make_chunk_aad(0, true, key_commitment);
-                let mut empty: Vec<u8> = Vec::new();
                 let tag = cipher
-                    .encrypt_in_place_detached(
-                        Nonce::from_slice(&cn),
+                    .encrypt_inout_detached(
+                        cn.as_slice().try_into().expect("12-byte nonce"),
                         &aad_buf[..aad_len],
-                        &mut empty,
+                        (&mut [] as &mut [u8]).into(),
                     )
                     .map_err(|_| PqfileError::EncryptionFailure)?;
                 writer.write_all(tag.as_ref())?;
@@ -1025,10 +1083,10 @@ where
             let cn = chunk_nonce(base_nonce, counter);
             let (aad_buf, aad_len) = make_chunk_aad(counter, is_last, key_commitment);
             let tag = cipher
-                .encrypt_in_place_detached(
-                    Nonce::from_slice(&cn),
+                .encrypt_inout_detached(
+                    cn.as_slice().try_into().expect("12-byte nonce"),
                     &aad_buf[..aad_len],
-                    &mut current_buf[..*current_len],
+                    (&mut current_buf[..*current_len]).into(),
                 )
                 .map_err(|_| PqfileError::EncryptionFailure)?;
             writer.write_all(&current_buf[..*current_len])?;
@@ -1072,7 +1130,7 @@ pub(crate) fn wrap_session_key(
     session_key: &[u8; 32],
     ss: &[u8; 32],
 ) -> Result<[u8; WRAPPED_KEY_LEN], PqfileError> {
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(ss));
+    let cipher = Aes256Gcm::new(ss.as_slice().try_into().expect("32-byte key"));
     let nonce = AesNonce::from([0u8; 12]);
     let ct = cipher
         .encrypt(&nonce, session_key.as_slice())
@@ -1149,9 +1207,13 @@ pub fn encrypt_stream_parallel(
         // Empty input: emit a single empty authenticated last chunk
         let cn = chunk_nonce(&base_nonce, 0);
         let (aad_buf, aad_len) = make_chunk_aad(0, true, &key_commitment);
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
+        let cipher = ChaCha20Poly1305::new(key_bytes.as_ref().try_into().expect("32-byte key"));
         let tag = cipher
-            .encrypt_in_place_detached(Nonce::from_slice(&cn), &aad_buf[..aad_len], &mut [])
+            .encrypt_inout_detached(
+                cn.as_slice().try_into().expect("12-byte nonce"),
+                &aad_buf[..aad_len],
+                (&mut [] as &mut [u8]).into(),
+            )
             .map_err(|_| PqfileError::EncryptionFailure)?;
         writer.write_all(tag.as_ref())?;
         return Ok(());
@@ -1200,12 +1262,13 @@ pub fn encrypt_stream_parallel(
                 let is_last = batch_is_final && i == batch_len - 1;
                 let cn = chunk_nonce(&base_nonce, c);
                 let (aad_buf, aad_len) = make_chunk_aad(c, is_last, &key_commitment);
-                let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
+                let cipher =
+                    ChaCha20Poly1305::new(key_bytes.as_ref().try_into().expect("32-byte key"));
                 let tag = cipher
-                    .encrypt_in_place_detached(
-                        Nonce::from_slice(&cn),
+                    .encrypt_inout_detached(
+                        cn.as_slice().try_into().expect("12-byte nonce"),
                         &aad_buf[..aad_len],
-                        &mut chunk[..chunk_len],
+                        (&mut chunk[..chunk_len]).into(),
                     )
                     .map_err(|_| PqfileError::EncryptionFailure)?;
                 let mut tag_arr = [0u8; 16];

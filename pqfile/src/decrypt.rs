@@ -4,7 +4,7 @@ use std::io;
 use std::io::{Cursor, Read, Write};
 
 use chacha20poly1305::{
-    aead::{Aead, AeadInPlace, KeyInit, Payload, Tag},
+    aead::{Aead, AeadInOut, KeyInit, Payload, Tag},
     ChaCha20Poly1305, Key, Nonce,
 };
 use ml_kem::{
@@ -20,8 +20,9 @@ use crate::format::{
     make_chunk_aad, PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, RecipientEntryV8,
     BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD, HYBRID_CT_LEN_768,
     HYBRID_SEED_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512, KEM_CT_LEN_768, KEM_VARIANT_1024,
-    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V3,
-    VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8, VERSION_V9, WRAPPED_KEY_LEN,
+    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V10,
+    VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8, VERSION_V9,
+    WRAPPED_KEY_LEN,
 };
 use crate::hardware;
 use crate::keygen::{
@@ -137,8 +138,8 @@ pub fn decrypt_bytes(
         return Err(PqfileError::DecryptionFailure);
     }
 
-    let key = Key::from_slice(ss_bytes.as_ref());
-    let nonce = Nonce::from_slice(&header.nonce);
+    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
+    let nonce: &Nonce = header.nonce.as_slice().try_into().expect("12-byte nonce");
     let cipher = ChaCha20Poly1305::new(key);
     cipher
         .decrypt(
@@ -169,7 +170,7 @@ pub fn decrypt_stream(
             let header = PqfHeader::read_body(reader, version)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
             let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
-            let key = Key::from_slice(ss_bytes.as_ref());
+            let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             match version {
                 VERSION => {
@@ -206,7 +207,7 @@ pub fn decrypt_stream(
             let session_key = find_session_key(&dk, &entries)?;
             let key_commitment =
                 compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
-            let key = Key::from_slice(session_key.as_ref());
+            let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             decrypt_v3_chunks(
                 &cipher,
@@ -227,7 +228,7 @@ pub fn decrypt_stream(
             let session_key = find_session_key(&dk, &entries)?;
             let key_commitment =
                 compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
-            let key = Key::from_slice(session_key.as_ref());
+            let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             decrypt_v3_chunks(
                 &cipher,
@@ -244,7 +245,7 @@ pub fn decrypt_stream(
             let session_key = find_session_key_v8(&dk, &header.recipients)?;
             let key_commitment =
                 compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
-            let key = Key::from_slice(session_key.as_ref());
+            let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             decrypt_v3_chunks(
                 &cipher,
@@ -259,7 +260,7 @@ pub fn decrypt_stream(
             let header = PqfHeader::read_body(reader, VERSION_V6)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
             let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
-            let key = Key::from_slice(ss_bytes.as_ref());
+            let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             let key_commitment =
                 compute_key_commitment(ss_bytes.as_ref(), &header.nonce, header.original_size);
@@ -309,8 +310,87 @@ pub fn decrypt_stream(
                 _ => Err(PqfileError::CompressionNotSupported),
             }
         }
+        VERSION_V10 => {
+            // v10 files have no key pair; use decrypt_stream_passphrase instead.
+            let _ = (privkey_pem, reader, writer, passphrase);
+            Err(PqfileError::UnsupportedVersion(VERSION_V10))
+        }
         v => Err(PqfileError::UnsupportedVersion(v)),
     }
+}
+
+/// Decrypts a v10 passphrase-only `.pqf` stream using the default KDF ceiling
+/// (m ≤ 64 MiB, t ≤ 3).
+///
+/// The Argon2id parameters are read from the file header. If they exceed the ceiling
+/// the function returns [`PqfileError::KdfLimitExceeded`] before running the KDF.
+/// Use [`decrypt_stream_passphrase_with_limits`] to accept a higher cost.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_passphrase(
+    passphrase: &str,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    decrypt_stream_passphrase_with_limits(
+        passphrase,
+        crate::passphrase::ARGON2_M_COST,
+        crate::passphrase::ARGON2_T_COST,
+        reader,
+        writer,
+    )
+}
+
+/// Decrypts a v10 passphrase-only `.pqf` stream with a custom KDF ceiling.
+///
+/// `max_m_kib` caps the Argon2id memory cost (KiB); `max_t` caps the time cost
+/// (iterations). Both limits must be ≥ 1. If the file's parameters exceed either
+/// limit, [`PqfileError::KdfLimitExceeded`] is returned before the KDF runs.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_passphrase_with_limits(
+    passphrase: &str,
+    max_m_kib: u32,
+    max_t: u32,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::format::PqfHeaderV10;
+    use crate::passphrase::derive_key_with_params;
+
+    let version = PqfHeader::read_magic_version(reader)?;
+    if version != VERSION_V10 {
+        return Err(PqfileError::UnsupportedVersion(version));
+    }
+
+    let header = PqfHeaderV10::read_body(reader)?;
+
+    if header.m_kib > max_m_kib || header.t_cost > max_t {
+        return Err(PqfileError::KdfLimitExceeded {
+            m_kib: header.m_kib,
+            t: header.t_cost,
+            max_m_kib,
+            max_t,
+        });
+    }
+
+    let session_key = derive_key_with_params(
+        passphrase,
+        &header.salt,
+        header.m_kib,
+        header.t_cost,
+        header.p_cost,
+    )?;
+    let key_commitment =
+        compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+    let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
+    let cipher = ChaCha20Poly1305::new(key);
+    decrypt_v3_chunks(
+        &cipher,
+        &header.nonce,
+        CHUNK_SIZE,
+        &key_commitment,
+        reader,
+        writer,
+    )
 }
 
 /// Decrypts a stream, calling `progress(bytes_written, total_hint)` after each plaintext
@@ -388,8 +468,8 @@ fn find_session_key(
 ///
 /// Since v8 entries carry no `kem_variant` field, every slot is tried: the
 /// decryptor takes the first `ct_len_for_variant(dk.kem_variant())` bytes of
-/// each padded CT, attempts ML-KEM decapsulation (which always produces a value  -
-/// implicit rejection returns a pseudorandom key), then verifies the AES-GCM tag.
+/// each padded CT, attempts ML-KEM decapsulation (implicit rejection always produces a
+/// pseudorandom key on a non-matching slot), then verifies the AES-GCM tag.
 /// A matching tag identifies the correct slot with probability ≈ 1 − 2^{−128}.
 /// Always tries every slot so timing does not reveal which slot matched.
 /// ML-KEM decapsulation uses implicit rejection (always produces a value), and
@@ -421,8 +501,8 @@ fn unwrap_session_key(
     ss: &[u8; 32],
 ) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     use aes_gcm::aead::{Aead, KeyInit};
-    use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(ss));
+    use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
+    let cipher = Aes256Gcm::new(ss.as_slice().try_into().expect("32-byte key"));
     let nonce = AesNonce::from([0u8; 12]);
     let plaintext = Zeroizing::new(
         cipher
@@ -457,7 +537,7 @@ pub(crate) fn decapsulate_stream_init(
             let header = PqfHeader::read_body(reader, version)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
             let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
-            let key = Key::from_slice(ss_bytes.as_ref());
+            let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
 
             if version == VERSION {
@@ -475,7 +555,7 @@ pub(crate) fn decapsulate_stream_init(
                 if payload.len() < 16 {
                     return Err(PqfileError::DecryptionFailure);
                 }
-                let nonce = Nonce::from_slice(&header.nonce);
+                let nonce: &Nonce = header.nonce.as_slice().try_into().expect("12-byte nonce");
                 let plaintext = Zeroizing::new(
                     cipher
                         .decrypt(
@@ -522,7 +602,7 @@ pub(crate) fn decapsulate_stream_init(
             let session_key = find_session_key(&dk, &entries)?;
             let key_commitment =
                 compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
-            let key = Key::from_slice(session_key.as_ref());
+            let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             Ok(StreamDecryptState {
                 version: VERSION_V4,
@@ -545,7 +625,7 @@ pub(crate) fn decapsulate_stream_init(
             let session_key = find_session_key(&dk, &entries)?;
             let key_commitment =
                 compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
-            let key = Key::from_slice(session_key.as_ref());
+            let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             Ok(StreamDecryptState {
                 version: VERSION_V7,
@@ -564,7 +644,7 @@ pub(crate) fn decapsulate_stream_init(
             let session_key = find_session_key_v8(&dk, &header.recipients)?;
             let key_commitment =
                 compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
-            let key = Key::from_slice(session_key.as_ref());
+            let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             Ok(StreamDecryptState {
                 version,
@@ -642,7 +722,7 @@ fn decrypt_v2_payload(
     if payload.len() < 16 {
         return Err(PqfileError::DecryptionFailure);
     }
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce: &Nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
     let plaintext = Zeroizing::new(
         cipher
             .decrypt(
@@ -692,11 +772,13 @@ fn decrypt_v3_chunks(
             return Err(PqfileError::DecryptionFailure);
         }
         let ct_len = current_len - 16;
-        let tag = Tag::<ChaCha20Poly1305>::clone_from_slice(&current[ct_len..current_len]);
-        match cipher.decrypt_in_place_detached(
-            Nonce::from_slice(&cn),
+        let tag: Tag<ChaCha20Poly1305> = current[ct_len..current_len]
+            .try_into()
+            .expect("16-byte tag");
+        match cipher.decrypt_inout_detached(
+            cn.as_slice().try_into().expect("12-byte nonce"),
             &aad_buf[..aad_len],
-            &mut current[..ct_len],
+            (&mut current[..ct_len]).into(),
             &tag,
         ) {
             Ok(_) => {}
@@ -1031,13 +1113,15 @@ pub fn decrypt_stream_parallel(
                     return Err(PqfileError::DecryptionFailure);
                 }
                 let pt_len = ct_len - 16;
-                let tag = Tag::<ChaCha20Poly1305>::clone_from_slice(&ct_buf[pt_len..ct_len]);
-                let cipher = ChaCha20Poly1305::new(Key::from_slice(key_bytes.as_ref()));
+                let tag: Tag<ChaCha20Poly1305> =
+                    ct_buf[pt_len..ct_len].try_into().expect("16-byte tag");
+                let cipher =
+                    ChaCha20Poly1305::new(key_bytes.as_ref().try_into().expect("32-byte key"));
                 cipher
-                    .decrypt_in_place_detached(
-                        Nonce::from_slice(&cn),
+                    .decrypt_inout_detached(
+                        cn.as_slice().try_into().expect("12-byte nonce"),
                         &aad_buf[..aad_len],
-                        &mut ct_buf[..pt_len],
+                        (&mut ct_buf[..pt_len]).into(),
                         &tag,
                     )
                     .map_err(|_| {
@@ -1828,5 +1912,105 @@ mod tests {
         let (last_done, last_total) = *log.last().unwrap();
         assert_eq!(last_done, plaintext.len() as u64);
         assert_eq!(last_total, plaintext.len() as u64);
+    }
+
+    // ── v10 passphrase-only format ────────────────────────────────────────────
+
+    #[test]
+    fn v10_passphrase_roundtrip() {
+        let plaintext = b"hello passphrase world";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "hunter2",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn v10_wrong_passphrase_fails() {
+        let plaintext = b"secret";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "correct",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase("wrong", &mut ct.as_slice(), &mut out);
+        assert!(
+            matches!(result, Err(PqfileError::DecryptionFailure)),
+            "wrong passphrase must cause decryption failure"
+        );
+    }
+
+    #[test]
+    fn v10_kdf_limit_exceeded() {
+        let plaintext = b"data";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "pass",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        // Encrypt uses m=65536 KiB; set ceiling to 1 KiB to trigger the limit.
+        let mut out = Vec::new();
+        let result =
+            decrypt_stream_passphrase_with_limits("pass", 1, 99, &mut ct.as_slice(), &mut out);
+        assert!(
+            matches!(result, Err(PqfileError::KdfLimitExceeded { .. })),
+            "KDF ceiling should be enforced"
+        );
+    }
+
+    #[test]
+    fn v10_decrypt_stream_rejects_v10_with_helpful_error() {
+        let plaintext = b"data";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "pass",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        // Using decrypt_stream (key-based) on a v10 file returns UnsupportedVersion.
+        let (_, priv_pem) = crate::keygen::keygen_bytes(768, None).unwrap();
+        let mut out = Vec::new();
+        let result = decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None);
+        assert!(
+            matches!(result, Err(PqfileError::UnsupportedVersion(0x0A))),
+            "decrypt_stream must reject v10 with UnsupportedVersion"
+        );
+    }
+
+    #[test]
+    fn v10_multi_chunk_roundtrip() {
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 2 + 7).collect();
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "multipass",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        decrypt_stream_passphrase("multipass", &mut ct.as_slice(), &mut out).unwrap();
+        assert_eq!(out, plaintext);
     }
 }

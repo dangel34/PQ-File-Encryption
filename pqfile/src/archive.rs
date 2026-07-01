@@ -118,6 +118,24 @@ pub fn extract<R: Read>(
             out_file.write_all(&buf[..n]).map_err(PqfileError::Io)?;
             remaining -= n as u64;
         }
+        // Restore mtime while the file is still open.
+        if entry.mtime_secs > 0 {
+            if let Some(ts) = std::time::SystemTime::UNIX_EPOCH
+                .checked_add(std::time::Duration::from_secs(entry.mtime_secs as u64))
+            {
+                let _ = out_file.set_times(std::fs::FileTimes::new().set_modified(ts));
+            }
+        }
+        drop(out_file);
+        // Restore Unix permissions (no-op on other platforms).
+        #[cfg(unix)]
+        if entry.mode != 0 {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &dest,
+                std::fs::Permissions::from_mode(entry.mode & 0o777),
+            );
+        }
         written.push(dest);
     }
 
@@ -602,6 +620,44 @@ mod tests {
         // Normal names are still allowed.
         assert!(safe_dest(base, "normal.txt").is_ok());
         assert!(safe_dest(base, "subdir/file.dat").is_ok());
+    }
+
+    #[test]
+    fn archive_extract_restores_mtime() {
+        let tmp = tempdir().unwrap();
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let src = tmp.path().join("timed.txt");
+        std::fs::write(&src, b"data").unwrap();
+
+        // Set a known mtime (2020-01-01 00:00:00 UTC).
+        let known_secs: i64 = 1577836800;
+        let known_ts =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(known_secs as u64);
+        std::fs::File::options()
+            .write(true)
+            .open(&src)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(known_ts))
+            .unwrap();
+
+        let entries = vec![("timed.txt".to_string(), src)];
+        let mut archive_bytes = Vec::new();
+        create(&pub_pem, &entries, &mut archive_bytes).unwrap();
+
+        let out_dir = tempdir().unwrap();
+        let paths = extract(&priv_pem, archive_bytes.as_slice(), out_dir.path(), None).unwrap();
+
+        let extracted_mtime = std::fs::metadata(&paths[0])
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert_eq!(
+            extracted_mtime, known_secs as u64,
+            "mtime should be restored after extract"
+        );
     }
 
     #[test]

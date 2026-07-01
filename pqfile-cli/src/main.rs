@@ -55,15 +55,24 @@ enum Command {
         #[arg(long, value_name = "LABEL")]
         label: Option<String>,
         /// Embed an expiry date comment in the PEM files (format: YYYY-MM-DD).
-        /// Purely informational — pqfile checks and displays expiry but does not
+        /// Purely informational; pqfile checks and displays expiry but does not
         /// enforce it cryptographically. Cannot be combined with --hardware.
         #[arg(long, value_name = "DATE")]
         expiry: Option<String>,
     },
     Encrypt {
-        /// Recipient public key(s). Repeat -r for multiple recipients (v4 format).
-        #[arg(short = 'r', value_name = "PUBKEY", action = clap::ArgAction::Append, required = true)]
-        recipients: Vec<PathBuf>,
+        /// Recipient public key(s): a path to a pubkey.pem file, or a `pqf1…` recipient string.
+        /// Repeat -r for multiple recipients (v4 format). Mutually exclusive with --passphrase.
+        #[arg(short = 'r', value_name = "PUBKEY", action = clap::ArgAction::Append, conflicts_with = "passphrase_only")]
+        recipients: Vec<String>,
+        /// Encrypt without a key pair: derive the session key directly from a passphrase (v10 format).
+        /// The passphrase is prompted interactively. Mutually exclusive with -r.
+        #[arg(
+            long = "passphrase",
+            default_value_t = false,
+            conflicts_with = "recipients"
+        )]
+        passphrase_only: bool,
         /// Input file to encrypt, or '-' to read from stdin.
         input: String,
         /// Write encrypted output to this path, or '-' for stdout.
@@ -110,8 +119,9 @@ enum Command {
         pad_recipients: bool,
     },
     Decrypt {
-        #[arg(short = 'k', value_name = "PRIVKEY")]
-        key: PathBuf,
+        /// Private key file for decryption. Required unless --passphrase is set (v10 files).
+        #[arg(short = 'k', value_name = "PRIVKEY", conflicts_with = "passphrase_v10")]
+        key: Option<PathBuf>,
         /// Encrypted .pqf file to decrypt, or '-' to read from stdin.
         input: String,
         /// Write decrypted output to this path, or '-' for stdout. Defaults to stripping .pqf.
@@ -120,6 +130,17 @@ enum Command {
         /// Decrypt chunks in parallel using rayon (only effective for v3/v5 format files).
         #[arg(long, default_value_t = false)]
         parallel: bool,
+        /// Decrypt a v10 passphrase-only file. The passphrase is prompted interactively.
+        /// Mutually exclusive with -k.
+        #[arg(long = "passphrase", default_value_t = false, conflicts_with = "key")]
+        passphrase_v10: bool,
+        /// Maximum Argon2id memory cost (KiB) accepted from a v10 file header (default: 65536 = 64 MiB).
+        /// Files whose m parameter exceeds this are rejected before the KDF runs.
+        #[arg(long, value_name = "KIB", default_value_t = 65536u32)]
+        max_kdf_mem: u32,
+        /// Maximum Argon2id time cost (iterations) accepted from a v10 file header (default: 3).
+        #[arg(long, value_name = "ITERS", default_value_t = 3u32)]
+        max_kdf_time: u32,
     },
     Inspect {
         input: PathBuf,
@@ -350,6 +371,14 @@ enum Command {
         pubkey: Option<PathBuf>,
     },
 
+    /// Print the fingerprint and Bech32 recipient string for a public key.
+    ///
+    /// Accepts either a path to a pubkey.pem file, or a `pqf1…` recipient string directly.
+    Fingerprint {
+        /// Public key: path to pubkey.pem or a `pqf1…` recipient string.
+        key: String,
+    },
+
     /// Import an existing key and derive an ML-KEM-768 key pair from it (one-way migration).
     ImportKey {
         /// Source key file.  Currently only unencrypted OpenSSH ed25519 private keys
@@ -431,8 +460,10 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             mmap,
             anonymous_recipients,
             pad_recipients,
+            passphrase_only,
         } => run_encrypt(
             recipients,
+            passphrase_only,
             input,
             output,
             recursive,
@@ -453,7 +484,19 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             input,
             output,
             parallel,
-        } => run_decrypt(key, input, output, parallel, json),
+            passphrase_v10,
+            max_kdf_mem,
+            max_kdf_time,
+        } => run_decrypt(
+            key,
+            passphrase_v10,
+            max_kdf_mem,
+            max_kdf_time,
+            input,
+            output,
+            parallel,
+            json,
+        ),
         Command::Inspect { input } => inspect(input.as_path(), json),
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "pqfile", &mut io::stdout());
@@ -517,6 +560,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             force,
             passphrase,
         } => run_import_key(from, out, force, passphrase, json),
+        Command::Fingerprint { key } => run_fingerprint(&key, json),
     }
 }
 
@@ -601,6 +645,11 @@ fn run_keygen(
         }
         fp
     };
+    // Compute the Bech32 recipient string from the written public key.
+    let pub_pem_for_rs = std::fs::read_to_string(out.join("pubkey.pem")).unwrap_or_default();
+    let recipient_str =
+        pqfile::recipient_string::encode_pubkey(&pub_pem_for_rs).unwrap_or_default();
+
     if json {
         println!(
             "{}",
@@ -611,6 +660,7 @@ fn run_keygen(
                 kv_str("fingerprint", &fp),
                 kv_str("storage", if hardware { "hardware" } else { "disk" }),
                 kv_str("expiry", expiry.as_deref().unwrap_or("")),
+                kv_str("recipient_string", &recipient_str),
             ])
         );
     } else {
@@ -621,6 +671,9 @@ fn run_keygen(
             println!("Keys written to {}", out.display());
         }
         println!("Public key fingerprint: {fp}");
+        if !recipient_str.is_empty() {
+            println!("Recipient string:       {recipient_str}");
+        }
         if let Some(ref date) = expiry {
             println!("Expiry: {date}");
         }
@@ -629,12 +682,29 @@ fn run_keygen(
 }
 
 fn run_encrypt(
-    recipients: Vec<PathBuf>,
+    recipients: Vec<String>,
+    passphrase_only: bool,
     input: String,
     output: Option<String>,
     recursive: bool,
     opts: EncryptOpts,
 ) -> Result<(), PqfileError> {
+    if passphrase_only {
+        if recursive {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--passphrase and --recursive cannot be combined",
+            )));
+        }
+        let pp = prompt_new_passphrase()?;
+        return run_encrypt_passphrase(pp.as_str(), &input, output.as_deref(), opts);
+    }
+    if recipients.is_empty() {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "provide at least one -r recipient, or use --passphrase for passphrase-only encryption",
+        )));
+    }
     if opts.chunk_size > 268_435_456 {
         return Err(PqfileError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -650,13 +720,21 @@ fn run_encrypt(
             ),
         )));
     }
-    // Check revocation for all recipient key files before encrypting.
+    // Load and validate recipient public keys. Each recipient can be a path to a
+    // pubkey.pem file, or a `pqf1…` Bech32 recipient string.
     let pubkey_pems: Vec<String> = recipients
         .iter()
-        .map(|p| {
-            let pem = std::fs::read_to_string(p)?;
-            revoke::check_not_revoked(p, &pem)?;
-            Ok::<_, PqfileError>(pem)
+        .map(|r| {
+            if pqfile::recipient_string::is_recipient_string(r) {
+                // Bech32 recipient string: decode directly; no revocation check possible.
+                pqfile::recipient_string::decode_pubkey(r)
+            } else {
+                // File path: read PEM and check for revocation.
+                let p = std::path::Path::new(r);
+                let pem = std::fs::read_to_string(p)?;
+                revoke::check_not_revoked(p, &pem)?;
+                Ok(pem)
+            }
         })
         .collect::<Result<_, _>>()?;
     if recursive {
@@ -669,6 +747,55 @@ fn run_encrypt(
     } else {
         run_encrypt_single(&pubkey_pems, &input, output.as_deref(), opts)
     }
+}
+
+fn run_encrypt_passphrase(
+    passphrase: &str,
+    input: &str,
+    output: Option<&str>,
+    opts: EncryptOpts,
+) -> Result<(), PqfileError> {
+    let original_size: u64 = if input != "-" {
+        std::fs::metadata(input).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+
+    let out = output.unwrap_or_else(|| if input == "-" { "-" } else { "" });
+    let to_stdout = out == "-" || (out.is_empty() && input == "-");
+    let out_path: PathBuf = if to_stdout {
+        PathBuf::new()
+    } else if out.is_empty() {
+        let mut s = std::ffi::OsString::from(input);
+        s.push(".pqf");
+        PathBuf::from(s)
+    } else {
+        PathBuf::from(out)
+    };
+
+    let mut reader = open_reader(input)?;
+    let mut writer = CliOutput::new(to_stdout, &out_path)?;
+    encrypt::encrypt_stream_passphrase(passphrase, original_size, &mut *reader, &mut writer)?;
+    writer.commit()?;
+
+    if opts.json {
+        let out_val = if to_stdout {
+            "-"
+        } else {
+            &out_path.to_string_lossy()
+        };
+        let target: &mut dyn io::Write = if to_stdout {
+            &mut io::stderr()
+        } else {
+            &mut io::stdout()
+        };
+        writeln!(
+            target,
+            "{}",
+            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
+        )?;
+    }
+    Ok(())
 }
 
 fn run_encrypt_single(
@@ -977,20 +1104,19 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), PqfileError
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_decrypt(
-    key: PathBuf,
+    key: Option<PathBuf>,
+    passphrase_v10: bool,
+    max_kdf_mem: u32,
+    max_kdf_time: u32,
     input: String,
     output: Option<String>,
     parallel: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
-    let privkey_pem = std::fs::read_to_string(&key)?;
-    let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
-    let pp_str = pp.as_deref().map(|z| z.as_str());
-
     let out = output.as_deref().unwrap_or("");
     let to_stdout = out == "-" || (out.is_empty() && input == "-");
-
     let out_path: PathBuf = if to_stdout {
         PathBuf::new()
     } else if out.is_empty() {
@@ -1001,16 +1127,37 @@ fn run_decrypt(
 
     let mut reader = open_reader(&input)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
-    if parallel {
-        decrypt::decrypt_stream_parallel(
-            &privkey_pem,
+
+    if passphrase_v10 {
+        let pp = prompt_passphrase("Enter passphrase: ")?;
+        decrypt::decrypt_stream_passphrase_with_limits(
+            pp.as_str(),
+            max_kdf_mem,
+            max_kdf_time,
             &mut *reader,
             &mut writer,
-            pp_str,
-            PARALLEL_BATCH_SIZE,
         )?;
     } else {
-        decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut writer, pp_str)?;
+        let key_path = key.ok_or_else(|| {
+            PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "provide -k <PRIVKEY>, or use --passphrase for v10 passphrase-only files",
+            ))
+        })?;
+        let privkey_pem = std::fs::read_to_string(&key_path)?;
+        let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
+        let pp_str = pp.as_deref().map(|z| z.as_str());
+        if parallel {
+            decrypt::decrypt_stream_parallel(
+                &privkey_pem,
+                &mut *reader,
+                &mut writer,
+                pp_str,
+                PARALLEL_BATCH_SIZE,
+            )?;
+        } else {
+            decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut writer, pp_str)?;
+        }
     }
     writer.commit()?;
 
@@ -2284,4 +2431,34 @@ mod tests {
         let s = "hello/world-OK_123";
         assert_eq!(json_escape(s), s);
     }
+}
+
+// ── fingerprint ───────────────────────────────────────────────────────────────
+
+fn run_fingerprint(key: &str, json: bool) -> Result<(), PqfileError> {
+    let pub_pem = if pqfile::recipient_string::is_recipient_string(key) {
+        pqfile::recipient_string::decode_pubkey(key)?
+    } else {
+        std::fs::read_to_string(key)?
+    };
+
+    let fp = keygen::fingerprint_pem(&pub_pem);
+    let recipient_str = pqfile::recipient_string::encode_pubkey(&pub_pem).unwrap_or_default();
+
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("fingerprint", &fp),
+                kv_str("recipient_string", &recipient_str),
+            ])
+        );
+    } else {
+        println!("Fingerprint:      {fp}");
+        if !recipient_str.is_empty() {
+            println!("Recipient string: {recipient_str}");
+        }
+    }
+    Ok(())
 }

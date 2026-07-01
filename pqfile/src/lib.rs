@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! Quantum-resistant file encryption library.
 //!
 //! pqfile provides authenticated, post-quantum file encryption using NIST-standardised
@@ -128,6 +129,9 @@ pub mod keys;
 
 /// Secure file shredding: overwrite then delete.
 pub mod shred;
+
+/// Compact Bech32m recipient strings (`pqf1…`): encode/decode public keys without PEM files.
+pub mod recipient_string;
 
 /// Passphrase upgrade: change or migrate the passphrase on any encrypted private key.
 pub mod repassphrase;
