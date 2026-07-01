@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782762154614,
+  "lastUpdate": 1782924441966,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -1121,6 +1121,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 52329,
             "range": "± 269",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "59b12f816a28545888117c729d3b033081e3b4b1",
+          "message": "refactor: streamline encryption code in repassphrase.rs\n\n- Simplified the encryption call by removing unnecessary line breaks for better readability.\n- Maintained functionality while enhancing code clarity.",
+          "timestamp": "2026-07-01T12:42:43-04:00",
+          "tree_id": "4aec0119ae0b4b8958d92b7a1772c3040dc0066b",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/59b12f816a28545888117c729d3b033081e3b4b1"
+        },
+        "date": 1782924441160,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 62190,
+            "range": "± 591",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1012856,
+            "range": "± 26220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 111637499,
+            "range": "± 399275",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 99299,
+            "range": "± 384",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1020582,
+            "range": "± 11876",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 98957551,
+            "range": "± 2070530",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 63981,
+            "range": "± 8254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 985589,
+            "range": "± 11445",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 102030890,
+            "range": "± 242932",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 105075,
+            "range": "± 389",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1026204,
+            "range": "± 17783",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 101370865,
+            "range": "± 422562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 52160,
+            "range": "± 250",
             "unit": "ns/iter"
           }
         ]
