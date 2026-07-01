@@ -2390,6 +2390,36 @@ fn json_error_from(e: &PqfileError) -> String {
     ])
 }
 
+// ── fingerprint ───────────────────────────────────────────────────────────────
+
+fn run_fingerprint(key: &str, json: bool) -> Result<(), PqfileError> {
+    let pub_pem = if pqfile::recipient_string::is_recipient_string(key) {
+        pqfile::recipient_string::decode_pubkey(key)?
+    } else {
+        std::fs::read_to_string(key)?
+    };
+
+    let fp = keygen::fingerprint_pem(&pub_pem);
+    let recipient_str = pqfile::recipient_string::encode_pubkey(&pub_pem).unwrap_or_default();
+
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("fingerprint", &fp),
+                kv_str("recipient_string", &recipient_str),
+            ])
+        );
+    } else {
+        println!("Fingerprint:      {fp}");
+        if !recipient_str.is_empty() {
+            println!("Recipient string: {recipient_str}");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2431,34 +2461,4 @@ mod tests {
         let s = "hello/world-OK_123";
         assert_eq!(json_escape(s), s);
     }
-}
-
-// ── fingerprint ───────────────────────────────────────────────────────────────
-
-fn run_fingerprint(key: &str, json: bool) -> Result<(), PqfileError> {
-    let pub_pem = if pqfile::recipient_string::is_recipient_string(key) {
-        pqfile::recipient_string::decode_pubkey(key)?
-    } else {
-        std::fs::read_to_string(key)?
-    };
-
-    let fp = keygen::fingerprint_pem(&pub_pem);
-    let recipient_str = pqfile::recipient_string::encode_pubkey(&pub_pem).unwrap_or_default();
-
-    if json {
-        println!(
-            "{}",
-            json_object(&[
-                kv_str("status", "ok"),
-                kv_str("fingerprint", &fp),
-                kv_str("recipient_string", &recipient_str),
-            ])
-        );
-    } else {
-        println!("Fingerprint:      {fp}");
-        if !recipient_str.is_empty() {
-            println!("Recipient string: {recipient_str}");
-        }
-    }
-    Ok(())
 }

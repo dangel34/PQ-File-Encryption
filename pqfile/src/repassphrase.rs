@@ -282,11 +282,13 @@ mod tests {
             argon2
                 .hash_password_into("pass".as_bytes(), &salt, &mut key_bytes)
                 .unwrap();
-            let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+            let key = Key::<Aes256Gcm>::try_from(key_bytes.as_slice()).expect("32-byte key");
+            let cipher = Aes256Gcm::new(&key);
             let mut nonce_bytes = [0u8; 12];
             getrandom::fill(&mut nonce_bytes).unwrap();
+            let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("12-byte nonce");
             let ct = cipher
-                .encrypt(Nonce::from_slice(&nonce_bytes), seed.as_slice())
+                .encrypt(&nonce, seed.as_slice())
                 .unwrap();
             let mut b = Vec::new();
             b.extend_from_slice(&salt);
