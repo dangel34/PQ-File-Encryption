@@ -287,9 +287,7 @@ mod tests {
             let mut nonce_bytes = [0u8; 12];
             getrandom::fill(&mut nonce_bytes).unwrap();
             let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("12-byte nonce");
-            let ct = cipher
-                .encrypt(&nonce, seed.as_slice())
-                .unwrap();
+            let ct = cipher.encrypt(&nonce, seed.as_slice()).unwrap();
             let mut b = Vec::new();
             b.extend_from_slice(&salt);
             b.extend_from_slice(&nonce_bytes);
