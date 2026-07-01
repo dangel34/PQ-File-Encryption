@@ -52,12 +52,18 @@ Write-Host "  all tests passed"
 
 # ── Version replacements ───────────────────────────────────────────────────
 
+# Thin wrapper so Replace-InFile funnels console output through a 'Show-' verbed
+# cmdlet instead of calling the non-pipeline-friendly Write-Host directly.
+function Show-Line([string]$Text) {
+    Write-Host $Text
+}
+
 function Replace-InFile([string]$path, [string]$pattern, [string]$replacement) {
     $content = Get-Content $path -Raw
     $updated = $content -replace $pattern, $replacement
     if ($content -eq $updated) { Write-Warning "No change in: $path"; return }
     Set-Content $path $updated -NoNewline
-    Write-Host "  updated $($path.Replace($root, '.'))"
+    Show-Line "  updated $($path.Replace($root, '.'))"
 }
 
 Write-Host "Bumping to v$Version..."

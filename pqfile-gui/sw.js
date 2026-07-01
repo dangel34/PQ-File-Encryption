@@ -10,29 +10,29 @@
 const CACHE_NAME = 'pqfile-v1';
 
 // Trunk content-hashes its output: pqfile-gui-<hash>.js / _bg.wasm
-const HASHED_RE = /[.\-][0-9a-f]{8,}\.(js|wasm)$/;
+const HASHED_RE = /[.-][0-9a-f]{8,}\.(js|wasm)$/;
 
-self.addEventListener('install', evt => {
-  self.skipWaiting();
+globalThis.addEventListener('install', evt => {
+  globalThis.skipWaiting();
   evt.waitUntil(
     caches.open(CACHE_NAME).then(c => c.add('/'))
   );
 });
 
-self.addEventListener('activate', evt => {
+globalThis.addEventListener('activate', evt => {
   evt.waitUntil(
     caches.keys()
       .then(keys => Promise.all(
         keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
       ))
-      .then(() => self.clients.claim())
+      .then(() => globalThis.clients.claim())
   );
 });
 
-self.addEventListener('fetch', evt => {
+globalThis.addEventListener('fetch', evt => {
   if (evt.request.method !== 'GET') return;
   const url = new URL(evt.request.url);
-  if (url.origin !== self.location.origin) return;
+  if (url.origin !== globalThis.location.origin) return;
 
   if (HASHED_RE.test(url.pathname)) {
     // Cache-first: hashed WASM/JS are immutable once built.

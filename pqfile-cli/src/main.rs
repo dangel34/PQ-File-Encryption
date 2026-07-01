@@ -79,6 +79,9 @@ enum Command {
         /// Defaults to <input>.pqf. Ignored in --recursive mode.
         #[arg(short = 'o', long, value_name = "FILE")]
         output: Option<String>,
+        /// Overwrite an existing output file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
         /// Encrypt every file in a directory tree. INPUT must be a directory.
         /// Each file is written alongside the original as <file>.pqf.
         #[arg(long, default_value_t = false)]
@@ -127,6 +130,9 @@ enum Command {
         /// Write decrypted output to this path, or '-' for stdout. Defaults to stripping .pqf.
         #[arg(short = 'o', long, value_name = "FILE")]
         output: Option<String>,
+        /// Overwrite an existing output file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
         /// Decrypt chunks in parallel using rayon (only effective for v3/v5 format files).
         #[arg(long, default_value_t = false)]
         parallel: bool,
@@ -225,6 +231,10 @@ enum Command {
         /// Output path for the rekeyed file, or '-' for stdout. Defaults to overwriting the input.
         #[arg(short = 'o', long, value_name = "FILE")]
         output: Option<String>,
+        /// Overwrite an existing output file without prompting. Note: the default output path
+        /// is the input file itself, so rekey overwrites the input in place unless -o is given.
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     /// Pack multiple files into a single encrypted archive (.pqf).
     ///
@@ -243,6 +253,9 @@ enum Command {
         /// Strip this prefix from each file path when computing the archive entry name.
         #[arg(long, value_name = "DIR")]
         base: Option<PathBuf>,
+        /// Overwrite an existing archive file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     /// Extract a pqfile archive created with `archive`.
     Extract {
@@ -277,6 +290,9 @@ enum Command {
         /// Output path. Defaults to <input>.pqf.
         #[arg(short = 'o', long, value_name = "FILE")]
         output: Option<PathBuf>,
+        /// Overwrite an existing output file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     /// Decrypt and verify a signcrypted file.
     ///
@@ -295,6 +311,9 @@ enum Command {
         /// Output path. Defaults to stripping .pqf from input.
         #[arg(short = 'o', long, value_name = "FILE")]
         output: Option<String>,
+        /// Overwrite an existing output file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     /// Split a private key into M-of-N Shamir shares.
     ///
@@ -410,7 +429,19 @@ struct EncryptOpts {
     mmap: bool,
     anonymous_recipients: bool,
     pad_recipients: bool,
+    force: bool,
     json: bool,
+}
+
+/// Returns `OutputExists` when `path` already exists and neither `--force` nor stdout
+/// output was requested. Call this with the resolved destination before creating the
+/// output writer so an existing file is never clobbered silently. `to_stdout` outputs
+/// are always allowed (there is no file to overwrite).
+fn ensure_overwrite_allowed(path: &Path, to_stdout: bool, force: bool) -> Result<(), PqfileError> {
+    if !to_stdout && !force && path.exists() {
+        return Err(PqfileError::OutputExists(path.to_path_buf()));
+    }
+    Ok(())
 }
 
 fn main() {
@@ -451,6 +482,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             recipients,
             input,
             output,
+            force,
             recursive,
             chunk_size,
             compress,
@@ -476,6 +508,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
                 mmap,
                 anonymous_recipients,
                 pad_recipients,
+                force,
                 json,
             },
         ),
@@ -483,6 +516,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             key,
             input,
             output,
+            force,
             parallel,
             passphrase_v10,
             max_kdf_mem,
@@ -495,6 +529,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             input,
             output,
             parallel,
+            force,
             json,
         ),
         Command::Inspect { input } => inspect(input.as_path(), json),
@@ -517,13 +552,15 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             recipient,
             input,
             output,
-        } => run_rekey(key, recipient, input, output, json),
+            force,
+        } => run_rekey(key, recipient, input, output, force, json),
         Command::Archive {
             recipient,
             output,
             files,
             base,
-        } => run_archive(recipient, output, files, base, json),
+            force,
+        } => run_archive(recipient, output, files, base, force, json),
         Command::Extract {
             input,
             key,
@@ -535,13 +572,15 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             recipient,
             input,
             output,
-        } => run_signcrypt(key, recipient, input, output, json),
+            force,
+        } => run_signcrypt(key, recipient, input, output, force, json),
         Command::Signdecrypt {
             key,
             verifying_key,
             input,
             output,
-        } => run_signdecrypt(key, verifying_key, input, output, json),
+            force,
+        } => run_signdecrypt(key, verifying_key, input, output, force, json),
         Command::SplitKey {
             key,
             threshold,
@@ -773,6 +812,7 @@ fn run_encrypt_passphrase(
         PathBuf::from(out)
     };
 
+    ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
     let mut reader = open_reader(input)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
     encrypt::encrypt_stream_passphrase(passphrase, original_size, &mut *reader, &mut writer)?;
@@ -822,6 +862,8 @@ fn run_encrypt_single(
     } else {
         PathBuf::from(out)
     };
+
+    ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
 
     // --mmap: native only, single recipient, no compress, file input only.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1069,6 +1111,7 @@ fn encrypt_one_file(
     } else {
         opts.chunk_size
     };
+    ensure_overwrite_allowed(out_path, false, opts.force)?;
     let mut reader = BufReader::new(std::fs::File::open(file_path)?);
     let mut writer = AtomicOutput::new(out_path)?;
     let result = if opts.compress {
@@ -1113,6 +1156,7 @@ fn run_decrypt(
     input: String,
     output: Option<String>,
     parallel: bool,
+    force: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
     let out = output.as_deref().unwrap_or("");
@@ -1125,6 +1169,7 @@ fn run_decrypt(
         PathBuf::from(out)
     };
 
+    ensure_overwrite_allowed(&out_path, to_stdout, force)?;
     let mut reader = open_reader(&input)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
 
@@ -1668,12 +1713,12 @@ fn run_rekey(
     recipient: PathBuf,
     input: String,
     output: Option<String>,
+    force: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
     let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
-
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
     revoke::check_not_revoked(&recipient, &pubkey_pem)?;
 
@@ -1687,6 +1732,13 @@ fn run_rekey(
     } else {
         PathBuf::from(out)
     };
+
+    // Rekey defaults to rewriting the input file in place, so an existing output that
+    // equals the input is expected and always allowed. Only guard an explicit -o that
+    // points at a *different* existing file.
+    if out_path.as_path() != Path::new(&input) {
+        ensure_overwrite_allowed(&out_path, to_stdout, force)?;
+    }
 
     let mut reader = open_reader(&input)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
@@ -1718,8 +1770,10 @@ fn run_archive(
     output: PathBuf,
     files: Vec<PathBuf>,
     base: Option<PathBuf>,
+    force: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
+    ensure_overwrite_allowed(&output, false, force)?;
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
     revoke::check_not_revoked(&recipient, &pubkey_pem)?;
 
@@ -1834,6 +1888,7 @@ fn run_signcrypt(
     recipient: PathBuf,
     input: PathBuf,
     output: Option<PathBuf>,
+    force: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
     let sk_pem = std::fs::read_to_string(&key)?;
@@ -1848,6 +1903,7 @@ fn run_signcrypt(
         s.push(".pqf");
         PathBuf::from(s)
     });
+    ensure_overwrite_allowed(&out_path, false, force)?;
 
     let mut file = std::io::BufReader::new(std::fs::File::open(&input)?);
     let mut writer = AtomicOutput::new(&out_path)?;
@@ -1882,6 +1938,7 @@ fn run_signdecrypt(
     verifying_key: PathBuf,
     input: String,
     output: Option<String>,
+    force: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
     let privkey_pem = std::fs::read_to_string(&key)?;
@@ -1899,6 +1956,7 @@ fn run_signdecrypt(
         PathBuf::from(out)
     };
 
+    ensure_overwrite_allowed(&out_path, to_stdout, force)?;
     let reader = open_reader(&input)?;
 
     if to_stdout {

@@ -112,6 +112,9 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Check out repo (for nginx/ config)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Download WASM from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -132,6 +135,23 @@ jobs:
 
       - name: Deploy to /var/www/pqfile
         run: rsync -a --delete pqfile-gui/dist/ /var/www/pqfile/
+
+      # Sync the version-controlled nginx config from nginx/ to /etc/nginx and
+      # reload — but only after `nginx -t` validates the merged config, so a bad
+      # edit can never take the site down. The self-hosted runner user needs a
+      # sudoers entry limited to: cp, install, nginx, systemctl reload nginx.
+      # See nginx/README.md.
+      - name: Install and reload nginx config
+        run: |
+          sudo install -m 0644 nginx/snippets/security-headers-pqfile.conf /etc/nginx/snippets/security-headers-pqfile.conf
+          sudo install -m 0644 nginx/snippets/wasm-headers.conf            /etc/nginx/snippets/wasm-headers.conf
+          sudo install -m 0644 nginx/snippets/cloudflare-ips.conf          /etc/nginx/snippets/cloudflare-ips.conf
+          sudo install -m 0644 nginx/sites-available/pqfile                /etc/nginx/sites-available/pqfile
+          # Ensure the site is enabled (no-op if the symlink already exists).
+          sudo ln -sf /etc/nginx/sites-available/pqfile /etc/nginx/sites-enabled/pqfile
+          # Validate the full merged config; only reload if it passes.
+          sudo nginx -t
+          sudo systemctl reload nginx
 
       - name: Purge Cloudflare cache
         continue-on-error: true

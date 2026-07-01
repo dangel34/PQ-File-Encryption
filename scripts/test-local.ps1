@@ -49,26 +49,36 @@ Set-Location $root
 
 $script:Results = [System.Collections.Generic.List[pscustomobject]]::new()
 
+# Thin wrapper so console output funnels through one 'Show-' verbed cmdlet
+# instead of each helper below calling the non-pipeline-friendly Write-Host directly.
+function Show-Line([string]$Text = '', [string]$Color) {
+    if ($Color) {
+        Write-Host $Text -ForegroundColor $Color
+    } else {
+        Write-Host $Text
+    }
+}
+
 function Write-Banner([string]$text) {
     $line = '=' * 56
-    Write-Host ''
-    Write-Host "  $line" -ForegroundColor Cyan
-    Write-Host "  $text" -ForegroundColor Cyan
-    Write-Host "  $line" -ForegroundColor Cyan
+    Show-Line
+    Show-Line "  $line" Cyan
+    Show-Line "  $text" Cyan
+    Show-Line "  $line" Cyan
 }
 
 function Write-StepHeader([string]$name) {
-    Write-Host ''
-    Write-Host "  >> $name" -ForegroundColor Cyan
+    Show-Line
+    Show-Line "  >> $name" Cyan
 }
 
 function Add-Result([string]$name, [string]$state, [double]$secs) {
     $script:Results.Add([pscustomobject]@{ Name = $name; State = $state; Secs = $secs })
     $t = "$([math]::Round($secs,1)) s"
     switch ($state) {
-        'PASS' { Write-Host "     [PASS] $name  ($t)" -ForegroundColor Green }
-        'FAIL' { Write-Host "     [FAIL] $name  ($t)" -ForegroundColor Red }
-        'SKIP' { Write-Host "     [SKIP] $name" -ForegroundColor DarkGray }
+        'PASS' { Show-Line "     [PASS] $name  ($t)" Green }
+        'FAIL' { Show-Line "     [FAIL] $name  ($t)" Red }
+        'SKIP' { Show-Line "     [SKIP] $name" DarkGray }
     }
 }
 
@@ -82,7 +92,7 @@ function Invoke-Step([string]$Name, [scriptblock]$Block) {
         $null = & $Block
         if ($LASTEXITCODE -ne 0) { $ok = $false }
     } catch {
-        Write-Host "     Error: $_" -ForegroundColor Red
+        Show-Line "     Error: $_" Red
         $ok = $false
     }
     $sw.Stop()
@@ -90,9 +100,9 @@ function Invoke-Step([string]$Name, [scriptblock]$Block) {
 }
 
 function Skip-Step([string]$Name, [string]$Reason) {
-    Write-Host ''
-    Write-Host "  >> $Name" -ForegroundColor DarkGray
-    Write-Host "     [SKIP] $Reason" -ForegroundColor DarkGray
+    Show-Line
+    Show-Line "  >> $Name" DarkGray
+    Show-Line "     [SKIP] $Reason" DarkGray
     $script:Results.Add([pscustomobject]@{ Name = $Name; State = 'SKIP'; Secs = 0 })
 }
 

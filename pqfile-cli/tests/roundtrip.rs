@@ -44,6 +44,9 @@ fn roundtrip() {
             "-k",
             privkey.to_str().unwrap(),
             pqf.to_str().unwrap(),
+            // Default output is the original secret.txt, which still exists; --force
+            // permits the intended in-place roundtrip overwrite.
+            "--force",
         ])
         .status()
         .unwrap();
@@ -137,6 +140,122 @@ fn keygen_force_overwrites_existing_keys() {
         .status()
         .unwrap();
     assert!(status.success(), "keygen --force failed");
+}
+
+#[test]
+fn encrypt_refuses_to_clobber_existing_output_without_force() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("secret.txt");
+    fs::write(&input, b"do not clobber my .pqf").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    // Pre-create the default output path (secret.txt.pqf) with sentinel content.
+    let pqf = dir.join("secret.txt.pqf");
+    fs::write(&pqf, b"PRECIOUS EXISTING FILE").unwrap();
+
+    let pubkey = dir.join("pubkey.pem");
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            pubkey.to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        !status.success(),
+        "encrypt must refuse to overwrite an existing .pqf without --force"
+    );
+    // The sentinel file must be untouched.
+    assert_eq!(fs::read(&pqf).unwrap(), b"PRECIOUS EXISTING FILE");
+
+    // With --force the encrypt proceeds and replaces the sentinel.
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            pubkey.to_str().unwrap(),
+            input.to_str().unwrap(),
+            "--force",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt --force should overwrite");
+    assert_eq!(&fs::read(&pqf).unwrap()[..4], b"PQFL");
+}
+
+#[test]
+fn decrypt_refuses_to_clobber_existing_output_without_force() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("note.txt");
+    fs::write(&input, b"decrypt overwrite guard").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    let pubkey = dir.join("pubkey.pem");
+    let privkey = dir.join("privkey.pem");
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            pubkey.to_str().unwrap(),
+            input.to_str().unwrap(),
+            "-o",
+            dir.join("note.enc").to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt failed");
+
+    // An unrelated file sits at the decrypt destination and must not be clobbered.
+    let dest = dir.join("important.txt");
+    fs::write(&dest, b"KEEP ME").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k",
+            privkey.to_str().unwrap(),
+            dir.join("note.enc").to_str().unwrap(),
+            "-o",
+            dest.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        !status.success(),
+        "decrypt must refuse to overwrite an existing file without --force"
+    );
+    assert_eq!(fs::read(&dest).unwrap(), b"KEEP ME");
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k",
+            privkey.to_str().unwrap(),
+            dir.join("note.enc").to_str().unwrap(),
+            "-o",
+            dest.to_str().unwrap(),
+            "--force",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "decrypt --force should overwrite");
+    assert_eq!(fs::read(&dest).unwrap(), b"decrypt overwrite guard");
 }
 
 #[test]
@@ -642,6 +761,8 @@ fn roundtrip_1024() {
             "-k",
             privkey.to_str().unwrap(),
             pqf.to_str().unwrap(),
+            // Default output overwrites the original secret.txt in place.
+            "--force",
         ])
         .status()
         .unwrap();
@@ -833,6 +954,8 @@ fn json_decrypt_output() {
             "-k",
             dir.join("privkey.pem").to_str().unwrap(),
             pqf.to_str().unwrap(),
+            // Default output overwrites the original msg.txt in place.
+            "--force",
         ])
         .output()
         .unwrap();
@@ -996,6 +1119,8 @@ fn roundtrip_hybrid() {
             "-k",
             privkey.to_str().unwrap(),
             pqf.to_str().unwrap(),
+            // Default output overwrites the original secret.txt in place.
+            "--force",
         ])
         .status()
         .unwrap();
