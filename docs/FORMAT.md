@@ -57,7 +57,7 @@ WRAPPED_KEY = AES-256-GCM(
 
 ---
 
-## 4. STREAM Chunk Construction (v3–v10)
+## 4. STREAM Chunk Construction (v3-v10)
 
 The payload is split into chunks of at most `chunk_size` bytes (default 65536). Each chunk is authenticated independently. The last chunk is explicitly flagged to prevent truncation attacks. Applies to v3 through v10 (v10 always uses the default 65536 chunk size).
 
@@ -477,7 +477,7 @@ A signcrypted file is a standard v3 `.pqf` file whose plaintext payload is:
 [signature: SIG_LEN bytes][original plaintext: N bytes]
 ```
 
-`SIG_LEN` is fixed per signature algorithm and is implied by the signing/verifying key pair — no algorithm identifier travels in the file:
+`SIG_LEN` is fixed per signature algorithm and is implied by the signing/verifying key pair - no algorithm identifier travels in the file:
 
 | Algorithm | SIG_LEN |
 |-----------|---------|

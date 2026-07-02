@@ -3,7 +3,7 @@
 Version-controlled copy of the production nginx config that serves the WASM/egui
 web app at `pqfile.nappi.work`. Keeping it here means the site's security posture
 (CSP, COOP/COEP, HSTS, cache policy, Cloudflare allowlist) is diffable, reviewable,
-and can change in lockstep with the frontend — e.g. a new inline script or a new
+and can change in lockstep with the frontend - e.g. a new inline script or a new
 `connect-src` origin ships in the same commit as the code that needs it.
 
 ## Layout
@@ -43,7 +43,7 @@ Adjust binary paths to match the host (`command -v install nginx systemctl`).
   without this server config; the edge policy here is authoritative and adds the headers
   a meta tag cannot express (`frame-ancestors`, HSTS, COOP/COEP).
 - **`brotli_static on`** requires nginx built with the ngx_brotli module. If the host
-  nginx lacks it, `nginx -t` will fail — remove that line or install the module.
+  nginx lacks it, `nginx -t` will fail - remove that line or install the module.
 
 ## First-time bootstrap
 

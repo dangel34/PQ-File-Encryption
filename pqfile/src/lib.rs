@@ -149,5 +149,7 @@ pub use error::PqfileError;
 pub use format::CHUNK_SIZE;
 pub use inspect::{inspect_stream, PqfHeaderInfo, RecipientInfo};
 pub use keys::{PqfPrivateKey, PqfPublicKey, PqfSigningKey, PqfVerifyingKey};
+#[cfg(not(target_arch = "wasm32"))]
+pub use passphrase::{calibrate, CalibrationResult};
 pub use reader::{PqfInfo, PqfReader};
 pub use writer::PqfWriter;

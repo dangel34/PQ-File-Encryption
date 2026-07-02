@@ -757,12 +757,39 @@ pub fn encrypt_stream_passphrase(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    use crate::format::PqfHeaderV10;
-    use crate::passphrase::{derive_key_with_params, ARGON2_M_COST, ARGON2_P_COST, ARGON2_T_COST};
+    use crate::passphrase::{ARGON2_M_COST, ARGON2_P_COST, ARGON2_T_COST};
+    encrypt_stream_passphrase_with_params(
+        passphrase,
+        ARGON2_M_COST,
+        ARGON2_T_COST,
+        ARGON2_P_COST,
+        original_size,
+        reader,
+        writer,
+    )
+}
 
-    let m_kib = ARGON2_M_COST;
-    let t_cost = ARGON2_T_COST;
-    let p_cost = ARGON2_P_COST;
+/// [`encrypt_stream_passphrase`] with caller-chosen Argon2id parameters, e.g.
+/// the output of [`crate::calibrate`].
+///
+/// The parameters travel in the v10 header, so any pqfile can decrypt the
+/// result — but [`crate::decrypt::decrypt_stream_passphrase`] enforces a
+/// default ceiling of m=64 MiB / t=3 as a decompression-bomb guard. A file
+/// written with stronger parameters than that requires the decryptor to raise
+/// the ceiling (`decrypt_stream_passphrase_with_limits`, or the CLI's
+/// `--max-kdf-mem` / `--max-kdf-time`).
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_passphrase_with_params(
+    passphrase: &str,
+    m_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::format::PqfHeaderV10;
+    use crate::passphrase::derive_key_with_params;
 
     let mut salt = [0u8; 16];
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;

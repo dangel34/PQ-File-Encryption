@@ -51,6 +51,12 @@ All features from v2.x through v4.2.4 are complete. Items from v10-format work o
 - **`#![deny(unsafe_code)]` at crate root** with narrow `#[allow(unsafe_code)]` on the sanctioned mmap call
 - **Archive mtime and permissions restore**: `extract()` restores `mtime_secs` and `mode` from the PQFA manifest per entry
 - **`--force` overwrite protection**: all CLI file-writing subcommands refuse to overwrite an existing output unless `--force` is passed (closes the silent-overwrite footgun from the 2026-07-01 audit)
+- **`pqfile check`**: authenticates a `.pqf` end-to-end into a null sink without writing plaintext (named `check` rather than the roadmap's `verify` to avoid colliding with the existing signature-verification subcommand)
+- **Windows ACL restriction on private key files**: `write_private_file` now strips inherited ACEs and leaves a single OWNER RIGHTS full-control ACE via `icacls`, mirroring the Unix 0600 behavior
+- **Argon2id auto-calibration**: `pqfile doctor --calibrate [--target-ms N]` benchmarks the local machine and recommends `--kdf-mem`/`--kdf-time`; `encrypt --passphrase` accepts them via `encrypt_stream_passphrase_with_params`
+- **Default recipient config file**: `~/.config/pqfile/config.toml` / `%APPDATA%\pqfile\config.toml` holding `recipient` and `key` defaults; explicit flags win; global `--no-config` opts out
+- **Supply-chain hardening in release artifacts**: SLSA build provenance attestations (`actions/attest-build-provenance`) on all release artifacts, binaries built with `cargo auditable`, `cargo-vet` runs on PRs as well as pushes, and CI no longer skips itself on workflow-file changes. (Remaining manual step: mark `cargo-vet`/`cargo-deny`/`test-and-lint` as required status checks in the GitHub branch-protection settings.)
+- **Release binary tuning**: workspace `[profile.release]` with thin LTO, one codegen unit, and symbol stripping for smaller, faster native binaries and WASM bundle
 - **SLH-DSA-SHAKE-192f signatures (FIPS 205)**: `sign-keygen --algorithm slh-dsa-shake-192f`; hash-based alternative to ML-DSA-65 at the same security category, auto-detected from the key's PEM tag by all sign/verify/signcrypt paths; plaintext, passphrase-encrypted, and hardware-backed key storage; 192f chosen over 192s because 192s signing is ~20× slower for no category gain
 - **GUI `<meta>` CSP**: `pqfile-gui/index.html` carries an in-document Content-Security-Policy so the WASM app is protected even when served without the nginx header snippet
 
@@ -73,27 +79,15 @@ All features from v2.x through v4.2.4 are complete. Items from v10-format work o
 - **Interactive mode with no arguments**
   Running `pqfile` with no subcommand currently prints clap's help text. Add a guided prompt flow instead (pick encrypt/decrypt/keygen, then fill in the missing pieces interactively), matching FerroCrypt's no-args mode. CLI-layer only; no library changes.
 
-- **`pqfile verify` subcommand**
-  Authenticate a `.pqf` file end-to-end without writing any plaintext: run the full decrypt path into a null sink and report success/failure (with the structured JSON error codes). Useful for validating backups and testing keys without producing a cleartext copy on disk. CLI-layer only; the streaming decryptor already supports arbitrary writers.
-
-- **Default recipient config file**
-  A `~/.config/pqfile/config.toml` (per-platform config dir) holding a default recipient (`pqf1…` string or PEM path) and default key path, so routine `pqfile encrypt file.txt` works without `-r`. Explicit flags always override; `--no-config` opts out for scripting.
-
 ### Security / hardening
-
-- **Windows ACL restriction on private key files**
-  `write_private_file` sets 0600 on Unix but leaves default (typically inheriting) ACLs on Windows. Restrict newly written private keys and Shamir shares to the owner SID, mirroring the Unix behavior.
-
-- **Argon2id auto-calibration**
-  A `pqfile doctor --calibrate` mode that benchmarks Argon2id on the local machine and recommends `m`/`t` parameters hitting a target wall-clock (e.g. 250 ms), for use with v10 passphrase-only encryption and passphrase-protected keys. Currently parameters are fixed at compile time regardless of machine speed.
 
 - **Keyfile as a second factor for passphrase mode**
   `--keyfile <path>` on v10 encrypt/decrypt mixes the keyfile bytes (hashed) into the Argon2id input alongside the passphrase, so decryption requires both something-you-know and something-you-have. Header gains a flag bit; falls back cleanly with a clear error when the keyfile is missing.
 
 ### Supply chain
 
-- **Make `cargo vet` a required CI status check, and publish build provenance**
-  The `cargo vet` policy gap in June 2026 went unnoticed precisely because the job is not required. Promote it (and `cargo deny`) to required checks, add SLSA build provenance attestations (`actions/attest-build-provenance`) to release artifacts, and build release binaries with `cargo auditable` so the dependency tree is embedded and scannable in the shipped binaries.
+- **Mark `cargo vet` / `cargo deny` / `test-and-lint` as required CI status checks**
+  The `cargo vet` policy gap in June 2026 went unnoticed precisely because the job is not required. The code side is done (vet runs on PRs, SLSA provenance and `cargo auditable` ship since the same change); what remains is the GitHub branch-protection setting itself, which must be flipped in the repository settings by an admin.
 
 ### Archives
 

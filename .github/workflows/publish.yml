@@ -137,7 +137,7 @@ jobs:
         run: rsync -a --delete pqfile-gui/dist/ /var/www/pqfile/
 
       # Sync the version-controlled nginx config from nginx/ to /etc/nginx and
-      # reload — but only after `nginx -t` validates the merged config, so a bad
+      # reload - but only after `nginx -t` validates the merged config, so a bad
       # edit can never take the site down. The self-hosted runner user needs a
       # sudoers entry limited to: cp, install, nginx, systemctl reload nginx.
       # See nginx/README.md.

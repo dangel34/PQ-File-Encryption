@@ -1,4 +1,4 @@
-; pqfile Windows Installer — Inno Setup 6
+; pqfile Windows Installer - Inno Setup 6
 ;
 ; Prerequisites:
 ;   1. Build the release binary first:
@@ -16,7 +16,11 @@
 ; With a local PFX cert: signtool sign /fd SHA256 /f cert.pfx /p pass /tr http://timestamp.digicert.com /td SHA256 $f
 
 #define AppName      "pqfile"
+; Overridable from the command line (release.yml passes /DAppVersion=X.Y.Z);
+; the value below is the fallback for local/manual builds.
+#ifndef AppVersion
 #define AppVersion   "4.2.4"
+#endif
 #define AppPublisher "Derek"
 #define AppExeName   "pqfile-desktop.exe"
 #define BinPath      "..\..\target\release\" + AppExeName

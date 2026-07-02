@@ -34,6 +34,7 @@ jobs:
           check "pqfile-desktop/Cargo.toml"           "$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-desktop/Cargo.toml)"
           check "pqfile-desktop/packaging/setup.iss"  "$(grep -oP '#define AppVersion\s+"\K[^"]+' pqfile-desktop/packaging/setup.iss)"
           check "pqfile-cli/packaging/pqfile.spec"    "$(grep -oP '^Version:\s+\K\S+' pqfile-cli/packaging/pqfile.spec)"
+          check "sonar-project.properties"            "$(grep -oP '^sonar\.projectVersion=\K\S+' sonar-project.properties)"
 
           exit $FAIL
 
@@ -94,11 +95,19 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.target }}-
 
+      - name: Install cargo-auditable
+        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+        with:
+          tool: cargo-auditable
+
+      # `cargo auditable` embeds the full dependency tree in a compressed
+      # .dep-v0 section of each binary, so shipped artifacts can be scanned
+      # for vulnerable dependencies with `cargo audit bin` after the fact.
       - name: Build CLI
-        run: cargo build --release --locked -p pqfile-cli --target ${{ matrix.target }}
+        run: cargo auditable build --release --locked -p pqfile-cli --target ${{ matrix.target }}
 
       - name: Build desktop GUI
-        run: cargo build --release --locked -p pqfile-desktop --target ${{ matrix.target }}
+        run: cargo auditable build --release --locked -p pqfile-desktop --target ${{ matrix.target }}
 
       - name: Extract version
         id: version
@@ -191,7 +200,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write  # required for cosign keyless signing via GitHub OIDC
+      id-token: write      # required for cosign keyless signing and provenance attestation via GitHub OIDC
+      attestations: write  # required to store SLSA build provenance attestations
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -208,6 +218,16 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # SLSA build provenance: records which workflow, commit, and runner
+      # produced each artifact, verifiable with `gh attestation verify <file>
+      # --repo dangel34/PQ-File-Encryption`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            artifacts/*
+            !artifacts/checksums.txt
 
       - name: Sign checksums with cosign (keyless)
         run: |
@@ -245,7 +265,7 @@ jobs:
         run: |
           existing=$(gh release view "${{ github.ref_name }}" --json isDraft -q '.isDraft' 2>/dev/null || echo "missing")
           if [ "$existing" = "false" ]; then
-            echo "Release already published — skipping to avoid reverting to draft"
+            echo "Release already published - skipping to avoid reverting to draft"
             exit 0
           fi
           gh release create "${{ github.ref_name }}" \

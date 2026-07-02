@@ -14,7 +14,7 @@ The project uses semantic versioning (`MAJOR.MINOR.PATCH`).
 | New feature (new CLI subcommand, new GUI tab, new library function) | 1.1.0 |
 | Bug fix or internal refactor with no user-visible change | 1.0.2 |
 
-All three crates (`pqfile`, `pqfile-gui`, `pqfile-desktop`) are versioned together and always share the same version number.
+All four crates (`pqfile`, `pqfile-cli`, `pqfile-gui`, `pqfile-desktop`) are versioned together and always share the same version number.
 
 ---
 
@@ -23,21 +23,21 @@ All three crates (`pqfile`, `pqfile-gui`, `pqfile-desktop`) are versioned togeth
 Run the script from the repo root:
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File .\bump-version.ps1  X.Y.Z
+pwsh -ExecutionPolicy Bypass -File .\scripts\bump-version.ps1  X.Y.Z
 ```
 
 Optionally include a one-line RPM changelog summary (defaults to "Version bump"):
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File .\bump-version.ps1  X.Y.Z -SpecChangelog "Fix foo and bar"
+pwsh -ExecutionPolicy Bypass -File .\scripts\bump-version.ps1  X.Y.Z -SpecChangelog "Fix foo and bar"
 ```
 
 The script does the following automatically, aborting early if anything fails:
 
-1. **Pre-flight**: verifies you are on `main` with a clean working tree.
-2. **Tests**: runs `cargo test --workspace`; the bump will not proceed if any test fails.
-3. **Version replacements**: updates all version fields across the codebase (`Cargo.toml` package versions, inter-crate dependency version constraints, Inno Setup `.iss`, RPM `.spec` version + changelog entry). `pqfile-gui`'s `APP_VERSION` reads `env!("CARGO_PKG_VERSION")` and needs no manual update.
-4. **Lock file**: regenerates `Cargo.lock` via `cargo build --workspace`.
+1. **Pre-flight**: verifies you are on `main` with a clean working tree and that the `vX.Y.Z` tag does not already exist locally or on the remote.
+2. **Checks**: runs `cargo fmt --check`, `cargo clippy --workspace --all-targets` (deny warnings), and `cargo test --workspace`; the bump will not proceed if any of them fails.
+3. **Version replacements**: updates all version fields across the codebase (`Cargo.toml` package versions, inter-crate dependency version constraints, Inno Setup `.iss`, RPM `.spec` version + changelog entry, `docs/BUILDING.md` example path, `docs/CHANGELOG.md` release-date stamp, `sonar-project.properties`). `pqfile-gui`'s `APP_VERSION` reads `env!("CARGO_PKG_VERSION")` and needs no manual update.
+4. **Lock file**: regenerates `Cargo.lock` via `cargo check --workspace`.
 5. **Commit, tag, push**: creates a `chore: bump version to X.Y.Z` commit, tags it `vX.Y.Z`, and pushes both to `origin`.
 
 ---
@@ -50,12 +50,12 @@ Pushing to `main` and the tag triggers two workflows in parallel:
 
 Triggered by the `vX.Y.Z` tag. Runs the following jobs in order:
 
-1. Version consistency check across all `Cargo.toml`, `lib.rs`, `.iss`, and `.spec`.
-2. Full test suite (with Cargo cache).
-3. Multi-platform builds: Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64 (CLI + desktop GUI).
-4. Windows installer via Inno Setup.
-5. WASM web app build, archived as `pqfile-web.tar.gz`.
-6. SHA-256 checksums for all artifacts + CycloneDX SBOMs (`sbom-pqfile.cdx.json`, `sbom-pqfile-gui.cdx.json`, `sbom-pqfile-desktop.cdx.json`).
+1. Version consistency check across all `Cargo.toml`, `.iss`, and `.spec` (no separate test job: CI already ran fmt, clippy, and the full suite on the same commit).
+2. Multi-platform builds: Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64 (CLI + desktop GUI), built with `cargo auditable` so the dependency tree is embedded in each binary (scannable via `cargo audit bin`).
+3. Windows installer via Inno Setup.
+4. WASM web app build, archived as `pqfile-web.tar.gz`.
+5. SHA-256 checksums for all artifacts + CycloneDX SBOMs (`sbom-pqfile.cdx.json`, `sbom-pqfile-gui.cdx.json`, `sbom-pqfile-desktop.cdx.json`).
+6. SLSA build provenance attestations for all artifacts (verify with `gh attestation verify <file> --repo dangel34/PQ-File-Encryption`) and a keyless cosign signature over `checksums.txt`.
 7. Creates a **draft** GitHub release with all artifacts attached via the GitHub API.
 8. Deploy job (runs on the self-hosted Raspberry Pi runner after the release is created): downloads the WASM artifact, rsyncs it to `/var/www/pqfile/`, and purges the Cloudflare cache.
 

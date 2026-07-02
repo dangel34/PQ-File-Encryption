@@ -213,6 +213,10 @@ cat secret.txt | pqfile encrypt -r pubkey.pem - > secret.txt.pqf
 
 # Passphrase-only encryption (v10 format, no key pair required)
 pqfile encrypt --passphrase secret.txt
+
+# Stronger Argon2id parameters for v10 (see `pqfile doctor --calibrate` for a
+# machine-tuned recommendation; decryptors above the default need --max-kdf-mem)
+pqfile encrypt --passphrase --kdf-mem 189440 --kdf-time 3 secret.txt
 ```
 
 Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--anonymous-recipients` upgrades to v8 format, dropping the per-slot KEM variant field so key types are hidden. `--pad-recipients` upgrades to v9 format, which additionally pads the slot count to the next power of two with random dummy entries. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3. `--parallel` uses rayon for concurrent chunk processing and requires a single recipient.
@@ -240,6 +244,24 @@ pqfile decrypt --passphrase --max-kdf-mem 32 --max-kdf-time 2 secret.txt.pqf
 ```
 
 If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v10 files (all single-recipient variants) and v4/v7/v8/v9 (multi-recipient).
+
+### Check (verify a backup without writing plaintext)
+
+```bash
+# Run the full decrypt path into a null sink: every chunk's AEAD tag is verified,
+# but no plaintext is written anywhere
+pqfile check -k privkey.pem backup.tar.pqf
+# OK: backup.tar.pqf authenticated (1048576 plaintext bytes)
+
+# v10 passphrase-only files
+pqfile check --passphrase secret.txt.pqf
+
+# Scripting: exit code 0/1 plus structured JSON
+pqfile --json check -k privkey.pem backup.tar.pqf
+# {"status":"ok","input":"backup.tar.pqf","plaintext_bytes":1048576}
+```
+
+Useful for validating backups and testing that a key still decrypts a file, without producing a cleartext copy on disk.
 
 ### Rekey
 
@@ -321,7 +343,7 @@ pqfile sign-keygen --out ./keys --algorithm slh-dsa-shake-192f
 
 Signatures default to ML-DSA-65 (NIST FIPS 204), 3309 bytes, stored in PEM format. The verifying key (1952 bytes) can be distributed alongside the signed content. `sign-keygen` also accepts `--passphrase` and `--hardware --label <LABEL>`, same as `keygen`.
 
-`--algorithm slh-dsa-shake-192f` selects SLH-DSA-SHAKE-192f (NIST FIPS 205) instead: hash-based signatures resting on much more conservative security assumptions than lattices, at the cost of slower signing and 35664-byte signatures. Same NIST security category (3) as ML-DSA-65; best for very long-lived signatures such as archival or release signing. `sign`, `verify`, `signcrypt`, and `signdecrypt` detect the algorithm from the key automatically — no extra flags.
+`--algorithm slh-dsa-shake-192f` selects SLH-DSA-SHAKE-192f (NIST FIPS 205) instead: hash-based signatures resting on much more conservative security assumptions than lattices, at the cost of slower signing and 35664-byte signatures. Same NIST security category (3) as ML-DSA-65; best for very long-lived signatures such as archival or release signing. `sign`, `verify`, `signcrypt`, and `signdecrypt` detect the algorithm from the key automatically - no extra flags.
 
 ### Signcrypt
 
@@ -382,7 +404,27 @@ pqfile doctor secret.txt.pqf
 
 # JSON output for scripting
 pqfile --json doctor privkey.pem
+
+# Benchmark Argon2id on this machine and recommend --kdf-mem / --kdf-time values
+# hitting a target wall-clock time (default 250 ms) for v10 passphrase encryption
+pqfile doctor --calibrate
+pqfile doctor --calibrate --target-ms 500
 ```
+
+Calibration scales the memory cost first (64 MiB floor — the compiled-in default — up to a 1 GiB ceiling), then the time cost. It never recommends parameters weaker than the defaults: a fast machine gets stronger parameters, a slow machine simply gets the defaults back.
+
+### Config file
+
+Routine commands can drop the `-r`/`-k` flags by setting defaults in a config file — `~/.config/pqfile/config.toml` (`$XDG_CONFIG_HOME` respected) or `%APPDATA%\pqfile\config.toml` on Windows:
+
+```toml
+# Default recipient for `encrypt`: a pqf1… string or a pubkey.pem path
+recipient = "pqf1abc..."
+# Default private key for `decrypt` and `check`
+key = "/home/me/.keys/privkey.pem"
+```
+
+With this in place, `pqfile encrypt notes.txt` and `pqfile decrypt notes.txt.pqf` just work. Explicit flags always override the config. Pass the global `--no-config` flag to ignore the file entirely (recommended in scripts). A malformed config is a hard error, never silently ignored. Only `key = "value"` pairs, `#` comments, and `\\`/`\"` escapes are accepted.
 
 ### Shell completions
 

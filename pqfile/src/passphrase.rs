@@ -428,6 +428,105 @@ pub(crate) fn derive_key_with_params(
     Ok(key)
 }
 
+/// Result of benchmarking Argon2id on this machine via [`calibrate`].
+#[cfg(not(target_arch = "wasm32"))]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub struct CalibrationResult {
+    /// Recommended memory cost in KiB.
+    pub m_kib: u32,
+    /// Recommended time cost (iterations).
+    pub t_cost: u32,
+    /// Recommended parallelism (always the compiled-in default).
+    pub p_cost: u32,
+    /// Measured wall-clock time at the recommended parameters, in milliseconds.
+    pub measured_ms: u64,
+    /// Measured wall-clock time at the compiled-in defaults (m=64 MiB, t=3, p=4),
+    /// in milliseconds.
+    pub default_ms: u64,
+}
+
+/// Benchmarks Argon2id on this machine and recommends parameters whose
+/// wall-clock cost is close to `target_ms` milliseconds.
+///
+/// Keeps t=3 and p=4 (the compiled-in defaults) and scales the memory cost,
+/// which dominates both wall-clock time and attack cost; only once the memory
+/// cost reaches its 1 GiB ceiling does the time cost grow instead. The memory
+/// cost never drops below the compiled-in 64 MiB default — a fast machine gets
+/// *stronger* parameters, never weaker ones, and a slow machine simply gets
+/// the defaults back.
+///
+/// Argon2 wall-clock time is close to linear in both memory and time cost, so
+/// one proportional jump from the default measurement plus one correction pass
+/// lands near the target without a long search. Each probe allocates the full
+/// memory cost, so a call may briefly allocate up to 1 GiB.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn calibrate(target_ms: u64) -> Result<CalibrationResult, PqfileError> {
+    const MIN_M_KIB: u32 = ARGON2_M_COST; // 64 MiB floor = compiled-in default
+    const MAX_M_KIB: u32 = 1024 * 1024; // 1 GiB ceiling per probe
+    const MAX_T_COST: u32 = 16;
+
+    let target_ms = target_ms.max(1);
+
+    let probe = |m_kib: u32, t_cost: u32| -> Result<u64, PqfileError> {
+        let salt = [0x5au8; 16];
+        let start = std::time::Instant::now();
+        derive_key_with_params(
+            "pqfile-calibration-probe",
+            &salt,
+            m_kib,
+            t_cost,
+            ARGON2_P_COST,
+        )?;
+        // A probe can complete in under a millisecond with a tiny cost; clamp
+        // to 1 so the proportional scaling below never divides by zero.
+        Ok((start.elapsed().as_millis() as u64).max(1))
+    };
+
+    // Round to whole MiB so the recommendation is stable across runs.
+    let round_mib = |m_kib: u64| -> u32 {
+        let clamped = m_kib.clamp(MIN_M_KIB as u64, MAX_M_KIB as u64) as u32;
+        (clamped / 1024) * 1024
+    };
+
+    let default_ms = probe(ARGON2_M_COST, ARGON2_T_COST)?;
+
+    let mut m_kib = round_mib((ARGON2_M_COST as u64 * target_ms) / default_ms);
+    let mut t_cost = ARGON2_T_COST;
+    let mut measured_ms = if m_kib == ARGON2_M_COST {
+        default_ms
+    } else {
+        let first = probe(m_kib, t_cost)?;
+        // One correction pass against the measured (not extrapolated) time.
+        let corrected = round_mib((m_kib as u64 * target_ms) / first);
+        if corrected == m_kib {
+            first
+        } else {
+            m_kib = corrected;
+            probe(m_kib, t_cost)?
+        }
+    };
+
+    // Memory cost is pinned at the ceiling and still finishing early: grow the
+    // time cost instead.
+    if m_kib == MAX_M_KIB && measured_ms < target_ms {
+        let scaled = (t_cost as u64 * target_ms) / measured_ms;
+        let candidate = (scaled as u32).clamp(ARGON2_T_COST, MAX_T_COST);
+        if candidate != t_cost {
+            t_cost = candidate;
+            measured_ms = probe(m_kib, t_cost)?;
+        }
+    }
+
+    Ok(CalibrationResult {
+        m_kib,
+        t_cost,
+        p_cost: ARGON2_P_COST,
+        measured_ms,
+        default_ms,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,5 +778,18 @@ mod tests {
         let legacy_body = encrypt_signing_seed_legacy(&seed, "migrate-me");
         let recovered = decrypt_signing_seed_legacy(&legacy_body, "migrate-me").unwrap();
         assert_eq!(*recovered, seed);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn calibrate_never_recommends_below_defaults() {
+        // A 1 ms target clamps to the floor: the compiled-in defaults come
+        // back and the default measurement is reused rather than re-probed.
+        let r = calibrate(1).unwrap();
+        assert_eq!(r.m_kib, ARGON2_M_COST);
+        assert_eq!(r.t_cost, ARGON2_T_COST);
+        assert_eq!(r.p_cost, ARGON2_P_COST);
+        assert_eq!(r.measured_ms, r.default_ms);
+        assert!(r.measured_ms >= 1);
     }
 }

@@ -1934,6 +1934,28 @@ mod tests {
     }
 
     #[test]
+    fn v10_custom_params_roundtrip() {
+        // Weaker-than-default params keep the test fast; the header must carry
+        // them and decryption must reproduce the same key from them.
+        let plaintext = b"custom kdf params";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase_with_params(
+            "hunter2",
+            16 * 1024, // 16 MiB
+            2,
+            4,
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
     fn v10_wrong_passphrase_fails() {
         let plaintext = b"secret";
         let mut ct = Vec::new();

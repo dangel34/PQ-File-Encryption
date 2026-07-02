@@ -49,7 +49,7 @@ impl PqfileApp {
         ui.add_space(14.0);
 
         // Show passphrase field for encrypted non-hardware keys (legacy Argon2 detection).
-        // Desktop only — WASM has no way to attempt decryption for the probe.
+        // Desktop only - WASM has no way to attempt decryption for the probe.
         #[cfg(not(target_arch = "wasm32"))]
         {
             let is_encrypted_key = self
@@ -65,7 +65,7 @@ impl PqfileApp {
             if is_encrypted_key {
                 section_label(
                     ui,
-                    "PASSPHRASE (optional — for legacy Argon2 detection)",
+                    "PASSPHRASE (optional - for legacy Argon2 detection)",
                     dark,
                 );
                 card(ui, c_card(dark), c_surface1(dark), |ui| {
@@ -231,7 +231,7 @@ fn doctor_key(
         rows.push(chk(
             CheckKind::Warn,
             "Passphrase protection",
-            "no — consider adding one",
+            "no - consider adding one",
         ));
     }
 
@@ -251,14 +251,14 @@ fn doctor_key(
                 rows.push(chk(
                     CheckKind::Fail,
                     "Expiry",
-                    &format!("EXPIRED — {date} ({} days ago)", -days),
+                    &format!("EXPIRED - {date} ({} days ago)", -days),
                 ));
             } else if days <= 30 {
                 rows.push(chk(
                     CheckKind::Warn,
                     "Expiry",
                     &format!(
-                        "{date} — expires in {days} day{}",
+                        "{date} - expires in {days} day{}",
                         if days == 1 { "" } else { "s" }
                     ),
                 ));
@@ -280,7 +280,7 @@ fn doctor_key(
         rows.push(chk(CheckKind::Info, "Expiry", "not set"));
     }
 
-    // Legacy Argon2 detection — native only, requires a passphrase probe.
+    // Legacy Argon2 detection - native only, requires a passphrase probe.
     #[cfg(not(target_arch = "wasm32"))]
     if is_encrypted && !is_hardware {
         if let Some(pp) = passphrase {
@@ -298,7 +298,7 @@ fn doctor_key(
                 rows.push(chk(
                     CheckKind::Warn,
                     "Argon2 parameters",
-                    "legacy p=1 (pqfile <4.0) — upgrade via Tools > Change Passphrase (legacy)",
+                    "legacy p=1 (pqfile <4.0) - upgrade via Keys > Change Passphrase (legacy)",
                 ));
             } else {
                 rows.push(chk(CheckKind::Pass, "Argon2 parameters", "current (p=4)"));
@@ -312,7 +312,7 @@ fn doctor_key(
         }
     }
 
-    // Revocation sidecar — native only, inferred from file path.
+    // Revocation sidecar - native only, inferred from file path.
     #[cfg(not(target_arch = "wasm32"))]
     {
         if !check_revocation(pem_str, path, &mut rows) {
@@ -386,7 +386,7 @@ fn check_revocation(
             let detail = if reason.is_empty() {
                 "REVOKED".to_owned()
             } else {
-                format!("REVOKED — {reason}")
+                format!("REVOKED - {reason}")
             };
             rows.push(chk(CheckKind::Fail, "Revocation", &detail));
         }
@@ -476,7 +476,7 @@ fn doctor_pqf(info: &inspect::PqfHeaderInfo) -> Vec<DoctorRow> {
             rows.push(chk(
                 CheckKind::Warn,
                 "Recipient anonymity",
-                "none — re-encrypt with anonymous format for privacy",
+                "none - re-encrypt with anonymous format for privacy",
             ));
             rows.push(DoctorRow::Section("Raw Details".to_owned()));
             rows.push(DoctorRow::Kv("Version (hex)".to_owned(), "0x04".to_owned()));

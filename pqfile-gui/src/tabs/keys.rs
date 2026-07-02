@@ -507,7 +507,7 @@ fn fingerprint_identicon(ui: &mut egui::Ui, fingerprint: &str, dark: bool) {
     let painter = ui.painter();
     painter.rect_filled(rect, 3.0, bg_color);
 
-    // 5×5 grid with left–right symmetry: 15 unique cells (5 rows × 3 left cols mirrored).
+    // 5×5 grid with left-right symmetry: 15 unique cells (5 rows × 3 left cols mirrored).
     for row in 0..GRID {
         for col in 0..GRID {
             let sym_col = col.min(GRID - 1 - col);

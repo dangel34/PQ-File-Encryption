@@ -36,3 +36,4 @@ Code `0` is a catch-all for errors that do not map to a known variant (should no
 | 19 | `LegacyKeyFormat` | Key was encrypted with legacy Argon2id parameters (p=1); run `repassphrase --from-legacy` |
 | 20 | `ShareVerificationFailed` | Shamir share fingerprints did not agree; wrong shares or wrong key |
 | 21 | `Truncated` | Stream ended before the final authenticated chunk; re-download the file |
+| 22 | `KdfLimitExceeded` | v10 file's Argon2 parameters exceed the configured ceiling; raise `--max-kdf-mem`/`--max-kdf-time` if the file is trusted |

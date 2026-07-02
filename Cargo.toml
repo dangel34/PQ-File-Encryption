@@ -12,3 +12,11 @@ pqfile-gui = { path = "pqfile-gui", version = "4.2.4" }
 eframe    = { version = "0.35", features = ["default_fonts"] }
 getrandom = { version = "0.4" }
 tempfile  = { version = "3" }
+
+# Release binaries and the WASM bundle. Thin LTO + a single codegen unit speed
+# up the crypto hot paths and shrink both native binaries and the WASM download
+# (on top of Trunk's wasm-opt pass); strip drops symbols from shipped binaries.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

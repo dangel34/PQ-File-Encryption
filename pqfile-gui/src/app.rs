@@ -1501,7 +1501,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
             "## SIGNING KEYS",
             "ML-DSA-65 (FIPS 204) is the default signing algorithm: fast, with 3.3 KB \
              signatures. SLH-DSA-SHAKE-192f (FIPS 205) is a hash-based alternative at the \
-             same security category, resting on more conservative assumptions — choose it \
+             same security category, resting on more conservative assumptions - choose it \
              for very long-lived signatures (archives, releases) if you accept slower \
              signing and 35 KB signatures.",
             "## PROTECTING YOUR PRIVATE KEY",
@@ -1573,7 +1573,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
         Tab::Sign => ("Digital Signatures", &[
             "Signing lets you prove that a file came from you and has not been modified. \
              pqfile supports two post-quantum signature algorithms: ML-DSA-65 (NIST FIPS 204, \
-             the default — fast, 3.3 KB signatures) and SLH-DSA-SHAKE-192f (NIST FIPS 205 — \
+             the default - fast, 3.3 KB signatures) and SLH-DSA-SHAKE-192f (NIST FIPS 205 - \
              hash-based, resting on more conservative security assumptions; slower signing \
              and 35 KB signatures, suited to long-lived signatures). Both offer the same \
              NIST security category.",

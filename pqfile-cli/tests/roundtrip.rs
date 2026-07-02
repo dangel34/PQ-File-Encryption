@@ -1988,3 +1988,190 @@ fn doctor_pqf_file() {
     assert_eq!(v["header_valid"], "true");
     assert!(v["version"].is_string());
 }
+
+// ── pqfile check ──────────────────────────────────────────────────────────────
+
+#[test]
+fn check_authenticates_without_writing_plaintext() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let input = dir.join("secret.txt");
+    fs::write(&input, b"backup validation payload").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let pubkey = dir.join("pubkey.pem");
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            pubkey.to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    // Remove the original so any plaintext write by `check` would be visible.
+    fs::remove_file(&input).unwrap();
+    let files_before: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+
+    let pqf = dir.join("secret.txt.pqf");
+    let privkey = dir.join("privkey.pem");
+    let output = std::process::Command::new(bin())
+        .args([
+            "--json",
+            "check",
+            "-k",
+            privkey.to_str().unwrap(),
+            pqf.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "check failed on a valid file");
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("check output must be valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["plaintext_bytes"], 25);
+
+    let files_after: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(files_before, files_after, "check must not create any files");
+
+    // Corrupt one ciphertext byte inside the final chunk: check must now fail
+    // with the DecryptionFailure JSON code.
+    let mut ct = fs::read(&pqf).unwrap();
+    let last = ct.len() - 2;
+    ct[last] ^= 0x01;
+    fs::write(&pqf, &ct).unwrap();
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "--json",
+            "check",
+            "-k",
+            privkey.to_str().unwrap(),
+            pqf.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "check must fail on tampered ciphertext"
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(String::from_utf8(output.stderr).unwrap().trim().as_bytes())
+            .expect("check error must be valid JSON");
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["code"], 7, "tampered chunk must map to DecryptionFailure");
+}
+
+// ── Config file defaults ──────────────────────────────────────────────────────
+
+/// Escapes a path for use inside a TOML basic string (backslashes on Windows).
+fn toml_escape(p: &std::path::Path) -> String {
+    p.to_str().unwrap().replace('\\', "\\\\")
+}
+
+#[test]
+fn config_file_supplies_default_recipient_and_key() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let cfg_root = dir.join("cfg");
+    fs::create_dir_all(cfg_root.join("pqfile")).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    fs::write(
+        cfg_root.join("pqfile").join("config.toml"),
+        format!(
+            "recipient = \"{}\"\nkey = \"{}\"\n",
+            toml_escape(&dir.join("pubkey.pem")),
+            toml_escape(&dir.join("privkey.pem")),
+        ),
+    )
+    .unwrap();
+
+    let input = dir.join("note.txt");
+    fs::write(&input, b"config default test").unwrap();
+
+    // The same variable feeds both platforms' config lookup: %APPDATA% on
+    // Windows, $XDG_CONFIG_HOME elsewhere.
+    let envs = [
+        ("APPDATA", cfg_root.clone()),
+        ("XDG_CONFIG_HOME", cfg_root.clone()),
+    ];
+
+    // encrypt with no -r: recipient comes from the config.
+    let status = std::process::Command::new(bin())
+        .envs(envs.iter().map(|(k, v)| (*k, v.clone())))
+        .args(["encrypt", input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt must pick up config recipient");
+
+    // decrypt with no -k: key comes from the config.
+    fs::remove_file(&input).unwrap();
+    let pqf = dir.join("note.txt.pqf");
+    let status = std::process::Command::new(bin())
+        .envs(envs.iter().map(|(k, v)| (*k, v.clone())))
+        .args(["decrypt", pqf.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "decrypt must pick up config key");
+    assert_eq!(fs::read(&input).unwrap(), b"config default test");
+
+    // --no-config must restore the missing-recipient error.
+    let status = std::process::Command::new(bin())
+        .envs(envs.iter().map(|(k, v)| (*k, v.clone())))
+        .args(["encrypt", "--no-config", input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "--no-config must ignore the config file");
+}
+
+#[test]
+fn malformed_config_is_a_hard_error() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let cfg_root = dir.join("cfg");
+    fs::create_dir_all(cfg_root.join("pqfile")).unwrap();
+    fs::write(
+        cfg_root.join("pqfile").join("config.toml"),
+        "recipient = unquoted\n",
+    )
+    .unwrap();
+
+    let input = dir.join("note.txt");
+    fs::write(&input, b"x").unwrap();
+
+    let output = std::process::Command::new(bin())
+        .env("APPDATA", &cfg_root)
+        .env("XDG_CONFIG_HOME", &cfg_root)
+        .args(["encrypt", input.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "malformed config must not be ignored"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("config.toml"),
+        "error must name the config file, got: {stderr}"
+    );
+}

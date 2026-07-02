@@ -133,3 +133,40 @@ pub enum PqfileError {
     #[error("stream truncated: file ended before the final authenticated chunk was seen; re-download and try again")]
     Truncated,
 }
+
+impl PqfileError {
+    /// Stable numeric code for this error, as emitted in the CLI's `--json`
+    /// error output and documented in `docs/ERROR_CODES.md`.
+    ///
+    /// Codes are append-only: new variants are always assigned new codes, and
+    /// existing codes are never reused or reassigned. The match below is
+    /// deliberately exhaustive (no `_` arm) so adding a variant without
+    /// assigning it a code is a compile error rather than a silent fallthrough.
+    #[must_use]
+    pub fn code(&self) -> u32 {
+        match self {
+            PqfileError::Io(_) => 1,
+            PqfileError::InvalidMagic => 2,
+            PqfileError::UnsupportedVersion(_) => 3,
+            PqfileError::UnsupportedKem(_) => 4,
+            PqfileError::KemVariantMismatch { .. } => 5,
+            PqfileError::EncryptionFailure => 6,
+            PqfileError::DecryptionFailure => 7,
+            PqfileError::InvalidPem(_) => 8,
+            PqfileError::InvalidKeyLength { .. } => 9,
+            PqfileError::OutputExists(_) => 10,
+            PqfileError::WrongPassphrase => 11,
+            PqfileError::PassphraseRequired => 12,
+            PqfileError::PassphraseMismatch => 13,
+            PqfileError::InvalidSignature => 14,
+            PqfileError::SignatureVerificationFailed => 15,
+            PqfileError::NoMatchingRecipient { .. } => 16,
+            PqfileError::KeyRevoked { .. } => 17,
+            PqfileError::CompressionNotSupported => 18,
+            PqfileError::LegacyKeyFormat => 19,
+            PqfileError::ShareVerificationFailed => 20,
+            PqfileError::Truncated => 21,
+            PqfileError::KdfLimitExceeded { .. } => 22,
+        }
+    }
+}

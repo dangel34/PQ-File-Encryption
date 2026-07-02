@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <!--
     Defence-in-depth CSP backstop. The production deployment sets a stronger CSP
-    (plus COOP/COEP, HSTS, etc.) at the nginx edge — see nginx/ and
+    (plus COOP/COEP, HSTS, etc.) at the nginx edge - see nginx/ and
     docs/NGINX_DEPLOYMENT.md. This meta tag guarantees a baseline policy even when
     the app is self-hosted from dist/ without that server config. 'wasm-unsafe-eval'
     is required to instantiate the WASM module; 'unsafe-inline' covers the small

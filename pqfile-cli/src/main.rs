@@ -25,6 +25,11 @@ struct Cli {
     #[arg(long, global = true, value_name = "N", default_value_t = 0)]
     threads: usize,
 
+    /// Ignore the user config file (~/.config/pqfile/config.toml, or
+    /// %APPDATA%\pqfile\config.toml on Windows). Recommended for scripts.
+    #[arg(long, global = true, default_value_t = false)]
+    no_config: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -120,6 +125,17 @@ enum Command {
         /// Requires multiple -r recipients.
         #[arg(long, default_value_t = false)]
         pad_recipients: bool,
+        /// Argon2id memory cost (KiB) for --passphrase (v10) encryption (default: 65536 = 64 MiB).
+        /// Run `pqfile doctor --calibrate` for a machine-tuned recommendation. Values above the
+        /// default produce files that need --max-kdf-mem raised at decryption time.
+        #[arg(long, value_name = "KIB", default_value_t = 65536u32, requires = "passphrase_only",
+              value_parser = clap::value_parser!(u32).range(65536..=4_194_304))]
+        kdf_mem: u32,
+        /// Argon2id time cost (iterations) for --passphrase (v10) encryption (default: 3).
+        /// Values above the default produce files that need --max-kdf-time raised at decryption time.
+        #[arg(long, value_name = "ITERS", default_value_t = 3u32, requires = "passphrase_only",
+              value_parser = clap::value_parser!(u32).range(3..=64))]
+        kdf_time: u32,
     },
     Decrypt {
         /// Private key file for decryption. Required unless --passphrase is set (v10 files).
@@ -142,6 +158,29 @@ enum Command {
         passphrase_v10: bool,
         /// Maximum Argon2id memory cost (KiB) accepted from a v10 file header (default: 65536 = 64 MiB).
         /// Files whose m parameter exceeds this are rejected before the KDF runs.
+        #[arg(long, value_name = "KIB", default_value_t = 65536u32)]
+        max_kdf_mem: u32,
+        /// Maximum Argon2id time cost (iterations) accepted from a v10 file header (default: 3).
+        #[arg(long, value_name = "ITERS", default_value_t = 3u32)]
+        max_kdf_time: u32,
+    },
+    /// Verify that a .pqf file authenticates end-to-end without writing any plaintext.
+    ///
+    /// Runs the full decryption path into a null sink: every chunk's AEAD tag (and,
+    /// for v10 files, the KDF parameter ceiling) is checked exactly as in a real
+    /// decrypt, but no plaintext is written anywhere. Useful for validating backups
+    /// and testing keys without producing a cleartext copy.
+    Check {
+        /// Private key file for decryption. Required unless --passphrase is set (v10 files).
+        #[arg(short = 'k', value_name = "PRIVKEY", conflicts_with = "passphrase_v10")]
+        key: Option<PathBuf>,
+        /// Encrypted .pqf file to check, or '-' to read from stdin.
+        input: String,
+        /// Check a v10 passphrase-only file. The passphrase is prompted interactively.
+        /// Mutually exclusive with -k.
+        #[arg(long = "passphrase", default_value_t = false, conflicts_with = "key")]
+        passphrase_v10: bool,
+        /// Maximum Argon2id memory cost (KiB) accepted from a v10 file header (default: 65536 = 64 MiB).
         #[arg(long, value_name = "KIB", default_value_t = 65536u32)]
         max_kdf_mem: u32,
         /// Maximum Argon2id time cost (iterations) accepted from a v10 file header (default: 3).
@@ -393,12 +432,21 @@ enum Command {
     /// the header passes sanity checks, without decrypting the payload.
     Doctor {
         /// Path to a private key file (.pem) or an encrypted file (.pqf) to inspect.
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
+        /// Not used with --calibrate.
+        #[arg(value_name = "FILE", required_unless_present = "calibrate")]
+        file: Option<PathBuf>,
         /// Companion public key path for revocation sidecar check (key files only).
         /// If omitted, the sidecar check is skipped.
-        #[arg(long, value_name = "PUBKEY")]
+        #[arg(long, value_name = "PUBKEY", conflicts_with = "calibrate")]
         pubkey: Option<PathBuf>,
+        /// Benchmark Argon2id on this machine and recommend --kdf-mem / --kdf-time
+        /// values for `encrypt --passphrase` (v10) that hit the target wall-clock time.
+        #[arg(long, default_value_t = false)]
+        calibrate: bool,
+        /// Target wall-clock time for --calibrate, in milliseconds.
+        #[arg(long, value_name = "MS", default_value_t = 250, requires = "calibrate",
+              value_parser = clap::value_parser!(u64).range(50..=10_000))]
+        target_ms: u64,
     },
 
     /// Print the fingerprint and Bech32 recipient string for a public key.
@@ -442,6 +490,106 @@ struct EncryptOpts {
     pad_recipients: bool,
     force: bool,
     json: bool,
+    kdf_mem: u32,
+    kdf_time: u32,
+}
+
+/// Optional user defaults loaded from the config file. Explicit flags always win;
+/// the config is only consulted when the corresponding flag is absent, and never
+/// when `--no-config` is passed.
+#[derive(Default)]
+struct CliConfig {
+    /// Default recipient for `encrypt`: a `pqf1…` string or a pubkey.pem path.
+    recipient: Option<String>,
+    /// Default private key path for `decrypt` / `check`.
+    key: Option<PathBuf>,
+}
+
+/// Platform config file location: `%APPDATA%\pqfile\config.toml` on Windows,
+/// `$XDG_CONFIG_HOME/pqfile/config.toml` (falling back to `~/.config/...`) elsewhere.
+fn config_path() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("pqfile").join("config.toml"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .map(|base| base.join("pqfile").join("config.toml"))
+    }
+}
+
+/// Loads the config file, treating a missing file as empty defaults but a
+/// malformed file as a hard error — silently ignoring a typo would make the
+/// command behave differently than the user configured.
+fn load_config(no_config: bool) -> Result<CliConfig, PqfileError> {
+    if no_config {
+        return Ok(CliConfig::default());
+    }
+    let Some(path) = config_path() else {
+        return Ok(CliConfig::default());
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(CliConfig::default()),
+        Err(e) => return Err(PqfileError::Io(e)),
+    };
+    parse_config_toml(&text).map_err(|msg| {
+        PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: {msg}", path.display()),
+        ))
+    })
+}
+
+/// Parses the strict TOML subset the config file uses: `key = "value"` pairs,
+/// blank lines, and `#` comments. Only basic strings with `\\` and `\"` escapes
+/// are accepted; unknown keys are ignored for forward compatibility.
+fn parse_config_toml(text: &str) -> Result<CliConfig, String> {
+    let mut cfg = CliConfig::default();
+    for (idx, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            return Err(format!("line {}: expected `key = \"value\"`", idx + 1));
+        };
+        let val =
+            parse_toml_basic_string(v.trim()).map_err(|e| format!("line {}: {e}", idx + 1))?;
+        match k.trim() {
+            "recipient" => cfg.recipient = Some(val),
+            "key" => cfg.key = Some(PathBuf::from(val)),
+            _ => {}
+        }
+    }
+    Ok(cfg)
+}
+
+fn parse_toml_basic_string(v: &str) -> Result<String, String> {
+    let rest = v
+        .strip_prefix('"')
+        .ok_or("value must be a double-quoted string")?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                let tail = chars.as_str().trim_start();
+                if tail.is_empty() || tail.starts_with('#') {
+                    return Ok(out);
+                }
+                return Err("unexpected content after closing quote".to_owned());
+            }
+            '\\' => match chars.next() {
+                Some('\\') => out.push('\\'),
+                Some('"') => out.push('"'),
+                Some(other) => return Err(format!("unsupported escape `\\{other}`")),
+                None => return Err("dangling escape at end of string".to_owned()),
+            },
+            other => out.push(other),
+        }
+    }
+    Err("unterminated string".to_owned())
 }
 
 /// Returns `OutputExists` when `path` already exists and neither `--force` nor stdout
@@ -470,6 +618,7 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), PqfileError> {
     let json = cli.json;
+    let no_config = cli.no_config;
     if cli.threads > 0 {
         ThreadPoolBuilder::new()
             .num_threads(cli.threads)
@@ -504,9 +653,12 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             anonymous_recipients,
             pad_recipients,
             passphrase_only,
+            kdf_mem,
+            kdf_time,
         } => run_encrypt(
             recipients,
             passphrase_only,
+            no_config,
             input,
             output,
             recursive,
@@ -521,6 +673,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
                 pad_recipients,
                 force,
                 json,
+                kdf_mem,
+                kdf_time,
             },
         ),
         Command::Decrypt {
@@ -535,12 +689,28 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
         } => run_decrypt(
             key,
             passphrase_v10,
+            no_config,
             max_kdf_mem,
             max_kdf_time,
             input,
             output,
             parallel,
             force,
+            json,
+        ),
+        Command::Check {
+            key,
+            input,
+            passphrase_v10,
+            max_kdf_mem,
+            max_kdf_time,
+        } => run_check(
+            key,
+            passphrase_v10,
+            no_config,
+            max_kdf_mem,
+            max_kdf_time,
+            input,
             json,
         ),
         Command::Inspect { input } => inspect(input.as_path(), json),
@@ -604,7 +774,23 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             run_reconstruct_key(shares, out, force, json)
         }
         Command::Repassphrase { key, from_legacy } => run_repassphrase(key, from_legacy, json),
-        Command::Doctor { file, pubkey } => run_doctor(file, pubkey, json),
+        Command::Doctor {
+            file,
+            pubkey,
+            calibrate,
+            target_ms,
+        } => {
+            if calibrate {
+                run_calibrate(target_ms, json)
+            } else {
+                // required_unless_present = "calibrate" guarantees Some here.
+                run_doctor(
+                    file.expect("clap enforces FILE without --calibrate"),
+                    pubkey,
+                    json,
+                )
+            }
+        }
         Command::ImportKey {
             from,
             out,
@@ -733,8 +919,9 @@ fn run_keygen(
 }
 
 fn run_encrypt(
-    recipients: Vec<String>,
+    mut recipients: Vec<String>,
     passphrase_only: bool,
+    no_config: bool,
     input: String,
     output: Option<String>,
     recursive: bool,
@@ -751,9 +938,15 @@ fn run_encrypt(
         return run_encrypt_passphrase(pp.as_str(), &input, output.as_deref(), opts);
     }
     if recipients.is_empty() {
+        if let Some(r) = load_config(no_config)?.recipient {
+            recipients.push(r);
+        }
+    }
+    if recipients.is_empty() {
         return Err(PqfileError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "provide at least one -r recipient, or use --passphrase for passphrase-only encryption",
+            "provide at least one -r recipient, use --passphrase for passphrase-only encryption, \
+             or set a default `recipient` in the config file",
         )));
     }
     if opts.chunk_size > 268_435_456 {
@@ -827,7 +1020,16 @@ fn run_encrypt_passphrase(
     ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
     let mut reader = open_reader(input)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
-    encrypt::encrypt_stream_passphrase(passphrase, original_size, &mut *reader, &mut writer)?;
+    // p=4 matches the library default; --kdf-mem / --kdf-time only tune m and t.
+    encrypt::encrypt_stream_passphrase_with_params(
+        passphrase,
+        opts.kdf_mem,
+        opts.kdf_time,
+        4,
+        original_size,
+        &mut *reader,
+        &mut writer,
+    )?;
     writer.commit()?;
 
     if opts.json {
@@ -1088,7 +1290,7 @@ fn run_encrypt_recursive(
                     json_entries.push(json_object(&[
                         kv_str("file", &path_str),
                         kv_str("status", "error"),
-                        kv_raw("code", &error_code(&e).to_string()),
+                        kv_raw("code", &e.code().to_string()),
                         kv_str("message", &e.to_string()),
                     ]));
                 } else {
@@ -1163,6 +1365,7 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), PqfileError
 fn run_decrypt(
     key: Option<PathBuf>,
     passphrase_v10: bool,
+    no_config: bool,
     max_kdf_mem: u32,
     max_kdf_time: u32,
     input: String,
@@ -1195,12 +1398,7 @@ fn run_decrypt(
             &mut writer,
         )?;
     } else {
-        let key_path = key.ok_or_else(|| {
-            PqfileError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "provide -k <PRIVKEY>, or use --passphrase for v10 passphrase-only files",
-            ))
-        })?;
+        let key_path = resolve_key_path(key, no_config)?;
         let privkey_pem = std::fs::read_to_string(&key_path)?;
         let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
         let pp_str = pp.as_deref().map(|z| z.as_str());
@@ -1234,6 +1432,83 @@ fn run_decrypt(
             "{}",
             json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
         )?;
+    }
+    Ok(())
+}
+
+/// `Write` sink that discards everything but remembers how many bytes passed through.
+struct CountingSink(u64);
+
+impl io::Write for CountingSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0 += buf.len() as u64;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Resolves the private key path for decrypt/check: the explicit `-k` flag
+/// wins, then the config file's `key` entry.
+fn resolve_key_path(key: Option<PathBuf>, no_config: bool) -> Result<PathBuf, PqfileError> {
+    if let Some(k) = key {
+        return Ok(k);
+    }
+    if let Some(k) = load_config(no_config)?.key {
+        return Ok(k);
+    }
+    Err(PqfileError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "provide -k <PRIVKEY>, use --passphrase for v10 passphrase-only files, \
+         or set a default `key` in the config file",
+    )))
+}
+
+fn run_check(
+    key: Option<PathBuf>,
+    passphrase_v10: bool,
+    no_config: bool,
+    max_kdf_mem: u32,
+    max_kdf_time: u32,
+    input: String,
+    json: bool,
+) -> Result<(), PqfileError> {
+    let mut reader = open_reader(&input)?;
+    let mut sink = CountingSink(0);
+
+    if passphrase_v10 {
+        let pp = prompt_passphrase("Enter passphrase: ")?;
+        decrypt::decrypt_stream_passphrase_with_limits(
+            pp.as_str(),
+            max_kdf_mem,
+            max_kdf_time,
+            &mut *reader,
+            &mut sink,
+        )?;
+    } else {
+        let key_path = resolve_key_path(key, no_config)?;
+        let privkey_pem = std::fs::read_to_string(&key_path)?;
+        let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
+        let pp_str = pp.as_deref().map(|z| z.as_str());
+        decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut sink, pp_str)?;
+    }
+
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("input", &input),
+                kv_raw("plaintext_bytes", &sink.0.to_string()),
+            ])
+        );
+    } else {
+        println!(
+            "OK: {input} authenticated ({} plaintext byte{})",
+            sink.0,
+            if sink.0 == 1 { "" } else { "s" }
+        );
     }
     Ok(())
 }
@@ -2161,6 +2436,59 @@ fn run_repassphrase(key: PathBuf, from_legacy: bool, json: bool) -> Result<(), P
     Ok(())
 }
 
+fn run_calibrate(target_ms: u64, json: bool) -> Result<(), PqfileError> {
+    if !json {
+        println!("Benchmarking Argon2id (target: {target_ms} ms per derivation)...");
+    }
+    let r = pqfile::calibrate(target_ms)?;
+
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_raw("target_ms", &target_ms.to_string()),
+                kv_raw("m_kib", &r.m_kib.to_string()),
+                kv_raw("t_cost", &r.t_cost.to_string()),
+                kv_raw("p_cost", &r.p_cost.to_string()),
+                kv_raw("measured_ms", &r.measured_ms.to_string()),
+                kv_raw("default_ms", &r.default_ms.to_string()),
+            ])
+        );
+        return Ok(());
+    }
+
+    println!();
+    println!(
+        "  Compiled-in defaults (m=64 MiB, t=3, p=4) take ~{} ms on this machine.",
+        r.default_ms
+    );
+    println!(
+        "  Recommended: m={} MiB, t={}, p={}  (~{} ms measured)",
+        r.m_kib / 1024,
+        r.t_cost,
+        r.p_cost,
+        r.measured_ms
+    );
+    println!();
+    if r.m_kib == 65536 && r.t_cost == 3 {
+        println!("  The defaults already meet the target; no flags needed.");
+    } else {
+        println!("  Use with passphrase-only (v10) encryption:");
+        println!(
+            "    pqfile encrypt --passphrase --kdf-mem {} --kdf-time {} <FILE>",
+            r.m_kib, r.t_cost
+        );
+        println!();
+        println!("  Note: decrypting such files on another machine requires raising the");
+        println!(
+            "  decryption ceiling: pqfile decrypt --passphrase --max-kdf-mem {} --max-kdf-time {} <FILE>",
+            r.m_kib, r.t_cost
+        );
+    }
+    Ok(())
+}
+
 fn run_doctor(file: PathBuf, pubkey: Option<PathBuf>, json: bool) -> Result<(), PqfileError> {
     let content = std::fs::read(&file)?;
 
@@ -2450,37 +2778,10 @@ fn json_object(pairs: &[String]) -> String {
 
 /// Returns the stable numeric code for a `PqfileError`.
 /// These codes are part of the public API; see `docs/ERROR_CODES.md`.
-fn error_code(e: &PqfileError) -> u32 {
-    match e {
-        PqfileError::Io(_) => 1,
-        PqfileError::InvalidMagic => 2,
-        PqfileError::UnsupportedVersion(_) => 3,
-        PqfileError::UnsupportedKem(_) => 4,
-        PqfileError::KemVariantMismatch { .. } => 5,
-        PqfileError::EncryptionFailure => 6,
-        PqfileError::DecryptionFailure => 7,
-        PqfileError::InvalidPem(_) => 8,
-        PqfileError::InvalidKeyLength { .. } => 9,
-        PqfileError::OutputExists(_) => 10,
-        PqfileError::WrongPassphrase => 11,
-        PqfileError::PassphraseRequired => 12,
-        PqfileError::PassphraseMismatch => 13,
-        PqfileError::InvalidSignature => 14,
-        PqfileError::SignatureVerificationFailed => 15,
-        PqfileError::NoMatchingRecipient { .. } => 16,
-        PqfileError::KeyRevoked { .. } => 17,
-        PqfileError::CompressionNotSupported => 18,
-        PqfileError::LegacyKeyFormat => 19,
-        PqfileError::ShareVerificationFailed => 20,
-        PqfileError::Truncated => 21,
-        _ => 0,
-    }
-}
-
 fn json_error_from(e: &PqfileError) -> String {
     json_object(&[
         kv_str("status", "error"),
-        kv_raw("code", &error_code(e).to_string()),
+        kv_raw("code", &e.code().to_string()),
         kv_str("message", &e.to_string()),
     ])
 }
@@ -2555,5 +2856,28 @@ mod tests {
     fn json_escape_printable_passthrough() {
         let s = "hello/world-OK_123";
         assert_eq!(json_escape(s), s);
+    }
+
+    #[test]
+    fn config_toml_parses_recipient_and_key() {
+        let cfg = parse_config_toml(
+            "# defaults\n\
+             recipient = \"pqf1abcdef\"  # trailing comment\n\
+             \n\
+             key = \"C:\\\\keys\\\\privkey.pem\"\n\
+             future_knob = \"ignored\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.recipient.as_deref(), Some("pqf1abcdef"));
+        assert_eq!(cfg.key.as_deref(), Some(Path::new("C:\\keys\\privkey.pem")));
+    }
+
+    #[test]
+    fn config_toml_rejects_malformed_lines() {
+        assert!(parse_config_toml("recipient = unquoted").is_err());
+        assert!(parse_config_toml("just some words").is_err());
+        assert!(parse_config_toml("key = \"unterminated").is_err());
+        assert!(parse_config_toml("key = \"bad escape \\n\"").is_err());
+        assert!(parse_config_toml("key = \"trailing\" junk").is_err());
     }
 }

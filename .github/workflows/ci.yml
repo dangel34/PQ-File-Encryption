@@ -1,24 +1,23 @@
 name: CI
 
+# Note: workflow files are deliberately NOT in paths-ignore. A push that only
+# edits a workflow still runs the full suite — a broken workflow edit landing
+# with zero checks is how the June 2026 release-pipeline breakage went unnoticed.
 on:
   push:
     branches: [main]
     paths-ignore:
       - 'docs/**'
       - '*.md'
-      - 'STABILITY.md'
       - '.gitleaks.toml'
       - 'supply-chain/imports.lock'
-      - '.github/workflows/**'
   pull_request:
     branches: [main]
     paths-ignore:
       - 'docs/**'
       - '*.md'
-      - 'STABILITY.md'
       - '.gitleaks.toml'
       - 'supply-chain/imports.lock'
-      - '.github/workflows/**'
 
 # Cancel any in-progress run for the same ref so rapid pushes don't pile up.
 # The bench job overrides this with its own group so a push never cancels a
@@ -46,11 +45,12 @@ jobs:
           # sources:    only allow crates.io
           command-arguments: "advisories licenses bans sources"
 
-  # ── Supply-chain vetting (main only) ───────────────────────────────────────
+  # ── Supply-chain vetting ───────────────────────────────────────────────────
+  # Runs on PRs as well as pushes so it can be marked a required status check;
+  # a required check that only runs on push would block every PR forever.
   cargo-vet:
     name: cargo-vet
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     permissions:
       contents: read
     steps:

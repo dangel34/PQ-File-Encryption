@@ -115,11 +115,20 @@ Replace-InFile "$root\docs\BUILDING.md" `
     'pqfile-setup-[\d.]+\.exe' `
     "pqfile-setup-$Version.exe"
 
-# docs/CHANGELOG.md - stamp the unreleased section with today's date
+# docs/CHANGELOG.md - stamp the unreleased section with today's date.
+# The changelog uses a "## [Unreleased]" heading between releases; fall back to
+# the older "[X.Y.Z] - unreleased" convention if someone pre-stamped the version.
 $today = Get-Date -Format "yyyy-MM-dd"
-Replace-InFile "$root\docs\CHANGELOG.md" `
-    "\[$Version\] - unreleased[^\n]*" `
-    "[$Version] - $today"
+$changelogRaw = Get-Content "$root\docs\CHANGELOG.md" -Raw
+if ($changelogRaw -match '(?m)^## \[Unreleased\]') {
+    Replace-InFile "$root\docs\CHANGELOG.md" `
+        '(?m)^## \[Unreleased\]' `
+        "## [$Version] - $today"
+} else {
+    Replace-InFile "$root\docs\CHANGELOG.md" `
+        "\[$Version\] - unreleased[^\n]*" `
+        "[$Version] - $today"
+}
 
 # sonar-project.properties - keep the reported project version in sync
 Replace-InFile "$root\sonar-project.properties" `
