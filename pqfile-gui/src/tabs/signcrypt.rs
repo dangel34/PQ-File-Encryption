@@ -8,7 +8,7 @@ use crate::types::{OpStatus, Tab};
 use crate::widgets::reveal_in_explorer;
 use crate::widgets::{
     card, file_row, passphrase_row, save_result, section_label, seg_tabs, show_status,
-    tab_heading_help,
+    sig_algorithm_hint, tab_heading_help,
 };
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::signcrypt;
@@ -16,13 +16,14 @@ use std::io::Cursor;
 
 impl PqfileApp {
     pub(crate) fn show_signcrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
-        if tab_heading_help(ui, "Signcrypt  (ML-DSA-65 + Encryption)", dark) {
+        if tab_heading_help(ui, "Signcrypt  (Signature + Encryption)", dark) {
             self.help_modal_open = Some(Tab::Signcrypt);
         }
         ui.label(
             RichText::new(
-                "Sign and encrypt a file in one step. The ML-DSA-65 signature is \
-                 embedded inside the AEAD-authenticated ciphertext and cannot be stripped. \
+                "Sign and encrypt a file in one step. The signature (ML-DSA-65 or \
+                 SLH-DSA-SHAKE-192f, detected from the signing key) is embedded inside \
+                 the AEAD-authenticated ciphertext and cannot be stripped. \
                  Use Signdecrypt to verify the sender and decrypt in one step.",
             )
             .size(13.0)
@@ -60,6 +61,7 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            sig_algorithm_hint(ui, self.signcrypt_sk.as_str(), dark);
             ui.add_space(4.0);
             pp_submitted = passphrase_row(
                 ui,
@@ -241,6 +243,7 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            sig_algorithm_hint(ui, self.signdecrypt_vk.as_str(), dark);
             ui.add_space(4.0);
             file_row(
                 ui,

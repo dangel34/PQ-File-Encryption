@@ -8,11 +8,12 @@ use crate::format::CHUNK_SIZE;
 use crate::reader::PqfReader;
 use crate::sign;
 
-// ML-DSA-65 signature length is always exactly 3309 bytes.
-const SIG_LEN: usize = 3309;
-
 /// Payload layout inside the encrypted file:
-///   [signature: SIG_LEN bytes][plaintext: remaining bytes]
+///   [signature: sig_len bytes][plaintext: remaining bytes]
+///
+/// The signature length is fixed per algorithm (3309 bytes for ML-DSA-65,
+/// 35664 bytes for SLH-DSA-SHAKE-192f) and is implied by the signing or
+/// verifying key the caller supplies; no algorithm byte travels in the file.
 ///
 /// The signature covers SHA3-256(plaintext), not the raw plaintext, to allow
 /// streaming without buffering the entire plaintext before signing.
@@ -38,7 +39,7 @@ pub fn signcrypt<R: Read + io::Seek>(
 
     // Sign the 32-byte hash
     let sig_bytes = sign::sign_bytes(sk_pem, &hash, sign_passphrase)?;
-    debug_assert_eq!(sig_bytes.len(), SIG_LEN);
+    let sig_len = sig_bytes.len() as u64;
 
     // Rewind for pass 2
     input
@@ -49,7 +50,7 @@ pub fn signcrypt<R: Read + io::Seek>(
     let sig_cursor = Cursor::new(sig_bytes);
     let mut combined = sig_cursor.chain(input);
 
-    let combined_size = SIG_LEN as u64 + input_len;
+    let combined_size = sig_len + input_len;
     encrypt::encrypt_stream(pubkey_pem, combined_size, chunk_size, &mut combined, writer)
 }
 
@@ -76,9 +77,10 @@ pub fn signdecrypt_bytes<R: Read>(
     reader: R,
     passphrase: Option<&str>,
 ) -> Result<Vec<u8>, PqfileError> {
+    let sig_len = sign::sig_len_for_vk(vk_pem)?;
     let mut pqf = PqfReader::new(reader, privkey_pem, passphrase)?;
 
-    let mut sig_buf = vec![0u8; SIG_LEN];
+    let mut sig_buf = vec![0u8; sig_len];
     pqf.read_exact(&mut sig_buf).map_err(|e| {
         if e.kind() == io::ErrorKind::UnexpectedEof {
             PqfileError::InvalidSignature
@@ -132,9 +134,10 @@ pub fn signdecrypt<R: Read>(
     writer: &mut dyn Write,
     passphrase: Option<&str>,
 ) -> Result<(), PqfileError> {
+    let sig_len = sign::sig_len_for_vk(vk_pem)?;
     let mut pqf = PqfReader::new(reader, privkey_pem, passphrase)?;
 
-    let mut sig_buf = vec![0u8; SIG_LEN];
+    let mut sig_buf = vec![0u8; sig_len];
     pqf.read_exact(&mut sig_buf).map_err(|e| {
         if e.kind() == io::ErrorKind::UnexpectedEof {
             PqfileError::InvalidSignature
@@ -171,10 +174,10 @@ pub fn signcrypt_bytes(
 ) -> Result<(), PqfileError> {
     let hash = Sha3_256::digest(data).to_vec();
     let sig_bytes = sign::sign_bytes(sk_pem, &hash, sign_passphrase)?;
-    debug_assert_eq!(sig_bytes.len(), SIG_LEN);
+    let sig_len = sig_bytes.len() as u64;
     let sig_cursor = std::io::Cursor::new(sig_bytes);
     let mut combined = sig_cursor.chain(data);
-    let combined_size = SIG_LEN as u64 + data.len() as u64;
+    let combined_size = sig_len + data.len() as u64;
     encrypt::encrypt_stream(pubkey_pem, combined_size, chunk_size, &mut combined, writer)
 }
 
@@ -232,6 +235,45 @@ mod tests {
         let mut output = Vec::new();
         signdecrypt(&priv_pem, &vk_pem, ciphertext.as_slice(), &mut output, None).unwrap();
         assert_eq!(output, plaintext);
+    }
+
+    #[test]
+    fn slh_signcrypt_roundtrip_and_wrong_algorithm_vk_fails() {
+        use crate::sign::{sign_keygen_bytes_with_algorithm, SigAlgorithm};
+
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let slh = sign_keygen_bytes_with_algorithm(SigAlgorithm::SlhDsaShake192f, None).unwrap();
+        let plaintext = b"signed with slh-dsa";
+        let mut output = Vec::new();
+        signcrypt_bytes(
+            &slh.sk_pem,
+            &pub_pem,
+            plaintext,
+            &mut output,
+            CHUNK_SIZE,
+            None,
+        )
+        .unwrap();
+
+        // Roundtrip through both decrypt paths.
+        let got = signdecrypt_bytes(&priv_pem, &slh.vk_pem, output.as_slice(), None).unwrap();
+        assert_eq!(got, plaintext);
+        let mut streamed = Vec::new();
+        signdecrypt(
+            &priv_pem,
+            &slh.vk_pem,
+            output.as_slice(),
+            &mut streamed,
+            None,
+        )
+        .unwrap();
+        assert_eq!(streamed, plaintext);
+
+        // Supplying an ML-DSA verifying key implies the wrong signature length,
+        // so verification must fail rather than mis-parse the payload.
+        let ml = sign_keygen_bytes(None).unwrap();
+        let result = signdecrypt_bytes(&priv_pem, &ml.vk_pem, output.as_slice(), None);
+        assert!(result.is_err());
     }
 
     #[test]

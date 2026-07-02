@@ -400,13 +400,22 @@ Private and public keys are stored as PEM (RFC 7468) files. The PEM label determ
 | `ML-KEM-1024 ENCRYPTED PRIVATE KEY` | 108-byte encrypted body |
 | `X25519+ML-KEM-768 ENCRYPTED PRIVATE KEY` | 140-byte encrypted body (see Section 7) |
 
-### 6.2 ML-DSA-65 signing keys
+### 6.2 Signing keys
 
 | PEM Label | Contents |
 |-----------|----------|
 | `ML-DSA-65 VERIFYING KEY` | 1952-byte verifying key |
 | `ML-DSA-65 SIGNING KEY` | 32-byte signing seed (plaintext) |
 | `ML-DSA-65 ENCRYPTED SIGNING KEY` | 76-byte encrypted body (see Section 7) |
+| `SLH-DSA-SHAKE-192F VERIFYING KEY` | 48-byte verifying key (PK.seed ‖ PK.root) |
+| `SLH-DSA-SHAKE-192F SIGNING KEY` | 72-byte seed triple (SK.seed ‖ SK.prf ‖ PK.seed, plaintext) |
+| `SLH-DSA-SHAKE-192F ENCRYPTED SIGNING KEY` | 116-byte encrypted body (see Section 7) |
+
+The SLH-DSA private key is stored as the FIPS 205 seed triple rather than the
+expanded 96-byte key; the full signing key (including PK.root) is deterministically
+recomputed from the triple on every load via `slh_keygen_internal` (Algorithm 18).
+Detached SLH-DSA signatures use the `SLH-DSA-SHAKE-192F SIGNATURE` PEM label
+(35664-byte body).
 
 ### 6.3 Shamir key shares
 
@@ -450,6 +459,7 @@ Offset  Len   Field
 | ML-KEM-512/768/1024 | 64 bytes | 108 bytes |
 | Hybrid X25519+ML-KEM-768 | 96 bytes | 140 bytes |
 | ML-DSA-65 signing | 32 bytes | 76 bytes |
+| SLH-DSA-SHAKE-192f signing | 72 bytes | 116 bytes |
 
 KDF: **Argon2id** (RFC 9106), parameters m=65536 (64 MiB), t=3, p=4, output=32 bytes.
 
@@ -464,12 +474,21 @@ Encryption: **AES-256-GCM** with the 32-byte KDF output as key and a 12-byte ran
 A signcrypted file is a standard v3 `.pqf` file whose plaintext payload is:
 
 ```
-[ML-DSA-65 signature: 3309 bytes][original plaintext: N bytes]
+[signature: SIG_LEN bytes][original plaintext: N bytes]
 ```
+
+`SIG_LEN` is fixed per signature algorithm and is implied by the signing/verifying key pair — no algorithm identifier travels in the file:
+
+| Algorithm | SIG_LEN |
+|-----------|---------|
+| ML-DSA-65 (FIPS 204) | 3309 |
+| SLH-DSA-SHAKE-192f (FIPS 205) | 35664 |
+
+The decryptor derives `SIG_LEN` from the PEM tag of the verifying key supplied to `signdecrypt`. Supplying a key of the wrong algorithm causes signature verification to fail.
 
 The signature covers `SHA3-256(original_plaintext)`, not the raw bytes, enabling streaming. The signature is inside the AEAD ciphertext so it cannot be stripped or reordered.
 
-`ORIGINAL_SIZE` in the header stores `3309 + N`.
+`ORIGINAL_SIZE` in the header stores `SIG_LEN + N`.
 
 ---
 

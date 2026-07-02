@@ -196,7 +196,9 @@ fn doctor_key(
     let is_hardware = keygen::is_hardware_key(pem_str);
     let fp = keygen::fingerprint_pem(pem_str);
 
-    let key_type = if pem_str.contains("ML-DSA") || pem_str.contains("SIGNING") {
+    let key_type = if pem_str.contains("SLH-DSA-SHAKE-192F") {
+        "SLH-DSA-SHAKE-192f signing key"
+    } else if pem_str.contains("ML-DSA") || pem_str.contains("SIGNING") {
         "ML-DSA-65 signing key"
     } else if pem_str.contains("SHAMIR") || pem_str.contains("SHARE") {
         "Shamir share"

@@ -192,8 +192,8 @@ impl PqfileApp {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "ML-DSA-65 signing keys are always selected explicitly in the Keygen tab \
-                     and do not have a default here.",
+                    "Signing keys (ML-DSA-65 or SLH-DSA-SHAKE-192f) are always selected \
+                     explicitly in the Keygen tab and do not have a default here.",
                 )
                 .size(11.5)
                 .color(c_subtext(dark)),

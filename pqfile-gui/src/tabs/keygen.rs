@@ -10,7 +10,7 @@ use pqfile::keygen;
 use pqfile::keygen::keygen_hardware;
 use pqfile::sign;
 #[cfg(not(target_arch = "wasm32"))]
-use pqfile::sign::sign_keygen_hardware;
+use pqfile::sign::sign_keygen_hardware_with_algorithm;
 
 impl PqfileApp {
     pub(crate) fn show_keygen(&mut self, ui: &mut egui::Ui, dark: bool) {
@@ -19,7 +19,7 @@ impl PqfileApp {
         }
         ui.label(
             RichText::new(
-                "Creates a new post-quantum key pair for encryption or signing (ML-DSA-65).",
+                "Creates a new post-quantum key pair for encryption or signing (ML-DSA-65 or SLH-DSA).",
             )
             .size(13.0)
             .color(c_subtext(dark)),
@@ -108,6 +108,14 @@ impl PqfileApp {
                         .size(13.0)
                         .color(c_subtext(dark)),
                 );
+                ui.add_space(8.0);
+                ui.radio_value(
+                    &mut self.keygen_algorithm,
+                    KeygenAlgorithm::SlhDsa192f,
+                    RichText::new("SLH-DSA-SHAKE-192f (signing)")
+                        .size(13.0)
+                        .color(c_subtext(dark)),
+                );
             });
             let desc = match self.keygen_algorithm {
                 KeygenAlgorithm::MlKem512 => "Post-quantum encryption key. 800-byte public key, 64-byte seed. NIST FIPS 203.",
@@ -115,6 +123,7 @@ impl PqfileApp {
                 KeygenAlgorithm::MlKem1024 => "Post-quantum encryption key, highest security level. 1568-byte public key. NIST FIPS 203.",
                 KeygenAlgorithm::HybridX25519MlKem768 => "Hybrid encryption key. X25519 + ML-KEM-768 combined via HKDF-SHA256 for classical + PQ security.",
                 KeygenAlgorithm::MlDsa65 => "Post-quantum signing key. Outputs sign_privkey.pem + sign_pubkey.pem. Use in the Sign tab. NIST FIPS 204.",
+                KeygenAlgorithm::SlhDsa192f => "Hash-based signing key with conservative security assumptions. Slower signing, 35 KB signatures. Best for long-lived signatures. NIST FIPS 205.",
             };
             ui.add_space(4.0);
             ui.label(RichText::new(desc).size(12.0).color(c_subtext(dark)));
@@ -550,6 +559,10 @@ impl PqfileApp {
     }
 
     pub(crate) fn handle_sign_keygen(&mut self) {
+        let sig_alg = self
+            .keygen_algorithm
+            .sig_algorithm()
+            .unwrap_or(pqfile::sign::SigAlgorithm::MlDsa65);
         let passphrase: Option<zeroize::Zeroizing<String>> = if self.keygen_use_passphrase {
             let pp = zeroize::Zeroizing::new((*self.keygen_passphrase).clone());
             let pc = zeroize::Zeroizing::new((*self.keygen_passphrase_confirm).clone());
@@ -584,20 +597,22 @@ impl PqfileApp {
                         OpStatus::Err("Enter a label for the hardware signing key.".to_owned());
                     return;
                 }
-                self.keygen_status = match sign_keygen_hardware(dir, force, &label) {
-                    Ok(r) => OpStatus::Ok(format!(
-                        "Hardware-backed signing keys saved to {}\n\
+                self.keygen_status =
+                    match sign_keygen_hardware_with_algorithm(dir, force, &label, sig_alg) {
+                        Ok(r) => OpStatus::Ok(format!(
+                            "Hardware-backed signing keys saved to {}\n\
                          Seed stored in OS credential store.\nFingerprint: {}",
-                        dir.display(),
-                        r.vk_fingerprint,
-                    )),
-                    Err(e) => OpStatus::Err(e.to_string()),
-                };
+                            dir.display(),
+                            r.vk_fingerprint,
+                        )),
+                        Err(e) => OpStatus::Err(e.to_string()),
+                    };
             } else {
-                self.keygen_status = match sign::sign_keygen(
+                self.keygen_status = match sign::sign_keygen_with_algorithm(
                     dir,
                     force,
                     passphrase.as_deref().map(String::as_str),
+                    sig_alg,
                 ) {
                     Ok(r) => {
                         self.keygen_passphrase.clear();
@@ -616,7 +631,10 @@ impl PqfileApp {
         #[cfg(target_arch = "wasm32")]
         {
             use crate::widgets::download_bytes;
-            match sign::sign_keygen_bytes(passphrase.as_deref().map(String::as_str)) {
+            match sign::sign_keygen_bytes_with_algorithm(
+                sig_alg,
+                passphrase.as_deref().map(String::as_str),
+            ) {
                 Ok(r) => {
                     download_bytes("sign_pubkey.pem", r.vk_pem.as_bytes());
                     download_bytes("sign_privkey.pem", r.sk_pem.as_bytes());

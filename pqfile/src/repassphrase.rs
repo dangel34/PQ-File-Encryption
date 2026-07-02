@@ -3,7 +3,7 @@ use pem::Pem;
 use crate::error::PqfileError;
 use crate::keygen::{PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_512, PRIV_ENC_TAG_HYBRID_768};
 use crate::passphrase;
-use crate::sign::{SK_ENC_TAG, SK_TAG, VK_TAG};
+use crate::sign::{SK_ENC_TAG, SK_TAG, SLH_SK_ENC_TAG, SLH_SK_TAG, SLH_VK_TAG, VK_TAG};
 
 /// Result of a successful `repassphrase` operation.
 #[non_exhaustive]
@@ -77,13 +77,21 @@ pub fn repassphrase(
             pem::encode(&Pem::new(t, new_body))
         }
 
+        // ── SLH-DSA-SHAKE-192f encrypted signing key (72-byte seed triple) ───
+        // No legacy p=1 fallback: SLH-DSA keys postdate the Argon2 migration.
+        t @ SLH_SK_ENC_TAG => {
+            let seed = passphrase::decrypt_slh_signing_seed(parsed.contents(), old_passphrase)?;
+            let new_body = passphrase::encrypt_slh_signing_seed(&seed, new_passphrase)?;
+            pem::encode(&Pem::new(t, new_body))
+        }
+
         // ── Unencrypted or public keys ────────────────────────────────────────
-        t @ SK_TAG => Err(PqfileError::InvalidPem(format!(
+        t @ (SK_TAG | SLH_SK_TAG) => Err(PqfileError::InvalidPem(format!(
             "'{t}' is not encrypted; use `pqfile sign-keygen --passphrase` to create \
              an encrypted signing key"
         )))?,
 
-        t @ VK_TAG => Err(PqfileError::InvalidPem(format!(
+        t @ (VK_TAG | SLH_VK_TAG) => Err(PqfileError::InvalidPem(format!(
             "'{t}' is a public verifying key, not a private key"
         )))?,
 
@@ -229,6 +237,21 @@ mod tests {
         let sk = sign_keygen_bytes(Some("oldsign")).unwrap();
         let r = repassphrase(&sk.sk_pem, "oldsign", "newsign", false).unwrap();
         // Verify the new key signs and verifies correctly.
+        let sig = crate::sign::sign_bytes(&r.privkey_pem, b"hello", Some("newsign")).unwrap();
+        crate::sign::verify_bytes(&sk.vk_pem, b"hello", &sig).unwrap();
+    }
+
+    #[test]
+    fn repassphrase_slh_signing_key_roundtrip() {
+        let sk = crate::sign::sign_keygen_bytes_with_algorithm(
+            crate::sign::SigAlgorithm::SlhDsaShake192f,
+            Some("oldsign"),
+        )
+        .unwrap();
+        let r = repassphrase(&sk.sk_pem, "oldsign", "newsign", false).unwrap();
+        assert!(r.privkey_pem.contains(SLH_SK_ENC_TAG));
+        // Old passphrase no longer works; new one decrypts to a working key.
+        assert!(repassphrase(&r.privkey_pem, "oldsign", "x", false).is_err());
         let sig = crate::sign::sign_bytes(&r.privkey_pem, b"hello", Some("newsign")).unwrap();
         crate::sign::verify_bytes(&sk.vk_pem, b"hello", &sig).unwrap();
     }

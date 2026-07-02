@@ -15,7 +15,7 @@
 
 A quantum-resistant file encryption tool with a CLI and a cross-platform GUI. It combines post-quantum key encapsulation (ML-KEM, NIST FIPS 203) with ChaCha20-Poly1305 authenticated encryption. Four key types are supported: ML-KEM-512, ML-KEM-768, ML-KEM-1024, and a hybrid X25519+ML-KEM-768 mode. A file can be encrypted to multiple recipients in a single pass, optionally hiding key types and even recipient count from an observer.
 
-Digital signatures use ML-DSA-65 (NIST FIPS 204).
+Digital signatures use ML-DSA-65 (NIST FIPS 204), with hash-based SLH-DSA-SHAKE-192f (NIST FIPS 205) as an option for long-lived signatures.
 
 **[docs/QUICKSTART.md](docs/QUICKSTART.md)**: build, install, common CLI commands, GUI overview, deploying.
 
@@ -47,7 +47,7 @@ The optional **hybrid mode** (`--hybrid`) adds X25519 Diffie-Hellman to the key 
 | Randomness                        | OS CSPRNG via `getrandom`                                |
 | Key derivation (passphrase)       | Argon2id (m=64 MiB, t=3, p=4)                            |
 | Key wrapping (passphrase)         | AES-256-GCM                                              |
-| Digital signatures                | ML-DSA-65, NIST FIPS 204                                 |
+| Digital signatures                | ML-DSA-65 (FIPS 204); optional SLH-DSA-SHAKE-192f (FIPS 205) |
 | Key fingerprints                  | SHA3-256 (first 8 bytes, colon-separated hex)            |
 | Threshold key splitting           | Shamir's Secret Sharing over GF(256)                     |
 | Hardware-backed key storage       | OS credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service) |
@@ -84,7 +84,7 @@ PQ-File-Encryption/
 │   │   ├── add_recipient.rs      Add a recipient to a multi-recipient file in place
 │   │   ├── revoke.rs             Key revocation sidecar (.revoked) support
 │   │   ├── shamir.rs             Shamir secret sharing for M-of-N key splitting
-│   │   ├── sign.rs               ML-DSA-65 signing and verification
+│   │   ├── sign.rs               ML-DSA-65 / SLH-DSA-SHAKE-192f signing and verification
 │   │   ├── signcrypt.rs          Combined sign-then-encrypt and signdecrypt
 │   │   ├── passphrase.rs         Argon2id wrapping for passphrase-protected keys
 │   │   ├── repassphrase.rs       Change or upgrade a private key's passphrase
@@ -314,9 +314,14 @@ pqfile sign -k sign_privkey.pem document.pdf -o document.sig
 
 # Verify a signature
 pqfile verify -k sign_pubkey.pem -s document.pdf.sig document.pdf
+
+# Hash-based signatures for long-lived signing (FIPS 205)
+pqfile sign-keygen --out ./keys --algorithm slh-dsa-shake-192f
 ```
 
-Signatures are ML-DSA-65 (NIST FIPS 204), 3309 bytes, stored in PEM format. The verifying key (1952 bytes) can be distributed alongside the signed content. `sign-keygen` also accepts `--passphrase` and `--hardware --label <LABEL>`, same as `keygen`.
+Signatures default to ML-DSA-65 (NIST FIPS 204), 3309 bytes, stored in PEM format. The verifying key (1952 bytes) can be distributed alongside the signed content. `sign-keygen` also accepts `--passphrase` and `--hardware --label <LABEL>`, same as `keygen`.
+
+`--algorithm slh-dsa-shake-192f` selects SLH-DSA-SHAKE-192f (NIST FIPS 205) instead: hash-based signatures resting on much more conservative security assumptions than lattices, at the cost of slower signing and 35664-byte signatures. Same NIST security category (3) as ML-DSA-65; best for very long-lived signatures such as archival or release signing. `sign`, `verify`, `signcrypt`, and `signdecrypt` detect the algorithm from the key automatically — no extra flags.
 
 ### Signcrypt
 
@@ -412,10 +417,10 @@ Errors go to stderr as `{"status":"error","code":N,"message":"..."}`. The numeri
 The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egui code and expose nearly everything the CLI does, each tab with built-in "?" help text:
 
 - **🗝 Keys**: a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only)
-- **🔑 Keygen**: generates ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, or ML-DSA-65 signing key pairs, with optional passphrase or hardware-backed (OS credential store) protection, key expiry dates, and OpenSSH ed25519 key import (native only)
+- **🔑 Keygen**: generates ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, ML-DSA-65, or SLH-DSA-SHAKE-192f signing key pairs, with optional passphrase or hardware-backed (OS credential store) protection, key expiry dates, and OpenSSH ed25519 key import (native only)
 - **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; a folder watcher that auto-encrypts new files (native only); drag-and-drop
 - **🔓 Decrypt**: loads any v2-v9 `.pqf` file, prompting for a passphrase only when the key requires one; includes a **Rekey** sub-tab to re-wrap a file for a new recipient without decrypting the payload
-- **✏ Sign** / **🔏 Signcrypt**: ML-DSA-65 sign and verify, plus combined sign-then-encrypt and decrypt-then-verify
+- **✏ Sign** / **🔏 Signcrypt**: sign and verify with ML-DSA-65 or SLH-DSA-SHAKE-192f (algorithm detected from the loaded key, shown inline), plus combined sign-then-encrypt and decrypt-then-verify
 - **📦 Archive**: pack multiple files into one encrypted `.pqf` container and extract with path-traversal protection
 - **🔀 Shamir**: split a private key into M-of-N shares (with QR code export for air-gapped transfer) and reconstruct from shares
 - **🔍 Inspect**: header metadata for any `.pqf` file, or a key-file health check (passphrase/hardware status, expiry, legacy Argon2 detection, revocation sidecar), without decrypting
@@ -631,17 +636,20 @@ See [docs/FORMAT.md](docs/FORMAT.md) for the byte-level specification (also exer
 -----BEGIN X25519+ML-KEM-768 ENCRYPTED PRIVATE KEY-- (16-byte salt || 12-byte nonce || 112-byte AES ciphertext)
 ```
 
-### ML-DSA-65 (signing only)
+### ML-DSA-65 / SLH-DSA-SHAKE-192f (signing only)
 
 ```
------BEGIN ML-DSA-65 VERIFYING KEY-----  (1952 bytes raw)
------BEGIN ML-DSA-65 SIGNING KEY-----    (32-byte seed)
------BEGIN ML-DSA-65 SIGNATURE-----      (3309 bytes raw)
+-----BEGIN ML-DSA-65 VERIFYING KEY-----             (1952 bytes raw)
+-----BEGIN ML-DSA-65 SIGNING KEY-----               (32-byte seed)
+-----BEGIN ML-DSA-65 SIGNATURE-----                 (3309 bytes raw)
+-----BEGIN SLH-DSA-SHAKE-192F VERIFYING KEY-----    (48 bytes: PK.seed || PK.root)
+-----BEGIN SLH-DSA-SHAKE-192F SIGNING KEY-----      (72-byte seed triple: SK.seed || SK.prf || PK.seed)
+-----BEGIN SLH-DSA-SHAKE-192F SIGNATURE-----        (35664 bytes raw)
 ```
 
 Signing keys can optionally be passphrase-protected (`pqfile sign-keygen --passphrase`) or hardware-backed (`--hardware --label <LABEL>`), the same as encryption keys. Without either, protect `sign_privkey.pem` with filesystem permissions (written 0600 on Unix by default) or disk encryption.
 
-Passphrase-protected private keys derive their AES-256-GCM wrapping key via Argon2id (m=64 MiB, t=3, p=4, 16-byte random salt). The private key stores only the seed (64 bytes for ML-KEM, 96 bytes for hybrid, 32 bytes for ML-DSA-65); the full key is re-derived on load. Keys encrypted with older p=1 parameters (pre-4.0) can be migrated with `pqfile repassphrase --from-legacy`.
+Passphrase-protected private keys derive their AES-256-GCM wrapping key via Argon2id (m=64 MiB, t=3, p=4, 16-byte random salt). The private key stores only the seed (64 bytes for ML-KEM, 96 bytes for hybrid, 32 bytes for ML-DSA-65, 72 bytes for SLH-DSA); the full key is re-derived on load. Keys encrypted with older p=1 parameters (pre-4.0) can be migrated with `pqfile repassphrase --from-legacy`.
 
 ### Hardware key reference (stub)
 
@@ -649,7 +657,7 @@ Passphrase-protected private keys derive their AES-256-GCM wrapping key via Argo
 -----BEGIN ML-KEM-768 HARDWARE KEY REFERENCE-----   (version byte || backend ID byte || label, UTF-8)
 ```
 
-A small PEM stub identifying which OS credential store backend holds the actual seed and the label used to look it up. The seed itself never touches disk. One reference tag per key kind (ML-KEM-512/768/1024, hybrid, and ML-DSA-65 signing).
+A small PEM stub identifying which OS credential store backend holds the actual seed and the label used to look it up. The seed itself never touches disk. One reference tag per key kind (ML-KEM-512/768/1024, hybrid, ML-DSA-65 signing, and SLH-DSA-SHAKE-192f signing).
 
 ### Shamir key share
 
@@ -681,7 +689,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 | `PassphraseRequired`   | Encrypted private key loaded but no passphrase supplied                   |
 | `PassphraseMismatch`   | New passphrase and confirmation do not match                              |
 | `InvalidSignature`     | Signature bytes are malformed                                             |
-| `SignatureVerificationFailed` | ML-DSA-65 signature does not match the file                        |
+| `SignatureVerificationFailed` | Signature (ML-DSA-65 or SLH-DSA) does not match the file           |
 | `NoMatchingRecipient`  | Multi-recipient file: no recipient entry matched the provided private key |
 | `KeyRevoked`           | Key has an active `.revoked` sidecar and was refused for encryption       |
 | `CompressionNotSupported` | Compressed (v6) file decrypted by a build without the `zstd` feature   |
@@ -731,6 +739,7 @@ Key integration tests in `pqfile-cli/tests/roundtrip.rs`:
 | Recursive | directory encryption, skip `.pqf`, non-directory error |
 | 1024-bit | ML-KEM-1024 encrypt/decrypt roundtrip and inspect |
 | ML-DSA | sign-keygen, sign, verify, tamper detection, JSON output |
+| SLH-DSA | keygen tags/lengths, sign/verify roundtrip, tampering, passphrase, signcrypt, repassphrase, CLI roundtrip |
 | Hybrid | X25519+ML-KEM-768 roundtrip, passphrase, inspect, mismatch error |
 | Multi-recipient | 2-key v4 roundtrip, 3-key v4, mixed variants, wrong key rejected |
 | Doctor | key-file and `.pqf`-file health checks |
@@ -749,6 +758,7 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 |------------------|---------|-----------------------------------------------------------------|
 | ml-kem           | 0.3     | ML-KEM-512/768/1024 key encapsulation (FIPS 203)               |
 | ml-dsa           | 0.1     | ML-DSA-65 digital signatures (FIPS 204)                        |
+| slh-dsa          | 0.2.0-rc | SLH-DSA-SHAKE-192f hash-based signatures (FIPS 205)           |
 | chacha20poly1305 | 0.11    | ChaCha20-Poly1305 authenticated encryption                     |
 | aes-gcm          | 0.11    | AES-256-GCM (passphrase key wrapping, multi-recipient session key wrapping) |
 | x25519-dalek     | 2       | X25519 Diffie-Hellman (hybrid mode)                             |

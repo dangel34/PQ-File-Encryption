@@ -162,7 +162,7 @@ enum Command {
         /// Target shell (bash, zsh, fish, powershell, elvish).
         shell: Shell,
     },
-    /// Generate an ML-DSA-65 signing key pair.
+    /// Generate a signing key pair (ML-DSA-65 by default, or SLH-DSA-SHAKE-192f).
     #[command(name = "sign-keygen")]
     SignKeygen {
         /// Directory to write sign_pubkey.pem and sign_privkey.pem.
@@ -181,10 +181,18 @@ enum Command {
         /// Human-readable label for the hardware key (required with --hardware).
         #[arg(long, value_name = "LABEL")]
         label: Option<String>,
+        /// Signature algorithm. SLH-DSA is hash-based: slower signing and larger
+        /// signatures (35 KB vs 3.3 KB), but rests on more conservative security
+        /// assumptions; suited to long-lived signatures.
+        #[arg(long, value_enum, default_value_t = SigAlgorithmArg::MlDsa65)]
+        algorithm: SigAlgorithmArg,
     },
-    /// Sign a file with an ML-DSA-65 signing key, producing a detached .sig file.
+    /// Sign a file with a signing key, producing a detached .sig file.
+    ///
+    /// The signature algorithm (ML-DSA-65 or SLH-DSA-SHAKE-192f) is taken from
+    /// the key itself.
     Sign {
-        /// Path to sign_privkey.pem (ML-DSA-65 signing key).
+        /// Path to sign_privkey.pem (signing key).
         #[arg(short = 'k', value_name = "SIGNING_KEY")]
         key: PathBuf,
         /// File to sign.
@@ -193,9 +201,12 @@ enum Command {
         #[arg(short = 'o', long, value_name = "FILE")]
         output: Option<PathBuf>,
     },
-    /// Verify a detached ML-DSA-65 signature against a file.
+    /// Verify a detached signature against a file.
+    ///
+    /// The signature algorithm (ML-DSA-65 or SLH-DSA-SHAKE-192f) is taken from
+    /// the verifying key itself.
     Verify {
-        /// Path to sign_pubkey.pem (ML-DSA-65 verifying key).
+        /// Path to sign_pubkey.pem (verifying key).
         #[arg(short = 'k', value_name = "VERIFYING_KEY")]
         key: PathBuf,
         /// Detached signature file (.sig).
@@ -543,7 +554,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             passphrase,
             hardware,
             label,
-        } => run_sign_keygen(out, force, passphrase, hardware, label, json),
+            algorithm,
+        } => run_sign_keygen(out, force, passphrase, hardware, label, algorithm, json),
         Command::Sign { key, input, output } => run_sign(key, input, output, json),
         Command::Verify { key, sig, input } => run_verify(key, sig, input, json),
         Command::Revoke { key, reason } => run_revoke(key, &reason, json),
@@ -1583,12 +1595,34 @@ fn print_multi_header(
     }
 }
 
+/// CLI-facing signature algorithm choice for `sign-keygen`.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum SigAlgorithmArg {
+    /// ML-DSA-65 (FIPS 204): lattice-based, fast, 3.3 KB signatures.
+    #[value(name = "ml-dsa-65")]
+    MlDsa65,
+    /// SLH-DSA-SHAKE-192f (FIPS 205): hash-based, conservative assumptions,
+    /// slower signing, 35 KB signatures.
+    #[value(name = "slh-dsa-shake-192f")]
+    SlhDsaShake192f,
+}
+
+impl From<SigAlgorithmArg> for sign::SigAlgorithm {
+    fn from(a: SigAlgorithmArg) -> Self {
+        match a {
+            SigAlgorithmArg::MlDsa65 => sign::SigAlgorithm::MlDsa65,
+            SigAlgorithmArg::SlhDsaShake192f => sign::SigAlgorithm::SlhDsaShake192f,
+        }
+    }
+}
+
 fn run_sign_keygen(
     out: PathBuf,
     force: bool,
     use_passphrase: bool,
     hardware: bool,
     label: Option<String>,
+    algorithm: SigAlgorithmArg,
     json: bool,
 ) -> Result<(), PqfileError> {
     if hardware && use_passphrase {
@@ -1597,6 +1631,7 @@ fn run_sign_keygen(
             "--hardware and --passphrase are mutually exclusive",
         )));
     }
+    let alg: sign::SigAlgorithm = algorithm.into();
     let r = if hardware {
         let lbl = label.ok_or_else(|| {
             PqfileError::Io(std::io::Error::new(
@@ -1604,7 +1639,7 @@ fn run_sign_keygen(
                 "--hardware requires --label <LABEL>",
             ))
         })?;
-        sign::sign_keygen_hardware(&out, force, &lbl)?
+        sign::sign_keygen_hardware_with_algorithm(&out, force, &lbl, alg)?
     } else {
         let pp = if use_passphrase {
             let p = prompt_new_passphrase()?;
@@ -1615,7 +1650,7 @@ fn run_sign_keygen(
         } else {
             None
         };
-        sign::sign_keygen(&out, force, pp.as_deref().map(|z| z.as_str()))?
+        sign::sign_keygen_with_algorithm(&out, force, pp.as_deref().map(|z| z.as_str()), alg)?
     };
     if json {
         println!(
@@ -1625,6 +1660,7 @@ fn run_sign_keygen(
                 kv_str("vk_path", &out.join("sign_pubkey.pem").to_string_lossy()),
                 kv_str("sk_path", &out.join("sign_privkey.pem").to_string_lossy()),
                 kv_str("fingerprint", &r.vk_fingerprint),
+                kv_str("algorithm", alg.name()),
                 kv_str("storage", if hardware { "hardware" } else { "disk" }),
             ])
         );
@@ -1634,6 +1670,7 @@ fn run_sign_keygen(
         } else {
             println!("Signing keys written to {}", out.display());
         }
+        println!("Algorithm: {}", alg.name());
         println!("Verifying key fingerprint: {}", r.vk_fingerprint);
     }
     Ok(())

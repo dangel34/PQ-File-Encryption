@@ -44,8 +44,8 @@ user-login = "epage"
 user-name = "Ed Page"
 
 [[publisher.clap_complete]]
-version = "4.6.6"
-when = "2026-06-30"
+version = "4.6.7"
+when = "2026-07-01"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"

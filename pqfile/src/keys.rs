@@ -194,7 +194,7 @@ impl std::fmt::Debug for PqfPrivateKey {
     }
 }
 
-/// A parsed and validated ML-DSA-65 signing key.
+/// A parsed and validated signing key (ML-DSA-65 or SLH-DSA-SHAKE-192f).
 ///
 /// Encrypted signing keys are identified at construction; supply the passphrase
 /// to the relevant sign/signcrypt function.
@@ -202,15 +202,18 @@ impl std::fmt::Debug for PqfPrivateKey {
 pub struct PqfSigningKey {
     pem: String,
     encrypted: bool,
+    algorithm: &'static str,
 }
 
 impl PqfSigningKey {
-    /// Parse an ML-DSA-65 signing key PEM string.
+    /// Parse a signing key PEM string (ML-DSA-65 or SLH-DSA-SHAKE-192f).
     pub fn from_pem(pem_str: &str) -> Result<Self, PqfileError> {
         let parsed = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
-        let encrypted = match parsed.tag() {
-            t if t == crate::sign::SK_TAG => false,
-            t if t == crate::sign::SK_ENC_TAG => true,
+        let (encrypted, algorithm) = match parsed.tag() {
+            t if t == crate::sign::SK_TAG => (false, "ML-DSA-65"),
+            t if t == crate::sign::SK_ENC_TAG => (true, "ML-DSA-65"),
+            t if t == crate::sign::SLH_SK_TAG => (false, "SLH-DSA-SHAKE-192f"),
+            t if t == crate::sign::SLH_SK_ENC_TAG => (true, "SLH-DSA-SHAKE-192f"),
             tag => {
                 return Err(PqfileError::InvalidPem(format!(
                     "unrecognised signing key tag: {tag}"
@@ -220,12 +223,18 @@ impl PqfSigningKey {
         Ok(PqfSigningKey {
             pem: pem_str.to_owned(),
             encrypted,
+            algorithm,
         })
     }
 
     /// Whether the signing seed is passphrase-encrypted.
     pub fn is_encrypted(&self) -> bool {
         self.encrypted
+    }
+
+    /// Human-readable signature algorithm name.
+    pub fn algorithm(&self) -> &'static str {
+        self.algorithm
     }
 
     /// The PEM string, suitable for passing to `sign::sign_bytes` etc.
@@ -237,39 +246,51 @@ impl PqfSigningKey {
 impl std::fmt::Debug for PqfSigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PqfSigningKey")
-            .field("algorithm", &"ML-DSA-65")
+            .field("algorithm", &self.algorithm)
             .field("encrypted", &self.encrypted)
             .finish()
     }
 }
 
-/// A parsed and validated ML-DSA-65 verifying (public) key.
+/// A parsed and validated verifying (public) key (ML-DSA-65 or SLH-DSA-SHAKE-192f).
 #[derive(Clone)]
 pub struct PqfVerifyingKey {
     pem: String,
     fingerprint: String,
+    algorithm: &'static str,
 }
 
 impl PqfVerifyingKey {
-    /// Parse an ML-DSA-65 verifying key PEM string.
+    /// Parse a verifying key PEM string (ML-DSA-65 or SLH-DSA-SHAKE-192f).
     pub fn from_pem(pem_str: &str) -> Result<Self, PqfileError> {
         let parsed = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
-        if parsed.tag() != "ML-DSA-65 VERIFYING KEY" {
-            return Err(PqfileError::InvalidPem(format!(
-                "expected 'ML-DSA-65 VERIFYING KEY', got '{}'",
-                parsed.tag()
-            )));
-        }
+        let algorithm = match parsed.tag() {
+            t if t == crate::sign::VK_TAG => "ML-DSA-65",
+            t if t == crate::sign::SLH_VK_TAG => "SLH-DSA-SHAKE-192f",
+            tag => {
+                return Err(PqfileError::InvalidPem(format!(
+                    "expected '{}' or '{}', got '{tag}'",
+                    crate::sign::VK_TAG,
+                    crate::sign::SLH_VK_TAG,
+                )))
+            }
+        };
         let fp = fingerprint(parsed.contents());
         Ok(PqfVerifyingKey {
             pem: pem_str.to_owned(),
             fingerprint: fp,
+            algorithm,
         })
     }
 
     /// SHA3-256 fingerprint of the verifying key bytes.
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+
+    /// Human-readable signature algorithm name.
+    pub fn algorithm(&self) -> &'static str {
+        self.algorithm
     }
 
     /// The PEM string, suitable for passing to `sign::verify_bytes` etc.
@@ -281,7 +302,7 @@ impl PqfVerifyingKey {
 impl std::fmt::Debug for PqfVerifyingKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PqfVerifyingKey")
-            .field("algorithm", &"ML-DSA-65")
+            .field("algorithm", &self.algorithm)
             .field("fingerprint", &self.fingerprint)
             .finish()
     }
@@ -530,6 +551,26 @@ mod tests {
     #[test]
     fn signing_key_rejects_invalid_pem() {
         assert!(PqfSigningKey::from_pem("bad pem").is_err());
+    }
+
+    #[test]
+    fn slh_signing_and_verifying_keys_parse_with_algorithm() {
+        use crate::sign::{sign_keygen_bytes_with_algorithm, SigAlgorithm};
+        let r = sign_keygen_bytes_with_algorithm(SigAlgorithm::SlhDsaShake192f, None).unwrap();
+
+        let sk = PqfSigningKey::from_pem(&r.sk_pem).unwrap();
+        assert!(!sk.is_encrypted());
+        assert_eq!(sk.algorithm(), "SLH-DSA-SHAKE-192f");
+
+        let vk = PqfVerifyingKey::from_pem(&r.vk_pem).unwrap();
+        assert_eq!(vk.algorithm(), "SLH-DSA-SHAKE-192f");
+        assert_eq!(vk.fingerprint(), r.vk_fingerprint);
+
+        let enc =
+            sign_keygen_bytes_with_algorithm(SigAlgorithm::SlhDsaShake192f, Some("pw")).unwrap();
+        let sk_enc = PqfSigningKey::from_pem(&enc.sk_pem).unwrap();
+        assert!(sk_enc.is_encrypted());
+        assert_eq!(sk_enc.algorithm(), "SLH-DSA-SHAKE-192f");
     }
 
     #[test]

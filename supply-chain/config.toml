@@ -116,7 +116,7 @@ version = "0.3.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.arrayvec]]
-version = "0.7.7"
+version = "0.7.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.as-raw-xcb-connection]]
@@ -696,7 +696,7 @@ version = "0.11.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.inotify-sys]]
-version = "0.1.5"
+version = "0.1.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.inout]]
@@ -868,7 +868,7 @@ version = "0.8.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.naga]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.ndk]]
@@ -1351,6 +1351,10 @@ criteria = "safe-to-deploy"
 version = "0.4.12"
 criteria = "safe-to-deploy"
 
+[[exemptions.slh-dsa]]
+version = "0.2.0-rc.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.slotmap]]
 version = "1.1.1"
 criteria = "safe-to-deploy"
@@ -1620,39 +1624,39 @@ version = "0.1.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-core]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-core-deps-apple]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-core-deps-emscripten]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-core-deps-wasm]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-core-deps-windows-linux-android]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-hal]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-naga-bridge]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-types]]
-version = "29.0.3"
+version = "29.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.winapi-i686-pc-windows-gnu]]

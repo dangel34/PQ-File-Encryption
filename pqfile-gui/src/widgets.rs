@@ -169,6 +169,26 @@ pub(crate) fn kv_row(ui: &mut egui::Ui, key: &str, value: &str, dark: bool) {
     });
 }
 
+/// Shows a subtle "Algorithm: …" hint below a signing/verifying key file row
+/// once a key is loaded, so users can tell ML-DSA-65 and SLH-DSA keys apart.
+/// Silently shows nothing for unloaded rows or non-signature PEMs.
+pub(crate) fn sig_algorithm_hint(ui: &mut egui::Ui, pem: Option<&str>, dark: bool) {
+    let Some(pem) = pem else { return };
+    let alg = if pem.contains("SLH-DSA-SHAKE-192F") {
+        "SLH-DSA-SHAKE-192f  (FIPS 205, hash-based)"
+    } else if pem.contains("ML-DSA-65") {
+        "ML-DSA-65  (FIPS 204)"
+    } else {
+        return;
+    };
+    ui.add_space(2.0);
+    ui.label(
+        RichText::new(format!("Algorithm: {alg}"))
+            .size(11.5)
+            .color(c_subtext(dark)),
+    );
+}
+
 pub(crate) fn bullet(ui: &mut egui::Ui, text: &str, dark: bool) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("·").size(13.0).color(c_accent(dark)));

@@ -6,6 +6,10 @@ use ml_dsa::{
     SigningKey, Verifier, VerifyingKey,
 };
 use pem::Pem;
+use slh_dsa::signature::{
+    Keypair as SlhKeypairTrait, Signer as SlhSignerTrait, Verifier as SlhVerifierTrait,
+};
+use slh_dsa::Shake192f;
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
@@ -20,6 +24,51 @@ const SIG_TAG: &str = "ML-DSA-65 SIGNATURE";
 const VK_LEN: usize = 1952;
 const SK_SEED_LEN: usize = 32;
 const SIG_LEN: usize = 3309;
+
+pub(crate) const SLH_VK_TAG: &str = "SLH-DSA-SHAKE-192F VERIFYING KEY";
+pub(crate) const SLH_SK_TAG: &str = "SLH-DSA-SHAKE-192F SIGNING KEY";
+pub(crate) const SLH_SK_ENC_TAG: &str = "SLH-DSA-SHAKE-192F ENCRYPTED SIGNING KEY";
+const SLH_SIG_TAG: &str = "SLH-DSA-SHAKE-192F SIGNATURE";
+
+/// FIPS 205 security parameter n for the SHAKE-192 parameter sets.
+const SLH_N: usize = 24;
+/// Verifying key is PK.seed ‖ PK.root.
+const SLH_VK_LEN: usize = 2 * SLH_N;
+/// The stored private key is the seed triple SK.seed ‖ SK.prf ‖ PK.seed;
+/// the full signing key is deterministically recomputed from it (FIPS 205
+/// `slh_keygen_internal`), which also revalidates PK.root on every load.
+pub(crate) const SLH_SK_SEED_LEN: usize = 3 * SLH_N;
+const SLH_SIG_LEN: usize = 35664;
+
+/// Signature algorithm selector for key generation.
+///
+/// Detached signatures, signcrypt payloads, and key PEMs are all
+/// self-describing (the PEM tag carries the algorithm), so only key
+/// generation needs an explicit choice; `sign_bytes`/`verify_bytes`
+/// dispatch on the key that is supplied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SigAlgorithm {
+    /// ML-DSA-65 (FIPS 204), lattice-based. Fast signing, 3309-byte
+    /// signatures. The default.
+    MlDsa65,
+    /// SLH-DSA-SHAKE-192f (FIPS 205), hash-based. Rests on much more
+    /// conservative assumptions than lattices, at the cost of slower
+    /// signing and 35664-byte signatures. Suited to long-lived
+    /// signatures such as archival or release signing.
+    SlhDsaShake192f,
+}
+
+impl SigAlgorithm {
+    /// Human-readable algorithm name.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            SigAlgorithm::MlDsa65 => "ML-DSA-65",
+            SigAlgorithm::SlhDsaShake192f => "SLH-DSA-SHAKE-192f",
+        }
+    }
+}
 
 /// Result of generating an ML-DSA-65 signing key pair.
 #[non_exhaustive]
@@ -36,6 +85,67 @@ pub struct SignKeygenResult {
 /// If `passphrase` is `Some`, the signing seed is encrypted before PEM encoding.
 #[must_use = "signing key pair must be saved or the generated keys are lost"]
 pub fn sign_keygen_bytes(passphrase: Option<&str>) -> Result<SignKeygenResult, PqfileError> {
+    sign_keygen_bytes_with_algorithm(SigAlgorithm::MlDsa65, passphrase)
+}
+
+/// Generates a signing key pair for `algorithm` in memory.
+/// If `passphrase` is `Some`, the signing seed is encrypted before PEM encoding.
+#[must_use = "signing key pair must be saved or the generated keys are lost"]
+pub fn sign_keygen_bytes_with_algorithm(
+    algorithm: SigAlgorithm,
+    passphrase: Option<&str>,
+) -> Result<SignKeygenResult, PqfileError> {
+    match algorithm {
+        SigAlgorithm::MlDsa65 => ml_dsa_keygen_bytes(passphrase),
+        SigAlgorithm::SlhDsaShake192f => slh_dsa_keygen_bytes(passphrase),
+    }
+}
+
+/// Deterministically rebuilds an SLH-DSA-SHAKE-192f signing key from its
+/// 72-byte seed triple (FIPS 205 Algorithm 18, `slh_keygen_internal`).
+///
+/// Calling `slh_keygen_internal` with freshly generated randomness is exactly
+/// FIPS 205 `slh_keygen` (Algorithm 21) with the RNG factored out; storing the
+/// seed triple instead of the expanded key mirrors the ML-DSA seed design and
+/// recomputes PK.root on every load, so a corrupted key cannot go unnoticed.
+fn slh_signing_key_from_seed(seed: &[u8]) -> Result<slh_dsa::SigningKey<Shake192f>, PqfileError> {
+    if seed.len() != SLH_SK_SEED_LEN {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: SLH_SK_SEED_LEN,
+            got: seed.len(),
+        });
+    }
+    Ok(slh_dsa::SigningKey::<Shake192f>::slh_keygen_internal(
+        &seed[..SLH_N],
+        &seed[SLH_N..2 * SLH_N],
+        &seed[2 * SLH_N..],
+    ))
+}
+
+fn slh_dsa_keygen_bytes(passphrase: Option<&str>) -> Result<SignKeygenResult, PqfileError> {
+    let mut seed = Zeroizing::new([0u8; SLH_SK_SEED_LEN]);
+    getrandom::fill(seed.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
+    let sk = slh_signing_key_from_seed(seed.as_ref())?;
+    let vk_bytes = SlhKeypairTrait::verifying_key(&sk).to_vec();
+
+    let vk_pem = pem::encode(&Pem::new(SLH_VK_TAG, vk_bytes.clone()));
+    let sk_pem = if let Some(pp) = passphrase {
+        let body = passphrase::encrypt_slh_signing_seed(&seed, pp)?;
+        pem::encode(&Pem::new(SLH_SK_ENC_TAG, body))
+    } else {
+        pem::encode(&Pem::new(SLH_SK_TAG, seed.to_vec()))
+    };
+
+    let vk_fingerprint = crate::keygen::fingerprint(&vk_bytes);
+
+    Ok(SignKeygenResult {
+        vk_pem,
+        sk_pem,
+        vk_fingerprint,
+    })
+}
+
+fn ml_dsa_keygen_bytes(passphrase: Option<&str>) -> Result<SignKeygenResult, PqfileError> {
     let sk = SigningKey::<MlDsa65>::generate();
     let vk = sk.verifying_key();
 
@@ -77,6 +187,17 @@ pub fn sign_keygen(
     force: bool,
     passphrase: Option<&str>,
 ) -> Result<SignKeygenResult, PqfileError> {
+    sign_keygen_with_algorithm(out_dir, force, passphrase, SigAlgorithm::MlDsa65)
+}
+
+/// Generates a signing key pair for `algorithm` and writes it to `out_dir`.
+/// Returns `OutputExists` if key files already exist and `force` is false.
+pub fn sign_keygen_with_algorithm(
+    out_dir: &Path,
+    force: bool,
+    passphrase: Option<&str>,
+    algorithm: SigAlgorithm,
+) -> Result<SignKeygenResult, PqfileError> {
     let vk_path = out_dir.join("sign_pubkey.pem");
     let sk_path = out_dir.join("sign_privkey.pem");
 
@@ -89,7 +210,7 @@ pub fn sign_keygen(
         }
     }
 
-    let result = sign_keygen_bytes(passphrase)?;
+    let result = sign_keygen_bytes_with_algorithm(algorithm, passphrase)?;
     fs::write(&vk_path, &result.vk_pem)?;
     crate::fsutil::write_private_file(&sk_path, result.sk_pem.as_bytes())?;
 
@@ -107,6 +228,22 @@ pub fn sign_keygen_hardware(
     force: bool,
     label: &str,
 ) -> Result<SignKeygenResult, PqfileError> {
+    sign_keygen_hardware_with_algorithm(out_dir, force, label, SigAlgorithm::MlDsa65)
+}
+
+/// Generates a hardware-backed signing key pair for `algorithm` and writes it
+/// to `out_dir`.
+///
+/// The signing key seed is stored in the OS credential store under `label`;
+/// only a PEM stub is written to disk. Returns `OutputExists` if key files
+/// already exist and `force` is false.
+#[must_use = "hardware sign keygen result must be saved"]
+pub fn sign_keygen_hardware_with_algorithm(
+    out_dir: &Path,
+    force: bool,
+    label: &str,
+    algorithm: SigAlgorithm,
+) -> Result<SignKeygenResult, PqfileError> {
     let vk_path = out_dir.join("sign_pubkey.pem");
     let sk_path = out_dir.join("sign_privkey.pem");
 
@@ -119,7 +256,7 @@ pub fn sign_keygen_hardware(
         }
     }
 
-    let result = sign_keygen_hardware_bytes(label)?;
+    let result = sign_keygen_hardware_bytes_with_algorithm(label, algorithm)?;
     fs::write(&vk_path, &result.vk_pem)?;
     crate::fsutil::write_private_file(&sk_path, result.sk_pem.as_bytes())?;
     Ok(result)
@@ -131,7 +268,35 @@ pub fn sign_keygen_hardware(
 /// Returns `(vk_pem, hw_stub_pem)` via `SignKeygenResult`.
 #[must_use = "hardware sign keygen result must be saved"]
 pub fn sign_keygen_hardware_bytes(label: &str) -> Result<SignKeygenResult, PqfileError> {
+    sign_keygen_hardware_bytes_with_algorithm(label, SigAlgorithm::MlDsa65)
+}
+
+/// Generates a hardware-backed signing key pair for `algorithm` in memory.
+///
+/// The seed (32 bytes for ML-DSA-65, 72 bytes for SLH-DSA-SHAKE-192f) is
+/// stored in the OS credential store under `label`. Returns
+/// `(vk_pem, hw_stub_pem)` via `SignKeygenResult`.
+#[must_use = "hardware sign keygen result must be saved"]
+pub fn sign_keygen_hardware_bytes_with_algorithm(
+    label: &str,
+    algorithm: SigAlgorithm,
+) -> Result<SignKeygenResult, PqfileError> {
     let backend_id = hardware::default_backend_id();
+
+    if algorithm == SigAlgorithm::SlhDsaShake192f {
+        let (stub_body, seed) = hardware::generate_and_store(label, SLH_SK_SEED_LEN, backend_id)?;
+        let sk = slh_signing_key_from_seed(&seed)?;
+        let vk_bytes = SlhKeypairTrait::verifying_key(&sk).to_vec();
+        let vk_pem = pem::encode(&Pem::new(SLH_VK_TAG, vk_bytes.clone()));
+        let sk_pem = pem::encode(&Pem::new(hardware::HW_TAG_SIGNING_SLH, stub_body));
+        let vk_fingerprint = crate::keygen::fingerprint(&vk_bytes);
+        return Ok(SignKeygenResult {
+            vk_pem,
+            sk_pem,
+            vk_fingerprint,
+        });
+    }
+
     let (stub_body, seed) = hardware::generate_and_store(label, SK_SEED_LEN, backend_id)?;
 
     if seed.len() != SK_SEED_LEN {
@@ -158,18 +323,27 @@ pub fn sign_keygen_hardware_bytes(label: &str) -> Result<SignKeygenResult, Pqfil
     })
 }
 
-/// Signs `data` with the ML-DSA-65 signing key in `sk_pem` and returns the raw signature bytes.
+/// Signs `data` with the signing key in `sk_pem` and returns the raw signature
+/// bytes. The algorithm (ML-DSA-65 or SLH-DSA-SHAKE-192f) is determined by the
+/// key's PEM tag.
 #[must_use = "sign result must be used"]
 pub fn sign_bytes(
     sk_pem: &str,
     data: &[u8],
     passphrase: Option<&str>,
 ) -> Result<Vec<u8>, PqfileError> {
-    let sk = parse_signing_key(sk_pem, passphrase)?;
-    let sig: Signature<MlDsa65> = sk.sign(data);
-    let encoded: EncodedSignature<MlDsa65> = sig.encode();
-    let bytes: &[u8] = encoded.as_ref();
-    Ok(bytes.to_vec())
+    match parse_signing_key(sk_pem, passphrase)? {
+        AnySigningKey::MlDsa(sk) => {
+            let sig: Signature<MlDsa65> = sk.sign(data);
+            let encoded: EncodedSignature<MlDsa65> = sig.encode();
+            let bytes: &[u8] = encoded.as_ref();
+            Ok(bytes.to_vec())
+        }
+        AnySigningKey::SlhDsa(sk) => {
+            let sig = SlhSignerTrait::sign(&*sk, data);
+            Ok(sig.to_vec())
+        }
+    }
 }
 
 /// Signs the file at `input` and writes a PEM signature to `sig_out`.
@@ -182,24 +356,73 @@ pub fn sign_file(
 ) -> Result<(), PqfileError> {
     let data = fs::read(input)?;
     let sig_bytes = sign_bytes(sk_pem, &data, passphrase)?;
-    let sig_pem = pem::encode(&Pem::new(SIG_TAG, sig_bytes));
+    let sig_pem = pem::encode(&Pem::new(sig_tag_for_len(sig_bytes.len()), sig_bytes));
     fs::write(sig_out, sig_pem)?;
     Ok(())
 }
 
-/// Verifies `sig_bytes` against `data` using the ML-DSA-65 verifying key in `vk_pem`.
+/// PEM tag for a raw signature, inferred from its length. The two supported
+/// algorithms have distinct fixed signature lengths.
+fn sig_tag_for_len(len: usize) -> &'static str {
+    if len == SLH_SIG_LEN {
+        SLH_SIG_TAG
+    } else {
+        SIG_TAG
+    }
+}
+
+/// Verifies `sig_bytes` against `data` using the verifying key in `vk_pem`.
+/// The algorithm (ML-DSA-65 or SLH-DSA-SHAKE-192f) is determined by the key's
+/// PEM tag.
 #[must_use = "verify result must be used"]
 pub fn verify_bytes(vk_pem: &str, data: &[u8], sig_bytes: &[u8]) -> Result<(), PqfileError> {
-    let vk = parse_verifying_key(vk_pem)?;
-
-    if sig_bytes.len() != SIG_LEN {
-        return Err(PqfileError::InvalidSignature);
+    let p = pem::parse(vk_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+    match p.tag() {
+        VK_TAG => {
+            let vk = decode_ml_verifying_key(p.contents())?;
+            if sig_bytes.len() != SIG_LEN {
+                return Err(PqfileError::InvalidSignature);
+            }
+            let sig = Signature::<MlDsa65>::try_from(sig_bytes)
+                .map_err(|_| PqfileError::InvalidSignature)?;
+            vk.verify(data, &sig)
+                .map_err(|_| PqfileError::SignatureVerificationFailed)
+        }
+        SLH_VK_TAG => {
+            let vk_bytes = p.contents();
+            if vk_bytes.len() != SLH_VK_LEN {
+                return Err(PqfileError::InvalidKeyLength {
+                    expected: SLH_VK_LEN,
+                    got: vk_bytes.len(),
+                });
+            }
+            let vk = slh_dsa::VerifyingKey::<Shake192f>::try_from(vk_bytes)
+                .map_err(|_| PqfileError::InvalidPem("malformed SLH-DSA verifying key".into()))?;
+            if sig_bytes.len() != SLH_SIG_LEN {
+                return Err(PqfileError::InvalidSignature);
+            }
+            let sig = slh_dsa::Signature::<Shake192f>::try_from(sig_bytes)
+                .map_err(|_| PqfileError::InvalidSignature)?;
+            SlhVerifierTrait::verify(&vk, data, &sig)
+                .map_err(|_| PqfileError::SignatureVerificationFailed)
+        }
+        tag => Err(PqfileError::InvalidPem(format!(
+            "expected tag '{VK_TAG}' or '{SLH_VK_TAG}', got '{tag}'"
+        ))),
     }
-    let sig =
-        Signature::<MlDsa65>::try_from(sig_bytes).map_err(|_| PqfileError::InvalidSignature)?;
+}
 
-    vk.verify(data, &sig)
-        .map_err(|_| PqfileError::SignatureVerificationFailed)
+/// Signature length implied by the algorithm of the verifying key in `vk_pem`.
+/// Used by signcrypt to know how many payload bytes to treat as the signature.
+pub(crate) fn sig_len_for_vk(vk_pem: &str) -> Result<usize, PqfileError> {
+    let p = pem::parse(vk_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+    match p.tag() {
+        VK_TAG => Ok(SIG_LEN),
+        SLH_VK_TAG => Ok(SLH_SIG_LEN),
+        tag => Err(PqfileError::InvalidPem(format!(
+            "expected tag '{VK_TAG}' or '{SLH_VK_TAG}', got '{tag}'"
+        ))),
+    }
 }
 
 /// Reads `input` and its detached PEM signature from `sig_path`, then verifies.
@@ -223,51 +446,15 @@ pub fn default_sig_path(input: &Path) -> PathBuf {
     p
 }
 
-fn parse_signing_key(
-    pem_str: &str,
-    passphrase: Option<&str>,
-) -> Result<SigningKey<MlDsa65>, PqfileError> {
-    let p = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
+/// A parsed signing key of either supported algorithm.
+enum AnySigningKey {
+    MlDsa(Box<SigningKey<MlDsa65>>),
+    SlhDsa(Box<slh_dsa::SigningKey<Shake192f>>),
+}
 
-    // Hardware stub: load seed from OS credential store.
-    if p.tag() == hardware::HW_TAG_SIGNING {
-        let seed_bytes = hardware::load_seed(p.contents())?;
-        if seed_bytes.len() != SK_SEED_LEN {
-            return Err(PqfileError::InvalidKeyLength {
-                expected: SK_SEED_LEN,
-                got: seed_bytes.len(),
-            });
-        }
-        let mut seed_arr = [0u8; SK_SEED_LEN];
-        seed_arr.copy_from_slice(&seed_bytes);
-        return Ok(SigningKey::<MlDsa65>::from_seed(&seed_arr.into()));
-    }
-
-    let seed_bytes: Zeroizing<Vec<u8>> = if p.tag() == SK_ENC_TAG {
-        let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
-        let seed = passphrase::decrypt_signing_seed(p.contents(), pp)?;
-        Zeroizing::new(seed.as_slice().to_vec())
-    } else if p.tag() == SK_TAG {
-        Zeroizing::new(p.contents().to_vec())
-    } else {
-        return Err(PqfileError::InvalidPem(format!(
-            "expected tag '{}', '{}', or '{}', got '{}'",
-            SK_TAG,
-            SK_ENC_TAG,
-            hardware::HW_TAG_SIGNING,
-            p.tag()
-        )));
-    };
-
-    if seed_bytes.len() != SK_SEED_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: SK_SEED_LEN,
-            got: seed_bytes.len(),
-        });
-    }
+fn ml_signing_key_from_seed(seed_bytes: &[u8]) -> Result<SigningKey<MlDsa65>, PqfileError> {
     let seed_arr: &[u8; SK_SEED_LEN] =
         seed_bytes
-            .as_slice()
             .try_into()
             .map_err(|_| PqfileError::InvalidKeyLength {
                 expected: SK_SEED_LEN,
@@ -276,16 +463,65 @@ fn parse_signing_key(
     Ok(SigningKey::<MlDsa65>::from_seed(seed_arr.into()))
 }
 
-fn parse_verifying_key(pem_str: &str) -> Result<VerifyingKey<MlDsa65>, PqfileError> {
+fn parse_signing_key(
+    pem_str: &str,
+    passphrase: Option<&str>,
+) -> Result<AnySigningKey, PqfileError> {
     let p = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
-    if p.tag() != VK_TAG {
-        return Err(PqfileError::InvalidPem(format!(
-            "expected tag '{}', got '{}'",
-            VK_TAG,
-            p.tag()
-        )));
+
+    match p.tag() {
+        // Hardware stubs: load seed from OS credential store.
+        hardware::HW_TAG_SIGNING => {
+            let seed_bytes = hardware::load_seed(p.contents())?;
+            Ok(AnySigningKey::MlDsa(Box::new(ml_signing_key_from_seed(
+                &seed_bytes,
+            )?)))
+        }
+        hardware::HW_TAG_SIGNING_SLH => {
+            let seed_bytes = hardware::load_seed(p.contents())?;
+            Ok(AnySigningKey::SlhDsa(Box::new(slh_signing_key_from_seed(
+                &seed_bytes,
+            )?)))
+        }
+        SK_ENC_TAG => {
+            let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
+            let seed = passphrase::decrypt_signing_seed(p.contents(), pp)?;
+            Ok(AnySigningKey::MlDsa(Box::new(ml_signing_key_from_seed(
+                seed.as_slice(),
+            )?)))
+        }
+        SK_TAG => {
+            let seed = Zeroizing::new(p.contents().to_vec());
+            Ok(AnySigningKey::MlDsa(Box::new(ml_signing_key_from_seed(
+                &seed,
+            )?)))
+        }
+        SLH_SK_ENC_TAG => {
+            let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
+            let seed = passphrase::decrypt_slh_signing_seed(p.contents(), pp)?;
+            Ok(AnySigningKey::SlhDsa(Box::new(slh_signing_key_from_seed(
+                seed.as_slice(),
+            )?)))
+        }
+        SLH_SK_TAG => {
+            let seed = Zeroizing::new(p.contents().to_vec());
+            Ok(AnySigningKey::SlhDsa(Box::new(slh_signing_key_from_seed(
+                &seed,
+            )?)))
+        }
+        tag => Err(PqfileError::InvalidPem(format!(
+            "expected tag '{}', '{}', '{}', '{}', '{}', or '{}', got '{tag}'",
+            SK_TAG,
+            SK_ENC_TAG,
+            SLH_SK_TAG,
+            SLH_SK_ENC_TAG,
+            hardware::HW_TAG_SIGNING,
+            hardware::HW_TAG_SIGNING_SLH,
+        ))),
     }
-    let vk_bytes = p.contents();
+}
+
+fn decode_ml_verifying_key(vk_bytes: &[u8]) -> Result<VerifyingKey<MlDsa65>, PqfileError> {
     if vk_bytes.len() != VK_LEN {
         return Err(PqfileError::InvalidKeyLength {
             expected: VK_LEN,
@@ -302,9 +538,14 @@ fn parse_verifying_key(pem_str: &str) -> Result<VerifyingKey<MlDsa65>, PqfileErr
 }
 
 /// Encodes raw signature bytes into a PEM string suitable for writing to a `.sig` file.
+/// The PEM tag is inferred from the signature length (ML-DSA-65 or SLH-DSA-SHAKE-192f).
 #[must_use = "encoded signature must be used"]
 pub fn encode_sig_pem(sig_bytes: &[u8]) -> Vec<u8> {
-    pem::encode(&pem::Pem::new(SIG_TAG, sig_bytes.to_vec())).into_bytes()
+    pem::encode(&pem::Pem::new(
+        sig_tag_for_len(sig_bytes.len()),
+        sig_bytes.to_vec(),
+    ))
+    .into_bytes()
 }
 
 /// Decodes a PEM signature file and returns the raw signature bytes.
@@ -317,10 +558,11 @@ pub fn decode_sig_pem(pem_bytes: &[u8]) -> Result<Vec<u8>, PqfileError> {
 
 fn parse_sig_pem(pem_str: &str) -> Result<Vec<u8>, PqfileError> {
     let p = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
-    if p.tag() != SIG_TAG {
+    if p.tag() != SIG_TAG && p.tag() != SLH_SIG_TAG {
         return Err(PqfileError::InvalidPem(format!(
-            "expected tag '{}', got '{}'",
+            "expected tag '{}' or '{}', got '{}'",
             SIG_TAG,
+            SLH_SIG_TAG,
             p.tag()
         )));
     }
@@ -520,6 +762,130 @@ mod tests {
             sign_keygen(dir.path(), false, None),
             Err(PqfileError::OutputExists(_))
         ));
+    }
+
+    // ── SLH-DSA-SHAKE-192f ─────────────────────────────────────────────────
+    // Signing is expensive in debug builds (~3 s per signature), so these
+    // tests sign once and reuse the signature for several assertions.
+
+    #[test]
+    fn slh_keygen_bytes_produces_correct_tags_and_lengths() {
+        let r = sign_keygen_bytes_with_algorithm(SigAlgorithm::SlhDsaShake192f, None).unwrap();
+        assert!(r.vk_pem.contains(SLH_VK_TAG));
+        assert!(r.sk_pem.contains(SLH_SK_TAG));
+        let vk = pem::parse(&r.vk_pem).unwrap();
+        assert_eq!(vk.contents().len(), SLH_VK_LEN);
+        let sk = pem::parse(&r.sk_pem).unwrap();
+        assert_eq!(sk.contents().len(), SLH_SK_SEED_LEN);
+        assert!(!r.vk_fingerprint.is_empty());
+    }
+
+    #[test]
+    fn slh_sign_verify_roundtrip_and_rejects_tampering() {
+        let r = sign_keygen_bytes_with_algorithm(SigAlgorithm::SlhDsaShake192f, None).unwrap();
+        let msg = b"hello slh-dsa";
+        let sig = sign_bytes(&r.sk_pem, msg, None).unwrap();
+        assert_eq!(sig.len(), SLH_SIG_LEN);
+
+        // Valid signature verifies.
+        verify_bytes(&r.vk_pem, msg, &sig).unwrap();
+
+        // Tampered message rejected.
+        assert!(matches!(
+            verify_bytes(&r.vk_pem, b"tampered", &sig),
+            Err(PqfileError::SignatureVerificationFailed)
+        ));
+
+        // Tampered signature rejected.
+        let mut bad_sig = sig.clone();
+        bad_sig[0] ^= 0xff;
+        assert!(matches!(
+            verify_bytes(&r.vk_pem, msg, &bad_sig),
+            Err(PqfileError::InvalidSignature | PqfileError::SignatureVerificationFailed)
+        ));
+
+        // Wrong-algorithm verifying key rejects by signature length.
+        let ml = sign_keygen_bytes(None).unwrap();
+        assert!(matches!(
+            verify_bytes(&ml.vk_pem, msg, &sig),
+            Err(PqfileError::InvalidSignature)
+        ));
+
+        // Detached-signature PEM helpers pick the SLH tag and roundtrip.
+        let sig_pem = encode_sig_pem(&sig);
+        assert!(String::from_utf8_lossy(&sig_pem).contains(SLH_SIG_TAG));
+        assert_eq!(decode_sig_pem(&sig_pem).unwrap(), sig);
+    }
+
+    #[test]
+    fn slh_sign_verify_roundtrip_with_passphrase() {
+        let r = sign_keygen_bytes_with_algorithm(SigAlgorithm::SlhDsaShake192f, Some("mypass"))
+            .unwrap();
+        let p = pem::parse(&r.sk_pem).unwrap();
+        assert_eq!(p.tag(), SLH_SK_ENC_TAG);
+        assert_eq!(
+            p.contents().len(),
+            crate::passphrase::ENCRYPTED_SLH_SIGNING_BODY_LEN
+        );
+
+        // Wrong passphrase and missing passphrase both fail before signing.
+        assert!(matches!(
+            sign_bytes(&r.sk_pem, b"data", Some("wrong")),
+            Err(PqfileError::WrongPassphrase)
+        ));
+        assert!(matches!(
+            sign_bytes(&r.sk_pem, b"data", None),
+            Err(PqfileError::PassphraseRequired)
+        ));
+
+        let msg = b"signed with encrypted slh key";
+        let sig = sign_bytes(&r.sk_pem, msg, Some("mypass")).unwrap();
+        verify_bytes(&r.vk_pem, msg, &sig).unwrap();
+    }
+
+    #[test]
+    fn slh_keygen_writes_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = sign_keygen_with_algorithm(dir.path(), false, None, SigAlgorithm::SlhDsaShake192f)
+            .unwrap();
+        assert!(dir.path().join("sign_pubkey.pem").exists());
+        assert!(dir.path().join("sign_privkey.pem").exists());
+        assert!(!r.vk_fingerprint.is_empty());
+        // Second call without force refuses to overwrite.
+        assert!(matches!(
+            sign_keygen_with_algorithm(dir.path(), false, None, SigAlgorithm::SlhDsaShake192f),
+            Err(PqfileError::OutputExists(_))
+        ));
+    }
+
+    #[test]
+    fn slh_seed_is_deterministic() {
+        // The same 72-byte seed triple must always rebuild the same key pair.
+        let seed = [7u8; SLH_SK_SEED_LEN];
+        let sk1 = slh_signing_key_from_seed(&seed).unwrap();
+        let sk2 = slh_signing_key_from_seed(&seed).unwrap();
+        assert_eq!(
+            SlhKeypairTrait::verifying_key(&sk1).to_vec(),
+            SlhKeypairTrait::verifying_key(&sk2).to_vec()
+        );
+    }
+
+    #[test]
+    fn slh_wrong_seed_length_returns_error() {
+        let wrong_pem = pem::encode(&Pem::new(SLH_SK_TAG, vec![0u8; 32]));
+        assert!(matches!(
+            sign_bytes(&wrong_pem, b"data", None),
+            Err(PqfileError::InvalidKeyLength { .. })
+        ));
+    }
+
+    #[test]
+    fn sig_len_for_vk_dispatches_on_tag() {
+        let ml = sign_keygen_bytes(None).unwrap();
+        assert_eq!(sig_len_for_vk(&ml.vk_pem).unwrap(), SIG_LEN);
+        let slh_vk_pem = pem::encode(&Pem::new(SLH_VK_TAG, vec![0u8; SLH_VK_LEN]));
+        assert_eq!(sig_len_for_vk(&slh_vk_pem).unwrap(), SLH_SIG_LEN);
+        assert!(sig_len_for_vk(&ml.sk_pem).is_err());
     }
 
     #[test]

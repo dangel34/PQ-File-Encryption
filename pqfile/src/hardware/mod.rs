@@ -44,6 +44,8 @@ pub const HW_TAG_1024: &str = "ML-KEM-1024 HARDWARE KEY REFERENCE";
 pub const HW_TAG_HYBRID_768: &str = "X25519+ML-KEM-768 HARDWARE KEY REFERENCE";
 /// PEM tag for an ML-DSA-65 hardware signing key reference.
 pub const HW_TAG_SIGNING: &str = "ML-DSA-65 HARDWARE SIGNING KEY REFERENCE";
+/// PEM tag for an SLH-DSA-SHAKE-192f hardware signing key reference.
+pub const HW_TAG_SIGNING_SLH: &str = "SLH-DSA-SHAKE-192F HARDWARE SIGNING KEY REFERENCE";
 
 /// Returns `true` if `tag` is any hardware key PEM tag.
 ///
@@ -53,7 +55,12 @@ pub const HW_TAG_SIGNING: &str = "ML-DSA-65 HARDWARE SIGNING KEY REFERENCE";
 pub fn is_hardware_tag(tag: &str) -> bool {
     matches!(
         tag,
-        HW_TAG_512 | HW_TAG_768 | HW_TAG_1024 | HW_TAG_HYBRID_768 | HW_TAG_SIGNING
+        HW_TAG_512
+            | HW_TAG_768
+            | HW_TAG_1024
+            | HW_TAG_HYBRID_768
+            | HW_TAG_SIGNING
+            | HW_TAG_SIGNING_SLH
     )
 }
 

@@ -8,20 +8,21 @@ use crate::types::{OpStatus, Tab};
 use crate::widgets::reveal_in_explorer;
 use crate::widgets::{
     card, file_row, passphrase_row, save_result, section_label, seg_tabs, show_status,
-    tab_heading_help,
+    sig_algorithm_hint, tab_heading_help,
 };
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::sign;
 
 impl PqfileApp {
     pub(crate) fn show_sign(&mut self, ui: &mut egui::Ui, dark: bool) {
-        if tab_heading_help(ui, "Digital Signatures  (ML-DSA-65)", dark) {
+        if tab_heading_help(ui, "Digital Signatures  (ML-DSA-65 / SLH-DSA)", dark) {
             self.help_modal_open = Some(Tab::Sign);
         }
         ui.label(
             RichText::new(
-                "Sign any file with an ML-DSA-65 private key and verify detached .sig \
-                 signatures. To generate signing key pairs, use the Keygen tab.",
+                "Sign any file with a post-quantum signing key and verify detached .sig \
+                 signatures. The algorithm (ML-DSA-65 or SLH-DSA-SHAKE-192f) is detected \
+                 from the key automatically. To generate signing key pairs, use the Keygen tab.",
             )
             .size(13.0)
             .color(c_subtext(dark)),
@@ -58,6 +59,7 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            sig_algorithm_hint(ui, self.sign_sk.as_str(), dark);
             ui.add_space(4.0);
             pp_submitted = passphrase_row(
                 ui,
@@ -198,6 +200,7 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            sig_algorithm_hint(ui, self.sign_vk.as_str(), dark);
             ui.add_space(4.0);
             file_row(
                 ui,

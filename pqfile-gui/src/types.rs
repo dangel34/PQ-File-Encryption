@@ -95,6 +95,7 @@ pub(crate) enum KeygenAlgorithm {
     MlKem1024,
     HybridX25519MlKem768,
     MlDsa65,
+    SlhDsa192f,
 }
 
 impl KeygenAlgorithm {
@@ -103,14 +104,22 @@ impl KeygenAlgorithm {
             Self::MlKem512 => 512,
             Self::MlKem768 | Self::HybridX25519MlKem768 => 768,
             Self::MlKem1024 => 1024,
-            Self::MlDsa65 => 0,
+            Self::MlDsa65 | Self::SlhDsa192f => 0,
         }
     }
     pub(crate) fn hybrid(self) -> bool {
         self == Self::HybridX25519MlKem768
     }
     pub(crate) fn is_signing(self) -> bool {
-        self == Self::MlDsa65
+        matches!(self, Self::MlDsa65 | Self::SlhDsa192f)
+    }
+    /// Signature algorithm for the signing variants; `None` for KEM variants.
+    pub(crate) fn sig_algorithm(self) -> Option<pqfile::sign::SigAlgorithm> {
+        match self {
+            Self::MlDsa65 => Some(pqfile::sign::SigAlgorithm::MlDsa65),
+            Self::SlhDsa192f => Some(pqfile::sign::SigAlgorithm::SlhDsaShake192f),
+            _ => None,
+        }
     }
 }
 
@@ -335,6 +344,7 @@ impl Settings {
             "1024" => KeygenAlgorithm::MlKem1024,
             "hybrid768" => KeygenAlgorithm::HybridX25519MlKem768,
             "dsa65" => KeygenAlgorithm::MlDsa65,
+            "slh192f" => KeygenAlgorithm::SlhDsa192f,
             _ => KeygenAlgorithm::MlKem768,
         };
         let default_expiry_days = storage
@@ -374,6 +384,7 @@ impl Settings {
             KeygenAlgorithm::MlKem1024 => "1024",
             KeygenAlgorithm::HybridX25519MlKem768 => "hybrid768",
             KeygenAlgorithm::MlDsa65 => "dsa65",
+            KeygenAlgorithm::SlhDsa192f => "slh192f",
         };
         storage.set_string("default_algorithm", alg_str.to_owned());
         storage.set_string("default_expiry_days", self.default_expiry_days.to_string());

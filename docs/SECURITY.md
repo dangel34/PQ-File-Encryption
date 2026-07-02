@@ -52,7 +52,7 @@ We will coordinate the disclosure timeline with you and credit you in the releas
 | Key material exposure | Private key seed or shared secret leaked to disk, logs, or memory beyond the zeroize-on-drop boundary |
 | File format parsing | Panics, incorrect behaviour, or silent data corruption on malformed `.pqf` input |
 | Nonce reuse | Any path that could produce two encryptions under the same (key, nonce) pair |
-| Signature forgery | Any path that produces a valid ML-DSA-65 signature without the signing key |
+| Signature forgery | Any path that produces a valid ML-DSA-65 or SLH-DSA-SHAKE-192f signature without the signing key |
 | WASM sandbox | Cross-origin data exposure or unintended network requests from the web GUI |
 
 ### Out of scope
@@ -84,7 +84,7 @@ A new ML-KEM encapsulation and a new random base nonce are generated independent
 `decrypt_v2_payload` (used by the v2 whole-file format) and the `async` feature's `encrypt_stream_async`/`decrypt_stream_async` cap their internal `read_to_end` calls at `MAX_ORIGINAL_SIZE` (plus a small fixed slack for framing overhead), so a stream with an unbounded or oversized tail cannot force unbounded memory allocation before any size check runs. The chunked v3/v4/v5 streaming paths read one bounded chunk at a time and were never affected.
 
 **Digital signatures**
-Signing uses ML-DSA-65 (NIST FIPS 204). Signing keys are separate from encryption keys. Passphrase protection is supported for signing keys using the same Argon2id + AES-256-GCM scheme as KEM keys. Signatures are detached PEM files. Verification rejects signatures from any key other than the one used to sign.
+Signing uses ML-DSA-65 (NIST FIPS 204) by default, with SLH-DSA-SHAKE-192f (NIST FIPS 205) as a hash-based option resting on more conservative assumptions for long-lived signatures. Both sit at NIST security category 3, and the algorithm is bound to the key's PEM tag, so a key can never be used under the wrong algorithm. Signing keys are separate from encryption keys. Passphrase protection is supported for signing keys using the same Argon2id + AES-256-GCM scheme as KEM keys. Signatures are detached PEM files. Verification rejects signatures from any key other than the one used to sign.
 
 **Signcrypt write-before-verify design**
 `signdecrypt` is a streaming operation: it writes decrypted plaintext bytes to the output writer as it goes, and verifies the ML-DSA sender signature only after the full stream has been processed. Each chunk is AEAD-authenticated before output, so the plaintext content is integrity-protected throughout. However, the sender's *identity* is not confirmed until `signdecrypt` returns `Ok(())`. Callers MUST write to a `Vec<u8>` (or equivalent retractable buffer) and only act on the data after the call succeeds. Writing directly to a file or socket before the return value is checked means data from an unverified sender may already be on disk or on the wire.

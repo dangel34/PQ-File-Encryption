@@ -326,6 +326,77 @@ fn try_decrypt_signing_seed(
     Ok(seed)
 }
 
+const SLH_SIGNING_SEED_LEN: usize = 72;
+
+/// Layout of the encrypted SLH-DSA-SHAKE-192f signing key PEM body (116 bytes total):
+///   0..16    salt
+///   16..28   AES-GCM nonce
+///   28..116  AES-256-GCM ciphertext (72-byte seed triple + 16-byte tag)
+pub const ENCRYPTED_SLH_SIGNING_BODY_LEN: usize = SALT_LEN + NONCE_LEN + SLH_SIGNING_SEED_LEN + 16;
+
+/// Encrypts a 72-byte SLH-DSA-SHAKE-192f signing seed triple under `passphrase`.
+/// Returns the 116-byte payload stored as the PEM body of an encrypted signing key.
+pub fn encrypt_slh_signing_seed(
+    seed: &[u8; SLH_SIGNING_SEED_LEN],
+    passphrase: &str,
+) -> Result<Vec<u8>, PqfileError> {
+    let mut salt = [0u8; SALT_LEN];
+    getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let key = derive_key(passphrase, &salt)?;
+    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
+    let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
+
+    let ciphertext = cipher
+        .encrypt(nonce, seed.as_slice())
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    let mut out = Vec::with_capacity(ENCRYPTED_SLH_SIGNING_BODY_LEN);
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Decrypts the 116-byte payload from an encrypted SLH-DSA-SHAKE-192f signing key
+/// PEM body. No legacy-parameter fallback: SLH-DSA keys postdate the Argon2 p=4
+/// migration, so only current parameters are ever tried.
+pub fn decrypt_slh_signing_seed(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; SLH_SIGNING_SEED_LEN]>, PqfileError> {
+    if body.len() != ENCRYPTED_SLH_SIGNING_BODY_LEN {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: ENCRYPTED_SLH_SIGNING_BODY_LEN,
+            got: body.len(),
+        });
+    }
+    let salt = &body[..SALT_LEN];
+    let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
+    let ciphertext = &body[SALT_LEN + NONCE_LEN..];
+
+    let key = derive_key(passphrase, salt)?;
+    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
+    let nonce = nonce_bytes.try_into().expect("12-byte nonce");
+
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_| PqfileError::WrongPassphrase)?,
+    );
+
+    if plaintext.len() != SLH_SIGNING_SEED_LEN {
+        return Err(PqfileError::WrongPassphrase);
+    }
+
+    let mut seed = Zeroizing::new([0u8; SLH_SIGNING_SEED_LEN]);
+    seed.copy_from_slice(&plaintext);
+    Ok(seed)
+}
+
 fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     derive_key_with_pcost(passphrase, salt, ARGON2_P_COST)
 }

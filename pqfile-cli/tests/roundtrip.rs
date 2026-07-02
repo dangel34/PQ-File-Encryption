@@ -1303,6 +1303,60 @@ fn sign_keygen_creates_key_files() {
 }
 
 #[test]
+fn slh_dsa_sign_and_verify_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let data_path = dir.join("doc.txt");
+    fs::write(&data_path, b"sign me with slh-dsa").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "sign-keygen",
+            "--out",
+            dir.to_str().unwrap(),
+            "--algorithm",
+            "slh-dsa-shake-192f",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "slh sign-keygen failed");
+
+    let sk_pem = fs::read_to_string(dir.join("sign_privkey.pem")).unwrap();
+    assert!(sk_pem.contains("SLH-DSA-SHAKE-192F SIGNING KEY"));
+
+    let sk_path = dir.join("sign_privkey.pem");
+    let sig_path = dir.join("doc.txt.sig");
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "sign",
+            "-k",
+            sk_path.to_str().unwrap(),
+            data_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "slh sign failed");
+    let sig_pem = fs::read_to_string(&sig_path).unwrap();
+    assert!(sig_pem.contains("SLH-DSA-SHAKE-192F SIGNATURE"));
+
+    let vk_path = dir.join("sign_pubkey.pem");
+    let status = std::process::Command::new(bin())
+        .args([
+            "verify",
+            "-k",
+            vk_path.to_str().unwrap(),
+            "-s",
+            sig_path.to_str().unwrap(),
+            data_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "slh verify failed");
+}
+
+#[test]
 fn sign_and_verify_roundtrip() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();

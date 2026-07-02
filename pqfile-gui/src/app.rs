@@ -599,7 +599,7 @@ impl eframe::App for PqfileApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(
-                                "ML-KEM-768 · ML-KEM-1024 · Hybrid · ML-DSA-65 · ChaCha20-Poly1305",
+                                "ML-KEM-768 · ML-KEM-1024 · Hybrid · ML-DSA-65 · SLH-DSA · ChaCha20-Poly1305",
                             )
                             .size(11.0)
                             .color(c_overlay(dark)),
@@ -1154,7 +1154,12 @@ impl PqfileApp {
                             "ML-KEM-512/768/1024, X25519 Hybrid (FIPS 203)",
                             dark,
                         );
-                        kv_row(ui, "Digital signatures", "ML-DSA-65  (NIST FIPS 204)", dark);
+                        kv_row(
+                            ui,
+                            "Digital signatures",
+                            "ML-DSA-65 (FIPS 204), SLH-DSA-SHAKE-192f (FIPS 205)",
+                            dark,
+                        );
                         kv_row(
                             ui,
                             "Symmetric cipher",
@@ -1493,6 +1498,12 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              ML-KEM-768 is the recommended default and matches the security of AES-192. \
              ML-KEM-1024 provides the highest level of assurance. Hybrid X25519 + ML-KEM-768 \
              combines a classical algorithm with the post-quantum one for defense in depth.",
+            "## SIGNING KEYS",
+            "ML-DSA-65 (FIPS 204) is the default signing algorithm: fast, with 3.3 KB \
+             signatures. SLH-DSA-SHAKE-192f (FIPS 205) is a hash-based alternative at the \
+             same security category, resting on more conservative assumptions — choose it \
+             for very long-lived signatures (archives, releases) if you accept slower \
+             signing and 35 KB signatures.",
             "## PROTECTING YOUR PRIVATE KEY",
             "Your private key is the crown jewel. If you lose it, files encrypted to your \
              public key cannot be recovered. If someone obtains it, they can read your files. \
@@ -1561,13 +1572,17 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
         ]),
         Tab::Sign => ("Digital Signatures", &[
             "Signing lets you prove that a file came from you and has not been modified. \
-             pqfile uses ML-DSA-65 (NIST FIPS 204), a post-quantum digital signature \
-             algorithm that remains secure against quantum computers.",
+             pqfile supports two post-quantum signature algorithms: ML-DSA-65 (NIST FIPS 204, \
+             the default — fast, 3.3 KB signatures) and SLH-DSA-SHAKE-192f (NIST FIPS 205 — \
+             hash-based, resting on more conservative security assumptions; slower signing \
+             and 35 KB signatures, suited to long-lived signatures). Both offer the same \
+             NIST security category.",
             "## KEY GENERATION",
-            "Generate an ML-DSA-65 signing key pair from the Keygen tab (select ML-DSA-65 \
-             as the algorithm). A signing key pair consists of a private signing key and a \
-             public verifying key. Share your verifying key with anyone who needs to confirm \
-             your signatures.",
+            "Generate a signing key pair from the Keygen tab (select ML-DSA-65 or \
+             SLH-DSA-SHAKE-192f as the algorithm). A signing key pair consists of a private \
+             signing key and a public verifying key. Share your verifying key with anyone \
+             who needs to confirm your signatures. When signing or verifying, the algorithm \
+             is detected from the key automatically.",
             "## SIGNING A FILE",
             "Signing produces a small detached .sig file alongside the original. The signature \
              covers the entire file content. If even one byte changes after signing, \

@@ -22,6 +22,7 @@ sha3 = "0.12"
 argon2 = { version = "0.5", features = ["zeroize"] }
 aes-gcm = "0.11"
 ml-dsa = { version = "0.1.1", features = ["getrandom", "zeroize"] }
+slh-dsa = { version = "0.2.0-rc.5", features = ["zeroize"] }
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 hkdf = "0.13"
 sha2 = "0.11"

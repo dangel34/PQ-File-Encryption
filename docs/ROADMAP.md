@@ -4,9 +4,9 @@ This document tracks planned improvements, new features, and security work acros
 
 ---
 
-## v4.0.0 through v4.2.x (fully released)
+## v4.0.0 through v4.2.x (complete)
 
-All features from v2.x through v4.2.2 are complete and shipped. A full history is available in `docs/CHANGELOG.md`. The highlights:
+All features from v2.x through v4.2.4 are complete. Items from v10-format work onward are merged to `main` but still in the changelog's `[Unreleased]` section, pending the next tagged release. A full history is available in `docs/CHANGELOG.md`. The highlights:
 
 - ML-KEM (512 / 768 / 1024) and hybrid X25519+ML-KEM-768 key encapsulation (FIPS 203)
 - ML-DSA-65 digital signatures and signcrypt (FIPS 204)
@@ -50,6 +50,9 @@ All features from v2.x through v4.2.2 are complete and shipped. A full history i
 - **Compact recipient strings (`pqf1…`)**: `pqfile keygen` prints a Bech32m recipient string; `-r` accepts either PEM path or `pqf1…`; `pqfile fingerprint` subcommand
 - **`#![deny(unsafe_code)]` at crate root** with narrow `#[allow(unsafe_code)]` on the sanctioned mmap call
 - **Archive mtime and permissions restore**: `extract()` restores `mtime_secs` and `mode` from the PQFA manifest per entry
+- **`--force` overwrite protection**: all CLI file-writing subcommands refuse to overwrite an existing output unless `--force` is passed (closes the silent-overwrite footgun from the 2026-07-01 audit)
+- **SLH-DSA-SHAKE-192f signatures (FIPS 205)**: `sign-keygen --algorithm slh-dsa-shake-192f`; hash-based alternative to ML-DSA-65 at the same security category, auto-detected from the key's PEM tag by all sign/verify/signcrypt paths; plaintext, passphrase-encrypted, and hardware-backed key storage; 192f chosen over 192s because 192s signing is ~20× slower for no category gain
+- **GUI `<meta>` CSP**: `pqfile-gui/index.html` carries an in-document Content-Security-Policy so the WASM app is protected even when served without the nginx header snippet
 
 ---
 
@@ -70,6 +73,28 @@ All features from v2.x through v4.2.2 are complete and shipped. A full history i
 - **Interactive mode with no arguments**
   Running `pqfile` with no subcommand currently prints clap's help text. Add a guided prompt flow instead (pick encrypt/decrypt/keygen, then fill in the missing pieces interactively), matching FerroCrypt's no-args mode. CLI-layer only; no library changes.
 
+- **`pqfile verify` subcommand**
+  Authenticate a `.pqf` file end-to-end without writing any plaintext: run the full decrypt path into a null sink and report success/failure (with the structured JSON error codes). Useful for validating backups and testing keys without producing a cleartext copy on disk. CLI-layer only; the streaming decryptor already supports arbitrary writers.
+
+- **Default recipient config file**
+  A `~/.config/pqfile/config.toml` (per-platform config dir) holding a default recipient (`pqf1…` string or PEM path) and default key path, so routine `pqfile encrypt file.txt` works without `-r`. Explicit flags always override; `--no-config` opts out for scripting.
+
+### Security / hardening
+
+- **Windows ACL restriction on private key files**
+  `write_private_file` sets 0600 on Unix but leaves default (typically inheriting) ACLs on Windows. Restrict newly written private keys and Shamir shares to the owner SID, mirroring the Unix behavior.
+
+- **Argon2id auto-calibration**
+  A `pqfile doctor --calibrate` mode that benchmarks Argon2id on the local machine and recommends `m`/`t` parameters hitting a target wall-clock (e.g. 250 ms), for use with v10 passphrase-only encryption and passphrase-protected keys. Currently parameters are fixed at compile time regardless of machine speed.
+
+- **Keyfile as a second factor for passphrase mode**
+  `--keyfile <path>` on v10 encrypt/decrypt mixes the keyfile bytes (hashed) into the Argon2id input alongside the passphrase, so decryption requires both something-you-know and something-you-have. Header gains a flag bit; falls back cleanly with a clear error when the keyfile is missing.
+
+### Supply chain
+
+- **Make `cargo vet` a required CI status check, and publish build provenance**
+  The `cargo vet` policy gap in June 2026 went unnoticed precisely because the job is not required. Promote it (and `cargo deny`) to required checks, add SLSA build provenance attestations (`actions/attest-build-provenance`) to release artifacts, and build release binaries with `cargo auditable` so the dependency tree is embedded and scannable in the shipped binaries.
+
 ### Archives
 
 - **Recursive directory packing with symlink/special-file rejection**
@@ -82,7 +107,7 @@ All features from v2.x through v4.2.2 are complete and shipped. A full history i
 These items require a new major version because they change the wire format or public API in a backward-incompatible way.
 
 - **Authenticated header across all format versions**
-  Roll the header-AAD binding (from the v4.x hardening work above) into every new file written, and bump the version byte. Old files remain readable but new files are protected against header tampering without any opt-in flag.
+  Today only the legacy v2 whole-file format feeds the header bytes into the AEAD as AAD; the chunked formats (v3+) authenticate a counter, last-chunk flag, and key commitment per chunk (`make_chunk_aad`), but not the header itself. Bind the serialized header into the chunk-0 AAD for every new file written and bump the version byte. Old files remain readable but new files are protected against header tampering (e.g. flipping the compression flag or `kem_variant`) without any opt-in flag.
 
 - **Per-file entry AEAD in archives (PQFA v2)**
   The current `.pqfa` format authenticates the entire archive before any file is extracted, which requires buffering the full ciphertext in memory for in-memory extractions. A PQFA v2 layout gives each file entry its own AEAD tag derived from the session key and the entry index, so individual files can be extracted and verified without loading the whole archive.
@@ -92,6 +117,9 @@ These items require a new major version because they change the wire format or p
 
 - **Misuse-resistant nonces (nonce-SIV construction)**
   Replace random nonces with synthetic nonces derived from a hash of the session key and plaintext chunk (a simplified SIV mode). With random nonces, a nonce collision is possible if the same key encrypts a very large number of chunks; SIV derivation makes collision probability zero regardless of how many files are encrypted under a given session key. This is a format break because the nonce field changes meaning in the chunk header.
+
+- **Plaintext length padding (Padmé)**
+  v9 hides the recipient count and `--stealth` (below) would hide the file type, but the ciphertext length still reveals the plaintext length almost exactly. Pad the plaintext to a Padmé-bounded size (max ~12% overhead, decreasing with file size) before encryption, storing the true length inside the authenticated stream. Complements v9 and stealth mode to close the last major metadata leak.
 
 - **Magic-free output mode**
   Currently all `.pqf` files begin with the four-byte magic `PQFL`, which immediately identifies them as pqfile output to any observer. A `--stealth` flag omits the magic bytes and version header, producing output that is indistinguishable from random bytes. The decryptor uses `--stealth` as a hint to skip magic validation and attempt raw decryption. Useful when revealing that a file is encrypted at all is itself sensitive.
