@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782944740795,
+  "lastUpdate": 1783004378108,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -1325,6 +1325,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 52758,
             "range": "± 174",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "32c5f3681e574582c9d1ec15d4ce0d7cff99b6b4",
+          "message": "feat: implement SLH-DSA-SHAKE-192f signatures and enhance key management\n\n- Added support for SLH-DSA-SHAKE-192f signatures (FIPS 205) as a hash-based alternative to ML-DSA-65 for long-lived signatures.\n- Updated key generation and parsing to accommodate both ML-DSA-65 and SLH-DSA-SHAKE-192f algorithms.\n- Enhanced encryption and decryption processes for SLH-DSA signing keys, including new PEM formats and error handling.\n- Updated documentation to reflect changes in signature algorithms and key management functionalities.",
+          "timestamp": "2026-07-02T10:56:16-04:00",
+          "tree_id": "4a5e42d9f4160a13ccadb25f9f5e9a9a42ba975f",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/32c5f3681e574582c9d1ec15d4ce0d7cff99b6b4"
+        },
+        "date": 1783004377810,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 60769,
+            "range": "± 554",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1015340,
+            "range": "± 6505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 112355940,
+            "range": "± 303218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 98806,
+            "range": "± 1791",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1006902,
+            "range": "± 27446",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 98121362,
+            "range": "± 194102",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 64347,
+            "range": "± 1218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1016276,
+            "range": "± 35032",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 100384803,
+            "range": "± 195075",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 103369,
+            "range": "± 432",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1042513,
+            "range": "± 8812",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99708962,
+            "range": "± 136348",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 51549,
+            "range": "± 2876",
             "unit": "ns/iter"
           }
         ]
