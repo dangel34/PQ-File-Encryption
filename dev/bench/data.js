@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783004378108,
+  "lastUpdate": 1783212609309,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -1427,6 +1427,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 51549,
             "range": "± 2876",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "0baf833e51349bbd56f4f244426b23197786b56f",
+          "message": "feat: implement keyfile second factor for passphrase encryption and enhance archive functionality\n\n- Introduced a keyfile second factor for passphrase-only encryption in v10 format, requiring both a passphrase and a keyfile for decryption.\n- Updated the encryption and decryption processes to handle keyfile integration, including new error handling for missing or unnecessary keyfiles.\n- Enhanced the `pqfile archive` command to support recursive directory archiving, rejecting symlinks and special files, and ensuring case-insensitive name collision checks.\n- Updated documentation to reflect new features and usage instructions for keyfile encryption and recursive archiving.",
+          "timestamp": "2026-07-04T20:45:34-04:00",
+          "tree_id": "9f5add415f67d9f295588507c5bdbe6f9debcb75",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/0baf833e51349bbd56f4f244426b23197786b56f"
+        },
+        "date": 1783212609040,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 59421,
+            "range": "± 2095",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 951894,
+            "range": "± 2752",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 107023594,
+            "range": "± 415122",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 93844,
+            "range": "± 252",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 961156,
+            "range": "± 45914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 94230839,
+            "range": "± 2792992",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 60832,
+            "range": "± 626",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 965276,
+            "range": "± 11036",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 100703355,
+            "range": "± 382767",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 96890,
+            "range": "± 363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1000060,
+            "range": "± 5160",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99906393,
+            "range": "± 2060176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48879,
+            "range": "± 443",
             "unit": "ns/iter"
           }
         ]
