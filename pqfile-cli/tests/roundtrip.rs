@@ -2175,3 +2175,200 @@ fn malformed_config_is_a_hard_error() {
         "error must name the config file, got: {stderr}"
     );
 }
+
+// ── archive --recursive ─────────────────────────────────────────────────────
+
+/// Creates a key pair in `dir` and returns (pubkey, privkey) paths.
+fn keygen_in(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+    (dir.join("pubkey.pem"), dir.join("privkey.pem"))
+}
+
+#[test]
+fn archive_recursive_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let (pubkey, privkey) = keygen_in(dir);
+
+    // root/a.txt, root/sub/b.txt, root/sub/c.pqf — unlike encrypt --recursive,
+    // archiving must include .pqf files too.
+    let root = dir.join("root");
+    fs::create_dir_all(root.join("sub")).unwrap();
+    fs::write(root.join("a.txt"), b"alpha").unwrap();
+    fs::write(root.join("sub").join("b.txt"), b"bravo").unwrap();
+    fs::write(root.join("sub").join("c.pqf"), b"not actually encrypted").unwrap();
+
+    let archive = dir.join("tree.pqf");
+    let status = std::process::Command::new(bin())
+        .args([
+            "archive",
+            "-r",
+            pubkey.to_str().unwrap(),
+            "-o",
+            archive.to_str().unwrap(),
+            "--recursive",
+            root.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "archive --recursive failed");
+
+    let out = dir.join("extracted");
+    let status = std::process::Command::new(bin())
+        .args([
+            "extract",
+            "-k",
+            privkey.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            archive.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "extract failed");
+
+    // Entry names keep the walked directory's name as prefix (like tar).
+    assert_eq!(fs::read(out.join("root").join("a.txt")).unwrap(), b"alpha");
+    assert_eq!(
+        fs::read(out.join("root").join("sub").join("b.txt")).unwrap(),
+        b"bravo"
+    );
+    assert_eq!(
+        fs::read(out.join("root").join("sub").join("c.pqf")).unwrap(),
+        b"not actually encrypted"
+    );
+}
+
+#[test]
+fn archive_directory_without_recursive_fails() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let (pubkey, _) = keygen_in(dir);
+
+    let root = dir.join("root");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"alpha").unwrap();
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "archive",
+            "-r",
+            pubkey.to_str().unwrap(),
+            "-o",
+            dir.join("tree.pqf").to_str().unwrap(),
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "archiving a directory without --recursive must fail"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("--recursive"),
+        "error must point at --recursive, got: {stderr}"
+    );
+}
+
+#[test]
+fn archive_rejects_case_insensitive_name_collision() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let (pubkey, _) = keygen_in(dir);
+
+    // Same entry name in different case from two directories: extraction on a
+    // case-insensitive filesystem would silently overwrite one with the other.
+    fs::create_dir_all(dir.join("one")).unwrap();
+    fs::create_dir_all(dir.join("two")).unwrap();
+    fs::write(dir.join("one").join("Data.txt"), b"1").unwrap();
+    fs::write(dir.join("two").join("data.txt"), b"2").unwrap();
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "archive",
+            "-r",
+            pubkey.to_str().unwrap(),
+            "-o",
+            dir.join("dup.pqf").to_str().unwrap(),
+            dir.join("one").join("Data.txt").to_str().unwrap(),
+            dir.join("two").join("data.txt").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "case-insensitive entry collision must be rejected"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("collide") || stderr.contains("duplicate"),
+        "error must explain the collision, got: {stderr}"
+    );
+}
+
+#[test]
+fn archive_recursive_empty_directory_fails() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let (pubkey, _) = keygen_in(dir);
+
+    let root = dir.join("empty");
+    fs::create_dir_all(&root).unwrap();
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "archive",
+            "-r",
+            pubkey.to_str().unwrap(),
+            "-o",
+            dir.join("empty.pqf").to_str().unwrap(),
+            "--recursive",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "archiving an empty tree must fail rather than write an empty archive"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn archive_recursive_rejects_symlinks() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let (pubkey, _) = keygen_in(dir);
+
+    let root = dir.join("root");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("real.txt"), b"real").unwrap();
+    std::os::unix::fs::symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "archive",
+            "-r",
+            pubkey.to_str().unwrap(),
+            "-o",
+            dir.join("sym.pqf").to_str().unwrap(),
+            "--recursive",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "a symlink inside the tree must be rejected, not silently followed or skipped"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("symlink"),
+        "error must name the symlink problem, got: {stderr}"
+    );
+}

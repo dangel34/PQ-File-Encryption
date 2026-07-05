@@ -37,3 +37,6 @@ Code `0` is a catch-all for errors that do not map to a known variant (should no
 | 20 | `ShareVerificationFailed` | Shamir share fingerprints did not agree; wrong shares or wrong key |
 | 21 | `Truncated` | Stream ended before the final authenticated chunk; re-download the file |
 | 22 | `KdfLimitExceeded` | v10 file's Argon2 parameters exceed the configured ceiling; raise `--max-kdf-mem`/`--max-kdf-time` if the file is trusted |
+| 23 | `KeyfileRequired` | v10 file was encrypted with a keyfile second factor; pass `--keyfile <PATH>` |
+| 24 | `KeyfileNotRequired` | `--keyfile` was passed but the file was not encrypted with one; remove the flag |
+| 25 | `UnsupportedHeaderFlags` | v10 header carries flag bits this build does not understand; upgrade pqfile |

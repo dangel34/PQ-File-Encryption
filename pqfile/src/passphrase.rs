@@ -418,14 +418,51 @@ pub(crate) fn derive_key_with_params(
     t_cost: u32,
     p_cost: u32,
 ) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+    derive_key_with_params_and_secret(passphrase, None, salt, m_kib, t_cost, p_cost)
+}
+
+/// [`derive_key_with_params`] with an optional Argon2 secret (pepper) input.
+/// Used by v10 keyfile mode: the secret is the keyfile hash from
+/// [`keyfile_secret`], making decryption require both the passphrase
+/// (something you know) and the keyfile (something you have).
+pub(crate) fn derive_key_with_params_and_secret(
+    passphrase: &str,
+    secret: Option<&[u8]>,
+    salt: &[u8],
+    m_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
     let params =
         Params::new(m_kib, t_cost, p_cost, Some(32)).map_err(|_| PqfileError::EncryptionFailure)?;
-    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    let argon2 = match secret {
+        Some(s) => Argon2::new_with_secret(
+            s,
+            argon2::Algorithm::Argon2id,
+            argon2::Version::V0x13,
+            params,
+        )
+        .map_err(|_| PqfileError::EncryptionFailure)?,
+        None => Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params),
+    };
     let mut key = Zeroizing::new([0u8; 32]);
     argon2
         .hash_password_into(passphrase.as_bytes(), salt, key.as_mut())
         .map_err(|_| PqfileError::EncryptionFailure)?;
     Ok(key)
+}
+
+/// Hashes raw keyfile bytes into the 32-byte Argon2 secret used by v10 keyfile
+/// mode. Domain-separated so a keyfile that happens to contain other pqfile
+/// material never collides with that material's own hash uses.
+pub(crate) fn keyfile_secret(keyfile: &[u8]) -> Zeroizing<[u8; 32]> {
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(b"pqfile-keyfile-v1");
+    hasher.update(keyfile);
+    let mut out = Zeroizing::new([0u8; 32]);
+    out.copy_from_slice(&hasher.finalize());
+    out
 }
 
 /// Result of benchmarking Argon2id on this machine via [`calibrate`].

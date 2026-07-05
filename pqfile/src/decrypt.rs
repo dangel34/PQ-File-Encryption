@@ -353,8 +353,58 @@ pub fn decrypt_stream_passphrase_with_limits(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    use crate::format::PqfHeaderV10;
-    use crate::passphrase::derive_key_with_params;
+    decrypt_stream_passphrase_inner(passphrase, None, max_m_kib, max_t, reader, writer)
+}
+
+/// Decrypts a v10 passphrase-only `.pqf` stream that was encrypted with a
+/// keyfile second factor ([`crate::encrypt::encrypt_stream_passphrase_keyfile`]),
+/// using the default KDF ceiling (m ≤ 64 MiB, t ≤ 3).
+///
+/// `keyfile` must be the same bytes supplied at encryption time. Returns
+/// [`PqfileError::KeyfileNotRequired`] if the file was not encrypted with a
+/// keyfile; a wrong keyfile surfaces as [`PqfileError::DecryptionFailure`],
+/// indistinguishable from a wrong passphrase.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_passphrase_keyfile(
+    passphrase: &str,
+    keyfile: &[u8],
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    decrypt_stream_passphrase_keyfile_with_limits(
+        passphrase,
+        keyfile,
+        crate::passphrase::ARGON2_M_COST,
+        crate::passphrase::ARGON2_T_COST,
+        reader,
+        writer,
+    )
+}
+
+/// [`decrypt_stream_passphrase_keyfile`] with a custom KDF ceiling.
+/// See [`decrypt_stream_passphrase_with_limits`] for the ceiling semantics.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_passphrase_keyfile_with_limits(
+    passphrase: &str,
+    keyfile: &[u8],
+    max_m_kib: u32,
+    max_t: u32,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    decrypt_stream_passphrase_inner(passphrase, Some(keyfile), max_m_kib, max_t, reader, writer)
+}
+
+fn decrypt_stream_passphrase_inner(
+    passphrase: &str,
+    keyfile: Option<&[u8]>,
+    max_m_kib: u32,
+    max_t: u32,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::format::{PqfHeaderV10, V10_FLAG_KEYFILE};
+    use crate::passphrase::{derive_key_with_params_and_secret, keyfile_secret};
 
     let version = PqfHeader::read_magic_version(reader)?;
     if version != VERSION_V10 {
@@ -362,6 +412,17 @@ pub fn decrypt_stream_passphrase_with_limits(
     }
 
     let header = PqfHeaderV10::read_body(reader)?;
+
+    // Resolve the keyfile flag against what the caller supplied before any
+    // expensive work: a mismatch in either direction gets a specific error
+    // rather than an opaque authentication failure after the KDF.
+    let keyfile_flag = header.flags & V10_FLAG_KEYFILE != 0;
+    let secret = match (keyfile_flag, keyfile) {
+        (true, Some(kf)) => Some(keyfile_secret(kf)),
+        (true, None) => return Err(PqfileError::KeyfileRequired),
+        (false, Some(_)) => return Err(PqfileError::KeyfileNotRequired),
+        (false, None) => None,
+    };
 
     if header.m_kib > max_m_kib || header.t_cost > max_t {
         return Err(PqfileError::KdfLimitExceeded {
@@ -372,8 +433,9 @@ pub fn decrypt_stream_passphrase_with_limits(
         });
     }
 
-    let session_key = derive_key_with_params(
+    let session_key = derive_key_with_params_and_secret(
         passphrase,
+        secret.as_deref().map(|s| s.as_slice()),
         &header.salt,
         header.m_kib,
         header.t_cost,
@@ -2034,5 +2096,172 @@ mod tests {
         let mut out = Vec::new();
         decrypt_stream_passphrase("multipass", &mut ct.as_slice(), &mut out).unwrap();
         assert_eq!(out, plaintext);
+    }
+
+    // ── v10 keyfile second factor ─────────────────────────────────────────────
+
+    /// Byte offset of the v10 header flags field: MAGIC(4) + version(1) +
+    /// salt(16) + m(4) + t(4) + p(4).
+    const V10_FLAGS_OFFSET: usize = 33;
+
+    /// Encrypts with a keyfile using weak (fast) KDF params for test speed.
+    fn keyfile_ciphertext(passphrase: &str, keyfile: &[u8], plaintext: &[u8]) -> Vec<u8> {
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase_keyfile_with_params(
+            passphrase,
+            keyfile,
+            16 * 1024, // 16 MiB
+            2,
+            4,
+            plaintext.len() as u64,
+            &mut &plaintext[..],
+            &mut ct,
+        )
+        .unwrap();
+        ct
+    }
+
+    #[test]
+    fn v10_keyfile_roundtrip() {
+        let plaintext = b"keyfile second factor roundtrip";
+        let keyfile = b"any bytes work as a keyfile 0123456789";
+        let ct = keyfile_ciphertext("hunter2", keyfile, plaintext);
+
+        let mut out = Vec::new();
+        decrypt_stream_passphrase_keyfile("hunter2", keyfile, &mut ct.as_slice(), &mut out)
+            .unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn v10_keyfile_multi_chunk_roundtrip() {
+        let plaintext: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 2 + 7).collect();
+        let keyfile = b"multi-chunk keyfile";
+        let ct = keyfile_ciphertext("hunter2", keyfile, &plaintext);
+
+        let mut out = Vec::new();
+        decrypt_stream_passphrase_keyfile("hunter2", keyfile, &mut ct.as_slice(), &mut out)
+            .unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[test]
+    fn v10_keyfile_wrong_keyfile_fails() {
+        let ct = keyfile_ciphertext("hunter2", b"right keyfile", b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_keyfile(
+            "hunter2",
+            b"wrong keyfile",
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(
+            matches!(result, Err(PqfileError::DecryptionFailure)),
+            "wrong keyfile must cause decryption failure"
+        );
+    }
+
+    #[test]
+    fn v10_keyfile_wrong_passphrase_fails() {
+        let keyfile = b"right keyfile";
+        let ct = keyfile_ciphertext("correct", keyfile, b"secret");
+
+        let mut out = Vec::new();
+        let result =
+            decrypt_stream_passphrase_keyfile("wrong", keyfile, &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
+    }
+
+    #[test]
+    fn v10_keyfile_missing_returns_keyfile_required() {
+        let ct = keyfile_ciphertext("hunter2", b"the keyfile", b"secret");
+
+        // Correct passphrase, but no keyfile supplied: specific error, not an
+        // opaque auth failure.
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::KeyfileRequired)));
+    }
+
+    #[test]
+    fn v10_keyfile_on_plain_file_returns_keyfile_not_required() {
+        let plaintext = b"no keyfile involved";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "hunter2",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_keyfile(
+            "hunter2",
+            b"unnecessary keyfile",
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(matches!(result, Err(PqfileError::KeyfileNotRequired)));
+    }
+
+    #[test]
+    fn v10_keyfile_flag_tampering_cannot_bypass_second_factor() {
+        // Clearing the keyfile flag bit must not let the file decrypt with the
+        // passphrase alone: the keyfile hash is baked into the session key, so
+        // the tampered file just fails authentication.
+        let mut ct = keyfile_ciphertext("hunter2", b"the keyfile", b"secret");
+        assert_eq!(
+            ct[V10_FLAGS_OFFSET], 0x01,
+            "flags byte moved; update offset"
+        );
+        ct[V10_FLAGS_OFFSET] = 0x00;
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
+    }
+
+    #[test]
+    fn v10_unknown_header_flags_rejected() {
+        let plaintext = b"future flags";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "hunter2",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+        assert_eq!(
+            ct[V10_FLAGS_OFFSET], 0x00,
+            "flags byte moved; update offset"
+        );
+        ct[V10_FLAGS_OFFSET] = 0x82;
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out);
+        assert!(
+            matches!(result, Err(PqfileError::UnsupportedHeaderFlags(0x82))),
+            "unknown flag bits must be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn v10_empty_keyfile_rejected_at_encrypt() {
+        let mut ct = Vec::new();
+        let result = crate::encrypt::encrypt_stream_passphrase_keyfile(
+            "hunter2",
+            b"",
+            6,
+            &mut b"secret".as_slice(),
+            &mut ct,
+        );
+        assert!(matches!(result, Err(PqfileError::Io(_))));
+        assert!(
+            ct.is_empty(),
+            "nothing may be written for a rejected keyfile"
+        );
     }
 }

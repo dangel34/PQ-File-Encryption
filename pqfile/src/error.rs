@@ -132,6 +132,27 @@ pub enum PqfileError {
     /// which indicates bytes are present but the authentication tag is wrong.
     #[error("stream truncated: file ended before the final authenticated chunk was seen; re-download and try again")]
     Truncated,
+
+    /// The v10 file was encrypted with a keyfile second factor but none was supplied.
+    #[error(
+        "this file requires a keyfile: it was encrypted with a keyfile second factor; \
+         pass --keyfile <PATH> with the same keyfile used at encryption"
+    )]
+    KeyfileRequired,
+
+    /// A keyfile was supplied but the v10 file was not encrypted with one.
+    /// Failing loudly here avoids silently deriving a wrong key (which would
+    /// surface as an opaque authentication failure) and tells the caller the
+    /// keyfile is not protecting this file.
+    #[error("file was not encrypted with a keyfile; remove --keyfile and retry")]
+    KeyfileNotRequired,
+
+    /// The v10 header carries feature flag bits this build does not understand.
+    /// The file was likely produced by a newer pqfile; upgrade to decrypt it.
+    #[error(
+        "unsupported header flags: {0:#04x}; file was likely written by a newer pqfile version"
+    )]
+    UnsupportedHeaderFlags(u8),
 }
 
 impl PqfileError {
@@ -167,6 +188,9 @@ impl PqfileError {
             PqfileError::ShareVerificationFailed => 20,
             PqfileError::Truncated => 21,
             PqfileError::KdfLimitExceeded { .. } => 22,
+            PqfileError::KeyfileRequired => 23,
+            PqfileError::KeyfileNotRequired => 24,
+            PqfileError::UnsupportedHeaderFlags(_) => 25,
         }
     }
 }

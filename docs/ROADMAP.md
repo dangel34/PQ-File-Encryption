@@ -59,6 +59,8 @@ All features from v2.x through v4.2.4 are complete. Items from v10-format work o
 - **Release binary tuning**: workspace `[profile.release]` with thin LTO, one codegen unit, and symbol stripping for smaller, faster native binaries and WASM bundle
 - **SLH-DSA-SHAKE-192f signatures (FIPS 205)**: `sign-keygen --algorithm slh-dsa-shake-192f`; hash-based alternative to ML-DSA-65 at the same security category, auto-detected from the key's PEM tag by all sign/verify/signcrypt paths; plaintext, passphrase-encrypted, and hardware-backed key storage; 192f chosen over 192s because 192s signing is ~20× slower for no category gain
 - **GUI `<meta>` CSP**: `pqfile-gui/index.html` carries an in-document Content-Security-Policy so the WASM app is protected even when served without the nginx header snippet
+- **Keyfile as a second factor for passphrase mode**: `--keyfile <path>` on v10 `encrypt`/`decrypt`/`check` mixes the keyfile's SHA3-256 hash into the Argon2id derivation as the secret (pepper) input; the v10 header gained a flags byte (bit 0 = keyfile required) with unknown-bit rejection, and missing/superfluous keyfiles fail fast with dedicated errors (codes 23/24/25) before the KDF runs
+- **Recursive directory packing with symlink/special-file rejection**: `pqfile archive --recursive` walks directory arguments (entry names keep the directory prefix, like tar), rejecting symlinks, devices, FIFOs, and sockets per-path, and rejecting duplicate entry names including case-insensitive collisions for all archives
 
 ---
 
@@ -79,20 +81,10 @@ All features from v2.x through v4.2.4 are complete. Items from v10-format work o
 - **Interactive mode with no arguments**
   Running `pqfile` with no subcommand currently prints clap's help text. Add a guided prompt flow instead (pick encrypt/decrypt/keygen, then fill in the missing pieces interactively), matching FerroCrypt's no-args mode. CLI-layer only; no library changes.
 
-### Security / hardening
-
-- **Keyfile as a second factor for passphrase mode**
-  `--keyfile <path>` on v10 encrypt/decrypt mixes the keyfile bytes (hashed) into the Argon2id input alongside the passphrase, so decryption requires both something-you-know and something-you-have. Header gains a flag bit; falls back cleanly with a clear error when the keyfile is missing.
-
 ### Supply chain
 
 - **Mark `cargo vet` / `cargo deny` / `test-and-lint` as required CI status checks**
   The `cargo vet` policy gap in June 2026 went unnoticed precisely because the job is not required. The code side is done (vet runs on PRs, SLSA provenance and `cargo auditable` ship since the same change); what remains is the GitHub branch-protection setting itself, which must be flipped in the repository settings by an admin.
-
-### Archives
-
-- **Recursive directory packing with symlink/special-file rejection**
-  `pqfile archive` only accepts an explicit file list today (`run_archive` in `pqfile-cli/src/main.rs`); passing a directory fails because `archive::create` opens every entry as a plain file. Add `--recursive` to walk a directory tree (reusing the walk already written for `encrypt --recursive`'s `collect_files`), rejecting symlinks, device files, FIFOs, and sockets during the walk, and rejecting duplicate archive paths including case-insensitive collisions.
 
 ---
 

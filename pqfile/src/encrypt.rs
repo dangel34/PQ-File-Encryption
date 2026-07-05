@@ -788,8 +788,98 @@ pub fn encrypt_stream_passphrase_with_params(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    use crate::format::PqfHeaderV10;
-    use crate::passphrase::derive_key_with_params;
+    encrypt_stream_passphrase_inner(
+        passphrase,
+        None,
+        m_kib,
+        t_cost,
+        p_cost,
+        original_size,
+        reader,
+        writer,
+    )
+}
+
+/// [`encrypt_stream_passphrase`] with a keyfile as a second factor.
+///
+/// `keyfile` is the raw content of any file the user chooses; its hash is mixed
+/// into the Argon2id derivation as the secret (pepper) input, so decryption
+/// requires both the passphrase (something you know) and the same keyfile bytes
+/// (something you have). The header records that a keyfile is required, so
+/// decrypting without one fails with [`PqfileError::KeyfileRequired`] before
+/// the KDF runs. Use [`crate::decrypt::decrypt_stream_passphrase_keyfile`] to
+/// decrypt.
+///
+/// Returns an error if `keyfile` is empty, since an empty keyfile adds no
+/// second factor.
+///
+/// [`PqfileError::KeyfileRequired`]: crate::error::PqfileError::KeyfileRequired
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_passphrase_keyfile(
+    passphrase: &str,
+    keyfile: &[u8],
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::passphrase::{ARGON2_M_COST, ARGON2_P_COST, ARGON2_T_COST};
+    encrypt_stream_passphrase_keyfile_with_params(
+        passphrase,
+        keyfile,
+        ARGON2_M_COST,
+        ARGON2_T_COST,
+        ARGON2_P_COST,
+        original_size,
+        reader,
+        writer,
+    )
+}
+
+/// [`encrypt_stream_passphrase_keyfile`] with caller-chosen Argon2id parameters.
+/// See [`encrypt_stream_passphrase_with_params`] for the KDF-ceiling caveats.
+#[allow(clippy::too_many_arguments)]
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_passphrase_keyfile_with_params(
+    passphrase: &str,
+    keyfile: &[u8],
+    m_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    if keyfile.is_empty() {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "keyfile is empty; a keyfile must contain at least one byte",
+        )));
+    }
+    encrypt_stream_passphrase_inner(
+        passphrase,
+        Some(keyfile),
+        m_kib,
+        t_cost,
+        p_cost,
+        original_size,
+        reader,
+        writer,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encrypt_stream_passphrase_inner(
+    passphrase: &str,
+    keyfile: Option<&[u8]>,
+    m_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::format::{PqfHeaderV10, V10_FLAG_KEYFILE};
+    use crate::passphrase::{derive_key_with_params_and_secret, keyfile_secret};
 
     let mut salt = [0u8; 16];
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
@@ -798,13 +888,26 @@ pub fn encrypt_stream_passphrase_with_params(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let session_key = derive_key_with_params(passphrase, &salt, m_kib, t_cost, p_cost)?;
+    let secret = keyfile.map(keyfile_secret);
+    let session_key = derive_key_with_params_and_secret(
+        passphrase,
+        secret.as_deref().map(|s| s.as_slice()),
+        &salt,
+        m_kib,
+        t_cost,
+        p_cost,
+    )?;
 
     let header = PqfHeaderV10 {
         salt,
         m_kib,
         t_cost,
         p_cost,
+        flags: if keyfile.is_some() {
+            V10_FLAG_KEYFILE
+        } else {
+            0
+        },
         nonce: nonce_bytes,
         original_size,
     };

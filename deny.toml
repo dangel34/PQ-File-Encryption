@@ -15,12 +15,25 @@ targets = []
 version = 2
 # Yanked crates are treated as errors.
 yanked = "deny"
-# Ignored advisories are unmaintained-crate notices from dev-only or indirect
-# transitive dependencies that cannot be updated from this repo.
+# Ignored advisories are unmaintained-crate notices or unpatchable transitive
+# dependencies that cannot be updated from this repo.
 ignore = [
     # ttf-parser is unmaintained (RUSTSEC-2026-0192); it is a transitive dependency
     # of eframe/egui and cannot be updated from this repo.
     "RUSTSEC-2026-0192",
+    # quick-xml < 0.41 DoS advisories (quadratic duplicate-attribute check, and
+    # unbounded NsReader namespace allocation). Both reachable only through the
+    # Linux GUI stack: wayland-scanner uses quick-xml at BUILD time on bundled
+    # Wayland protocol XML (not attacker-controlled), and zbus_xml (via
+    # accesskit's atspi) parses local D-Bus introspection XML from the session
+    # bus at runtime. Impact is CPU/memory DoS only, no memory unsafety, and no
+    # remote input reaches these parsers in pqfile. The parents (wayland-scanner
+    # 0.31.10, zbus_xml 5.1.1) are at their latest releases and still require
+    # quick-xml ^0.39, so no fix can be applied from this repo yet.
+    # TODO: remove both entries once wayland-scanner / zbus_xml move to
+    # quick-xml >= 0.41 and `cargo update` picks them up.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 # ---------------------------------------------------------------------------

@@ -217,6 +217,9 @@ pqfile encrypt --passphrase secret.txt
 # Stronger Argon2id parameters for v10 (see `pqfile doctor --calibrate` for a
 # machine-tuned recommendation; decryptors above the default need --max-kdf-mem)
 pqfile encrypt --passphrase --kdf-mem 189440 --kdf-time 3 secret.txt
+
+# Keyfile second factor for v10: decryption requires the passphrase AND this file
+pqfile encrypt --passphrase --keyfile usb/token.bin secret.txt
 ```
 
 Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--anonymous-recipients` upgrades to v8 format, dropping the per-slot KEM variant field so key types are hidden. `--pad-recipients` upgrades to v9 format, which additionally pads the slot count to the next power of two with random dummy entries. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3. `--parallel` uses rayon for concurrent chunk processing and requires a single recipient.
@@ -241,6 +244,9 @@ pqfile decrypt --passphrase secret.txt.pqf
 
 # Cap Argon2 resource usage when decrypting untrusted v10 files
 pqfile decrypt --passphrase --max-kdf-mem 32 --max-kdf-time 2 secret.txt.pqf
+
+# v10 file encrypted with a keyfile second factor
+pqfile decrypt --passphrase --keyfile usb/token.bin secret.txt.pqf
 ```
 
 If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v10 files (all single-recipient variants) and v4/v7/v8/v9 (multi-recipient).
@@ -370,6 +376,9 @@ pqfile archive -r pubkey.pem file1.txt file2.txt report.pdf -o bundle.pqf
 # Strip a directory prefix so entries use relative paths
 pqfile archive -r pubkey.pem --base ./project/ ./project/src/main.rs ./project/README.md
 
+# Pack an entire directory tree (entry names keep the directory prefix, like tar)
+pqfile archive -r pubkey.pem --recursive ./project -o project.pqf
+
 # List archive contents without extracting
 pqfile extract bundle.pqf -k privkey.pem --list
 
@@ -377,7 +386,7 @@ pqfile extract bundle.pqf -k privkey.pem --list
 pqfile extract bundle.pqf -k privkey.pem -o recovered/
 ```
 
-Archives use the PQFA format: a streaming authenticated payload where the plaintext is a structured entry sequence. Each entry stores the original relative path and file data. All AEAD authentication is verified before any file is written to disk. Path traversal attempts (entries containing `..`) are rejected.
+Archives use the PQFA format: a streaming authenticated payload where the plaintext is a structured entry sequence. Each entry stores the original relative path and file data. All AEAD authentication is verified before any file is written to disk. Path traversal attempts (entries containing `..`) are rejected. `--recursive` rejects symlinks and special files (devices, FIFOs, sockets) during the walk, and entry names that collide — including case-insensitively, which would overwrite each other when extracted on Windows or macOS — are rejected at pack time.
 
 ### Threshold key splitting (Shamir)
 

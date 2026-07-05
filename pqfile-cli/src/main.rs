@@ -136,6 +136,12 @@ enum Command {
         #[arg(long, value_name = "ITERS", default_value_t = 3u32, requires = "passphrase_only",
               value_parser = clap::value_parser!(u32).range(3..=64))]
         kdf_time: u32,
+        /// Mix this file into the --passphrase (v10) key derivation as a second factor.
+        /// Decryption then requires both the passphrase and the same keyfile
+        /// (`decrypt --passphrase --keyfile <PATH>`). Any non-empty file works; guard it
+        /// like a private key.
+        #[arg(long, value_name = "PATH", requires = "passphrase_only")]
+        keyfile: Option<PathBuf>,
     },
     Decrypt {
         /// Private key file for decryption. Required unless --passphrase is set (v10 files).
@@ -163,6 +169,10 @@ enum Command {
         /// Maximum Argon2id time cost (iterations) accepted from a v10 file header (default: 3).
         #[arg(long, value_name = "ITERS", default_value_t = 3u32)]
         max_kdf_time: u32,
+        /// Keyfile used as a second factor at encryption time (v10 --passphrase files
+        /// encrypted with `encrypt --keyfile`). Must be the identical file content.
+        #[arg(long, value_name = "PATH", requires = "passphrase_v10")]
+        keyfile: Option<PathBuf>,
     },
     /// Verify that a .pqf file authenticates end-to-end without writing any plaintext.
     ///
@@ -186,6 +196,10 @@ enum Command {
         /// Maximum Argon2id time cost (iterations) accepted from a v10 file header (default: 3).
         #[arg(long, value_name = "ITERS", default_value_t = 3u32)]
         max_kdf_time: u32,
+        /// Keyfile used as a second factor at encryption time (v10 --passphrase files
+        /// encrypted with `encrypt --keyfile`). Must be the identical file content.
+        #[arg(long, value_name = "PATH", requires = "passphrase_v10")]
+        keyfile: Option<PathBuf>,
     },
     Inspect {
         input: PathBuf,
@@ -298,11 +312,18 @@ enum Command {
         #[arg(short = 'o', long, value_name = "FILE", default_value = "archive.pqf")]
         output: PathBuf,
         /// Files to include. Each becomes a top-level entry using its filename.
+        /// With --recursive, directories are allowed and archived as a tree.
         #[arg(value_name = "FILE", required = true)]
         files: Vec<PathBuf>,
         /// Strip this prefix from each file path when computing the archive entry name.
         #[arg(long, value_name = "DIR")]
         base: Option<PathBuf>,
+        /// Recurse into directories listed as FILE arguments. Entry names keep the
+        /// directory name as a prefix (like tar). Symlinks and special files
+        /// (devices, FIFOs, sockets) inside the tree are rejected, as are entry
+        /// names that collide case-insensitively.
+        #[arg(long, default_value_t = false)]
+        recursive: bool,
         /// Overwrite an existing archive file without prompting.
         #[arg(long, default_value_t = false)]
         force: bool,
@@ -478,7 +499,7 @@ enum Command {
 
 const PARALLEL_BATCH_SIZE: usize = 8;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct EncryptOpts {
     chunk_size: usize,
     compress: bool,
@@ -492,6 +513,7 @@ struct EncryptOpts {
     json: bool,
     kdf_mem: u32,
     kdf_time: u32,
+    keyfile: Option<PathBuf>,
 }
 
 /// Optional user defaults loaded from the config file. Explicit flags always win;
@@ -655,6 +677,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             passphrase_only,
             kdf_mem,
             kdf_time,
+            keyfile,
         } => run_encrypt(
             recipients,
             passphrase_only,
@@ -675,6 +698,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
                 json,
                 kdf_mem,
                 kdf_time,
+                keyfile,
             },
         ),
         Command::Decrypt {
@@ -686,9 +710,11 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             passphrase_v10,
             max_kdf_mem,
             max_kdf_time,
+            keyfile,
         } => run_decrypt(
             key,
             passphrase_v10,
+            keyfile,
             no_config,
             max_kdf_mem,
             max_kdf_time,
@@ -704,9 +730,11 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             passphrase_v10,
             max_kdf_mem,
             max_kdf_time,
+            keyfile,
         } => run_check(
             key,
             passphrase_v10,
+            keyfile,
             no_config,
             max_kdf_mem,
             max_kdf_time,
@@ -741,8 +769,9 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             output,
             files,
             base,
+            recursive,
             force,
-        } => run_archive(recipient, output, files, base, force, json),
+        } => run_archive(recipient, output, files, base, recursive, force, json),
         Command::Extract {
             input,
             key,
@@ -1021,15 +1050,29 @@ fn run_encrypt_passphrase(
     let mut reader = open_reader(input)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
     // p=4 matches the library default; --kdf-mem / --kdf-time only tune m and t.
-    encrypt::encrypt_stream_passphrase_with_params(
-        passphrase,
-        opts.kdf_mem,
-        opts.kdf_time,
-        4,
-        original_size,
-        &mut *reader,
-        &mut writer,
-    )?;
+    if let Some(ref kf_path) = opts.keyfile {
+        let keyfile = read_keyfile(kf_path)?;
+        encrypt::encrypt_stream_passphrase_keyfile_with_params(
+            passphrase,
+            &keyfile,
+            opts.kdf_mem,
+            opts.kdf_time,
+            4,
+            original_size,
+            &mut *reader,
+            &mut writer,
+        )?;
+    } else {
+        encrypt::encrypt_stream_passphrase_with_params(
+            passphrase,
+            opts.kdf_mem,
+            opts.kdf_time,
+            4,
+            original_size,
+            &mut *reader,
+            &mut writer,
+        )?;
+    }
     writer.commit()?;
 
     if opts.json {
@@ -1361,10 +1404,47 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), PqfileError
     Ok(())
 }
 
+fn bad_archive_input(msg: String) -> PqfileError {
+    PqfileError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, msg))
+}
+
+/// Recursively collects every file under `dir` for `archive --recursive`,
+/// sorted for determinism. Unlike [`collect_files`] (encrypt --recursive,
+/// which skips what it can't use), archiving is a fidelity operation: symlinks
+/// and special files (devices, FIFOs, sockets) cannot be represented in a PQFA
+/// archive, so encountering one is an error rather than a silent omission.
+fn collect_archive_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), PqfileError> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<Result<_, _>>()?;
+    entries.sort_by_key(|e| e.path());
+    for entry in entries {
+        let path = entry.path();
+        // read_dir file_type does not follow symlinks, so a symlink reports
+        // is_symlink() here even when its target is a file or directory.
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            return Err(bad_archive_input(format!(
+                "'{}' is a symlink; archives store regular files only",
+                path.display()
+            )));
+        } else if ft.is_dir() {
+            collect_archive_files(&path, files)?;
+        } else if ft.is_file() {
+            files.push(path);
+        } else {
+            return Err(bad_archive_input(format!(
+                "'{}' is not a regular file (device, FIFO, or socket)",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_decrypt(
     key: Option<PathBuf>,
     passphrase_v10: bool,
+    keyfile: Option<PathBuf>,
     no_config: bool,
     max_kdf_mem: u32,
     max_kdf_time: u32,
@@ -1390,13 +1470,25 @@ fn run_decrypt(
 
     if passphrase_v10 {
         let pp = prompt_passphrase("Enter passphrase: ")?;
-        decrypt::decrypt_stream_passphrase_with_limits(
-            pp.as_str(),
-            max_kdf_mem,
-            max_kdf_time,
-            &mut *reader,
-            &mut writer,
-        )?;
+        if let Some(ref kf_path) = keyfile {
+            let kf = read_keyfile(kf_path)?;
+            decrypt::decrypt_stream_passphrase_keyfile_with_limits(
+                pp.as_str(),
+                &kf,
+                max_kdf_mem,
+                max_kdf_time,
+                &mut *reader,
+                &mut writer,
+            )?;
+        } else {
+            decrypt::decrypt_stream_passphrase_with_limits(
+                pp.as_str(),
+                max_kdf_mem,
+                max_kdf_time,
+                &mut *reader,
+                &mut writer,
+            )?;
+        }
     } else {
         let key_path = resolve_key_path(key, no_config)?;
         let privkey_pem = std::fs::read_to_string(&key_path)?;
@@ -1465,9 +1557,11 @@ fn resolve_key_path(key: Option<PathBuf>, no_config: bool) -> Result<PathBuf, Pq
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_check(
     key: Option<PathBuf>,
     passphrase_v10: bool,
+    keyfile: Option<PathBuf>,
     no_config: bool,
     max_kdf_mem: u32,
     max_kdf_time: u32,
@@ -1479,13 +1573,25 @@ fn run_check(
 
     if passphrase_v10 {
         let pp = prompt_passphrase("Enter passphrase: ")?;
-        decrypt::decrypt_stream_passphrase_with_limits(
-            pp.as_str(),
-            max_kdf_mem,
-            max_kdf_time,
-            &mut *reader,
-            &mut sink,
-        )?;
+        if let Some(ref kf_path) = keyfile {
+            let kf = read_keyfile(kf_path)?;
+            decrypt::decrypt_stream_passphrase_keyfile_with_limits(
+                pp.as_str(),
+                &kf,
+                max_kdf_mem,
+                max_kdf_time,
+                &mut *reader,
+                &mut sink,
+            )?;
+        } else {
+            decrypt::decrypt_stream_passphrase_with_limits(
+                pp.as_str(),
+                max_kdf_mem,
+                max_kdf_time,
+                &mut *reader,
+                &mut sink,
+            )?;
+        }
     } else {
         let key_path = resolve_key_path(key, no_config)?;
         let privkey_pem = std::fs::read_to_string(&key_path)?;
@@ -1519,6 +1625,22 @@ fn open_reader(input: &str) -> Result<Box<dyn io::Read>, PqfileError> {
     } else {
         Ok(Box::new(BufReader::new(std::fs::File::open(input)?)))
     }
+}
+
+/// Reads a --keyfile for v10 second-factor mode. The bytes act as key material,
+/// so they are zeroized on drop and an empty file is rejected up front.
+fn read_keyfile(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, PqfileError> {
+    let bytes = zeroize::Zeroizing::new(std::fs::read(path)?);
+    if bytes.is_empty() {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "keyfile '{}' is empty; a keyfile must contain at least one byte",
+                path.display()
+            ),
+        )));
+    }
+    Ok(bytes)
 }
 
 /// Writes `contents` to `path`, then (on Unix) restricts the file to owner
@@ -2077,11 +2199,13 @@ fn run_rekey(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_archive(
     recipient: PathBuf,
     output: PathBuf,
     files: Vec<PathBuf>,
     base: Option<PathBuf>,
+    recursive: bool,
     force: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
@@ -2089,24 +2213,86 @@ fn run_archive(
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
     revoke::check_not_revoked(&recipient, &pubkey_pem)?;
 
-    let entries: Result<Vec<(String, PathBuf)>, PqfileError> = files
-        .iter()
-        .map(|f| {
-            let archive_name = if let Some(ref b) = base {
-                f.strip_prefix(b)
-                    .unwrap_or(f.as_path())
-                    .to_string_lossy()
-                    .replace('\\', "/")
+    // Names an entry from its on-disk path: --base strips a leading prefix;
+    // otherwise `prefix` (the walked root's directory name) or the bare
+    // filename is used. Archive paths always use forward slashes.
+    let entry_name = |path: &Path, prefix: Option<&Path>| -> String {
+        if let Some(ref b) = base {
+            path.strip_prefix(b)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/")
+        } else if let Some(root) = prefix {
+            let rel = path.strip_prefix(root).unwrap_or(path);
+            match root.file_name() {
+                Some(n) => {
+                    format!("{}/{}", n.to_string_lossy(), rel.to_string_lossy()).replace('\\', "/")
+                }
+                None => rel.to_string_lossy().replace('\\', "/"),
+            }
+        } else {
+            path.file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .to_string()
+        }
+    };
+
+    let mut entries: Vec<(String, PathBuf)> = Vec::new();
+    for f in &files {
+        let meta = std::fs::symlink_metadata(f)?;
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            return Err(bad_archive_input(format!(
+                "'{}' is a symlink; archives store regular files only",
+                f.display()
+            )));
+        }
+        if ft.is_dir() {
+            if !recursive {
+                return Err(bad_archive_input(format!(
+                    "'{}' is a directory; pass --recursive to archive a directory tree",
+                    f.display()
+                )));
+            }
+            let mut walked: Vec<PathBuf> = Vec::new();
+            collect_archive_files(f, &mut walked)?;
+            for path in walked {
+                let name = entry_name(&path, Some(f));
+                entries.push((name, path));
+            }
+        } else if ft.is_file() {
+            entries.push((entry_name(f, None), f.clone()));
+        } else {
+            return Err(bad_archive_input(format!(
+                "'{}' is not a regular file (device, FIFO, or socket)",
+                f.display()
+            )));
+        }
+    }
+
+    if entries.is_empty() {
+        return Err(bad_archive_input(
+            "no files found to archive (directory tree is empty)".to_string(),
+        ));
+    }
+
+    // Reject duplicate entry names, including case-insensitive collisions:
+    // extraction on a case-insensitive filesystem (Windows, macOS default)
+    // would silently overwrite one entry with the other.
+    let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (name, _) in &entries {
+        if let Some(prev) = seen.insert(name.to_lowercase(), name.clone()) {
+            return Err(bad_archive_input(if prev == *name {
+                format!("duplicate archive entry name '{name}'")
             } else {
-                f.file_name()
-                    .unwrap_or(f.as_os_str())
-                    .to_string_lossy()
-                    .to_string()
-            };
-            Ok((archive_name, f.clone()))
-        })
-        .collect();
-    let entries = entries?;
+                format!(
+                    "archive entry names '{prev}' and '{name}' collide on \
+                     case-insensitive filesystems"
+                )
+            }));
+        }
+    }
 
     let mut writer = AtomicOutput::new(&output)?;
     archive::create(&pubkey_pem, &entries, &mut writer)?;

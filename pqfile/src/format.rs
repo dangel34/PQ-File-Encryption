@@ -496,6 +496,15 @@ impl PqfHeaderV8 {
 
 // ── Passphrase-only header (v10) ─────────────────────────────────────────
 
+/// v10 header flag bit: key derivation additionally requires a keyfile
+/// (its hash is mixed into Argon2id as the secret/pepper input).
+pub(crate) const V10_FLAG_KEYFILE: u8 = 0b0000_0001;
+
+/// All v10 flag bits this build understands. Headers carrying unknown bits are
+/// rejected with [`PqfileError::UnsupportedHeaderFlags`] rather than silently
+/// decrypted under different assumptions than the sender's.
+pub(crate) const V10_KNOWN_FLAGS: u8 = V10_FLAG_KEYFILE;
+
 /// Parsed header for v10 (passphrase-only) format.
 pub(crate) struct PqfHeaderV10 {
     /// Random 16-byte Argon2id salt.
@@ -506,6 +515,8 @@ pub(crate) struct PqfHeaderV10 {
     pub t_cost: u32,
     /// Argon2id parallelism (lanes).
     pub p_cost: u32,
+    /// Feature flag bits ([`V10_FLAG_KEYFILE`]; remaining bits reserved).
+    pub flags: u8,
     /// Per-file base nonce (12 bytes; only first 8 are random, last 4 are the chunk counter).
     pub nonce: [u8; NONCE_LEN],
     /// Uncompressed plaintext size in bytes.
@@ -521,6 +532,7 @@ impl PqfHeaderV10 {
         w.write_all(&self.m_kib.to_le_bytes())?;
         w.write_all(&self.t_cost.to_le_bytes())?;
         w.write_all(&self.p_cost.to_le_bytes())?;
+        w.write_all(&[self.flags])?;
         write_nonce_and_size(w, &self.nonce, self.original_size)
     }
 
@@ -534,12 +546,18 @@ impl PqfHeaderV10 {
         r.read_exact(&mut t)?;
         let mut p = [0u8; 4];
         r.read_exact(&mut p)?;
+        let mut flags = [0u8; 1];
+        r.read_exact(&mut flags)?;
+        if flags[0] & !V10_KNOWN_FLAGS != 0 {
+            return Err(PqfileError::UnsupportedHeaderFlags(flags[0]));
+        }
         let (nonce, original_size) = read_nonce_and_size(r)?;
         Ok(PqfHeaderV10 {
             salt,
             m_kib: u32::from_le_bytes(m),
             t_cost: u32::from_le_bytes(t),
             p_cost: u32::from_le_bytes(p),
+            flags: flags[0],
             nonce,
             original_size,
         })
