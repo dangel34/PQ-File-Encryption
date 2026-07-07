@@ -125,6 +125,8 @@ The `pqfile` crate is a library. The `pqfile-cli` crate provides the CLI binary.
 
 ## CLI usage
 
+Running bare `pqfile` with no arguments starts an interactive guided mode that walks through encrypting, decrypting, or generating a key pair with prompts instead of flags. It calls the same code paths as the flag-driven commands below, so behavior and defaults are identical. Any argument (including `--help`) takes the normal CLI path.
+
 ### Key generation
 
 ```bash
@@ -145,6 +147,9 @@ pqfile keygen --out ./keys --passphrase
 
 # Store the private key seed in the OS credential store instead of on disk
 pqfile keygen --out ./keys --hardware --label my-pqfile-key
+
+# Also render the pqf1... recipient string as a terminal QR code for scanning
+pqfile keygen --out ./keys --qr
 ```
 
 Key files written: `pubkey.pem` (share freely) and `privkey.pem` (keep secret; written with owner-only permissions on Unix). The fingerprint (SHA3-256, first 8 bytes) is printed at generation time, along with a compact `pqf1…` Bech32m recipient string that can be passed directly to `-r` without distributing a PEM file. `--hardware` stores the seed in Windows Credential Manager / macOS Keychain / Linux Secret Service instead of writing it to `privkey.pem`, and is mutually exclusive with `--passphrase` and `--expiry`. The same `--hardware --label <LABEL>` flags work on `sign-keygen`.
@@ -152,6 +157,9 @@ Key files written: `pubkey.pem` (share freely) and `privkey.pem` (keep secret; w
 ```bash
 # Print fingerprint and recipient string for an existing key (accepts PEM path or pqf1… string)
 pqfile fingerprint pubkey.pem
+
+# Same, plus a scannable terminal QR code of the recipient string
+pqfile fingerprint pubkey.pem --qr
 
 # Use a recipient string directly - no PEM file needed
 pqfile encrypt -r pqf1qyxhkc... secret.txt
@@ -220,9 +228,22 @@ pqfile encrypt --passphrase --kdf-mem 189440 --kdf-time 3 secret.txt
 
 # Keyfile second factor for v10: decryption requires the passphrase AND this file
 pqfile encrypt --passphrase --keyfile usb/token.bin secret.txt
+
+# Pad the plaintext to a coarser length bucket (Padme, <= ~12% overhead) so the
+# ciphertext length hides the exact file size; decryption strips it automatically
+pqfile encrypt -r pubkey.pem --pad secret.txt
+
+# Stealth mode: output carries no magic bytes, version, or key-type field, so it
+# is not identifiable as pqfile ciphertext (single recipient; see FORMAT.md 5.10)
+pqfile encrypt -r pubkey.pem --stealth secret.txt
+
+# The two compose: unidentifiable ciphertext with a bucketed length
+pqfile encrypt -r pubkey.pem --stealth --pad secret.txt
 ```
 
 Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--anonymous-recipients` upgrades to v8 format, dropping the per-slot KEM variant field so key types are hidden. `--pad-recipients` upgrades to v9 format, which additionally pads the slot count to the next power of two with random dummy entries. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3. `--parallel` uses rayon for concurrent chunk processing and requires a single recipient.
+
+`--pad` requires a known, non-zero input size, so it is incompatible with stdin input, empty files, `--mmap`, `--pipeline`, and `--compress` (compression would shrink the padding back down); it composes with `--parallel` and `--stealth`. `--stealth` supports a single recipient only and is incompatible with `--passphrase`, `--recursive`, and `--mmap`; because the output has no header, the recipient must already know the file is in stealth mode and pass `--stealth` at decrypt time.
 
 ### Decryption
 
@@ -247,6 +268,9 @@ pqfile decrypt --passphrase --max-kdf-mem 32 --max-kdf-time 2 secret.txt.pqf
 
 # v10 file encrypted with a keyfile second factor
 pqfile decrypt --passphrase --keyfile usb/token.bin secret.txt.pqf
+
+# File written with `encrypt --stealth` (magic-free; cannot be auto-detected)
+pqfile decrypt -k privkey.pem --stealth secret.txt.pqf
 ```
 
 If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v10 files (all single-recipient variants) and v4/v7/v8/v9 (multi-recipient).
@@ -261,6 +285,9 @@ pqfile check -k privkey.pem backup.tar.pqf
 
 # v10 passphrase-only files
 pqfile check --passphrase secret.txt.pqf
+
+# Files written with `encrypt --stealth` (requires -k)
+pqfile check -k privkey.pem --stealth secret.txt.pqf
 
 # Scripting: exit code 0/1 plus structured JSON
 pqfile --json check -k privkey.pem backup.tar.pqf
@@ -325,6 +352,8 @@ Recipients:         2
 Nonce:              8c2f...
 Original file size: 2048 bytes
 ```
+
+Files written by the current version set the authenticated-header bit (bit 7) on the version byte, so `inspect` shows `0x83` instead of `0x03`, and reports an extra `Auth. header: yes/no` line (`header_authenticated` in `--json` output). See [FORMAT.md section 4.4](docs/FORMAT.md) for what the bit authenticates. Stealth-mode files have no header and cannot be inspected.
 
 ### Digital signatures
 
@@ -469,8 +498,8 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 
 - **🗝 Keys**: a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only)
 - **🔑 Keygen**: generates ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, ML-DSA-65, or SLH-DSA-SHAKE-192f signing key pairs, with optional passphrase or hardware-backed (OS credential store) protection, key expiry dates, and OpenSSH ed25519 key import (native only)
-- **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; a folder watcher that auto-encrypts new files (native only); drag-and-drop
-- **🔓 Decrypt**: loads any v2-v9 `.pqf` file, prompting for a passphrase only when the key requires one; includes a **Rekey** sub-tab to re-wrap a file for a new recipient without decrypting the payload
+- **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; checkboxes for Padme length padding and magic-free stealth mode (single recipient); a folder watcher that auto-encrypts new files (native only); drag-and-drop
+- **🔓 Decrypt**: loads any v2-v10 `.pqf` file, prompting for a passphrase only when the key requires one; a "Stealth mode" checkbox for files encrypted without a header; includes a **Rekey** sub-tab to re-wrap a file for a new recipient without decrypting the payload
 - **✏ Sign** / **🔏 Signcrypt**: sign and verify with ML-DSA-65 or SLH-DSA-SHAKE-192f (algorithm detected from the loaded key, shown inline), plus combined sign-then-encrypt and decrypt-then-verify
 - **📦 Archive**: pack multiple files into one encrypted `.pqf` container and extract with path-traversal protection
 - **🔀 Shamir**: split a private key into M-of-N shares (with QR code export for air-gapped transfer) and reconstruct from shares
@@ -484,7 +513,7 @@ Hardware-backed keys, the folder watcher, SSH key import, passphrase change, and
 
 ## The .pqf file format
 
-There are nine format versions (v2 through v10). The version byte at offset 4 selects the layout.
+There are nine format versions (v2 through v10). The version byte at offset 4 selects the layout. Files written by the current version additionally set bit 7 of the version byte (`VERSION_AUTH_BIT`, so `0x83` = v3 layout with an authenticated header): the chunk-0 key commitment then also binds the header fields that were previously malleable (chunk size, compression algorithm, v10 Argon2id parameters). Older pqfile versions reject bit-carrying files with `UnsupportedVersion`; files written by pqfile 4.2.4 and earlier remain fully readable. Two features layer on top of these versions without a version bump: stealth mode (no magic, version, or KEM variant field at all) and Padme plaintext-length padding. Byte-level details for all of this live in [docs/FORMAT.md](docs/FORMAT.md) (sections 4.4, 5.10, and 5.11).
 
 ### v2: single-recipient, whole-file AEAD
 

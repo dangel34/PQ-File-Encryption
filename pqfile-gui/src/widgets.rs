@@ -646,11 +646,13 @@ fn try_download_bytes(filename: &str, data: &[u8]) -> Result<(), JsValue> {
 /// scroll area to signal that more items exist below.
 pub(crate) fn scrollable_list<R>(
     ui: &mut egui::Ui,
+    id_salt: &str,
     max_h: f32,
     card_fill: egui::Color32,
     content: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let output = egui::ScrollArea::vertical()
+        .id_salt(id_salt)
         .max_height(max_h)
         .auto_shrink([false, true])
         .show(ui, content);

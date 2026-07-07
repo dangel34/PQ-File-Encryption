@@ -243,8 +243,9 @@ impl PqfileApp {
                     };
                     let fraction = (score as f32 / 7.0).min(1.0);
                     ui.add_space(3.0);
+                    let row_w = ui.available_width();
                     ui.horizontal(|ui| {
-                        let bar_w = (ui.available_width() - 48.0).max(40.0);
+                        let bar_w = (row_w - 48.0).max(40.0);
                         let (rect, _) =
                             ui.allocate_exact_size(egui::vec2(bar_w, 4.0), egui::Sense::hover());
                         let bg = eframe::egui::Color32::from_rgba_premultiplied(

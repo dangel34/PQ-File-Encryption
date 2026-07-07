@@ -212,12 +212,13 @@ impl PqfileApp {
                 dark,
             );
             ui.add_space(4.0);
+            let row_w = ui.available_width();
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Reason:").size(13.0).color(c_subtext(dark)));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.revoke_reason)
                         .hint_text("e.g. key was compromised")
-                        .desired_width(ui.available_width()),
+                        .desired_width(row_w),
                 );
             });
         });

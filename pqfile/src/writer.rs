@@ -27,8 +27,8 @@ use zeroize::Zeroizing;
 use crate::encrypt::{encapsulate, parse_encapsulation_key};
 use crate::error::PqfileError;
 use crate::format::{
-    chunk_nonce, compute_key_commitment, PqfHeader, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE,
-    NONCE_LEN, VERSION_V3, VERSION_V5,
+    chunk_nonce, commitment_for_stream, PqfHeader, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE,
+    NONCE_LEN, VERSION_AUTH_BIT, VERSION_V3, VERSION_V5,
 };
 
 /// Streaming encryptor wrapping any `W: Write`.
@@ -70,11 +70,12 @@ impl<W: Write> PqfWriter<W> {
         getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
             .map_err(|_| PqfileError::EncryptionFailure)?;
 
-        let version = if chunk_size == CHUNK_SIZE {
-            VERSION_V3
-        } else {
-            VERSION_V5
-        };
+        let version = VERSION_AUTH_BIT
+            | if chunk_size == CHUNK_SIZE {
+                VERSION_V3
+            } else {
+                VERSION_V5
+            };
 
         let header = PqfHeader {
             version,
@@ -87,7 +88,14 @@ impl<W: Write> PqfWriter<W> {
         };
         header.write(&mut sink)?;
 
-        let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
+        let key_commitment = commitment_for_stream(
+            ss_bytes.as_ref(),
+            version,
+            &nonce_bytes,
+            original_size,
+            chunk_size as u32,
+            COMPRESSION_NONE,
+        );
         let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
             .try_into()
             .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
@@ -286,13 +294,13 @@ mod tests {
 
     #[test]
     fn writer_emits_v5_for_custom_chunk_size() {
-        use crate::format::{MAGIC, VERSION_V5};
+        use crate::format::MAGIC;
         let (pub_pem, _) = keygen_bytes(768, None).unwrap();
         let mut ct = Vec::new();
         let w = PqfWriter::new(&mut ct, &pub_pem, 0u64, 1024).unwrap();
         w.finish().unwrap();
         assert_eq!(&ct[..4], MAGIC);
-        assert_eq!(ct[4], VERSION_V5);
+        assert_eq!(ct[4], VERSION_V5 | VERSION_AUTH_BIT);
     }
 
     #[test]

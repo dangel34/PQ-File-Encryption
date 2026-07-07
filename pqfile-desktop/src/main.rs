@@ -1,4 +1,7 @@
-#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 
 fn main() {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))

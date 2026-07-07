@@ -20,7 +20,7 @@ use crate::decrypt::{recover_session_key_multi, recover_session_key_v8};
 use crate::encrypt::encapsulate_for_rekey;
 use crate::error::PqfileError;
 use crate::format::{
-    fill_chunk, PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, RecipientEntryV4,
+    fill_chunk, version_layout, PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, RecipientEntryV4,
     RecipientEntryV7, RecipientEntryV8, CHUNK_SIZE, PADDED_CT_LEN, VERSION_V4, VERSION_V7,
     VERSION_V8,
 };
@@ -41,11 +41,15 @@ pub fn add_recipient_stream(
 ) -> Result<AddRecipientInfo, PqfileError> {
     let version = PqfHeader::read_magic_version(reader)?;
 
-    match version {
+    // The full version byte (including the authenticated-header bit) is passed
+    // through and re-emitted verbatim: the payload's chunk-0 commitment was
+    // computed under that byte's commitment definition and is copied unchanged.
+    match version_layout(version) {
         VERSION_V4 => add_to_v4(
             existing_privkey_pem,
             new_pubkey_pem,
             passphrase,
+            version,
             reader,
             writer,
         ),
@@ -53,6 +57,7 @@ pub fn add_recipient_stream(
             existing_privkey_pem,
             new_pubkey_pem,
             passphrase,
+            version,
             reader,
             writer,
         ),
@@ -60,10 +65,11 @@ pub fn add_recipient_stream(
             existing_privkey_pem,
             new_pubkey_pem,
             passphrase,
+            version,
             reader,
             writer,
         ),
-        v => Err(PqfileError::UnsupportedVersion(v)),
+        _ => Err(PqfileError::UnsupportedVersion(version)),
     }
 }
 
@@ -81,6 +87,7 @@ fn add_to_v4(
     existing_privkey_pem: &str,
     new_pubkey_pem: &str,
     passphrase: Option<&str>,
+    version: u8,
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<AddRecipientInfo, PqfileError> {
@@ -112,7 +119,7 @@ fn add_to_v4(
         nonce: header.nonce,
         original_size: header.original_size,
     };
-    new_header.write(writer)?;
+    new_header.write(writer, version)?;
     stream_payload(reader, writer)?;
 
     Ok(AddRecipientInfo {
@@ -125,6 +132,7 @@ fn add_to_v7(
     existing_privkey_pem: &str,
     new_pubkey_pem: &str,
     passphrase: Option<&str>,
+    version: u8,
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<AddRecipientInfo, PqfileError> {
@@ -156,7 +164,7 @@ fn add_to_v7(
         nonce: header.nonce,
         original_size: header.original_size,
     };
-    new_header.write(writer)?;
+    new_header.write(writer, version)?;
     stream_payload(reader, writer)?;
 
     Ok(AddRecipientInfo {
@@ -182,6 +190,7 @@ fn add_to_v8(
     existing_privkey_pem: &str,
     new_pubkey_pem: &str,
     passphrase: Option<&str>,
+    version: u8,
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<AddRecipientInfo, PqfileError> {
@@ -207,7 +216,7 @@ fn add_to_v8(
         nonce: header.nonce,
         original_size: header.original_size,
     };
-    new_header.write(writer)?;
+    new_header.write_with_version(writer, version)?;
     stream_payload(reader, writer)?;
 
     Ok(AddRecipientInfo {

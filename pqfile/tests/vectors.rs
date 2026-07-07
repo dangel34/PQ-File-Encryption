@@ -14,10 +14,10 @@ use pqfile::encrypt::{
     encrypt_stream_multi_anon_padded,
 };
 use pqfile::format::{
-    BASE_NONCE_LEN, CHUNK_SIZE, HYBRID_CT_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512, KEM_CT_LEN_768,
-    KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN,
-    PADDED_CT_LEN, VERSION, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V8, VERSION_V9,
-    WRAPPED_KEY_LEN,
+    version_layout, BASE_NONCE_LEN, CHUNK_SIZE, HYBRID_CT_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512,
+    KEM_CT_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
+    NONCE_LEN, PADDED_CT_LEN, VERSION, VERSION_AUTH_BIT, VERSION_V3, VERSION_V4, VERSION_V5,
+    VERSION_V8, VERSION_V9, WRAPPED_KEY_LEN,
 };
 use pqfile::keygen::{keygen_bytes, keygen_bytes_hybrid_768};
 
@@ -69,7 +69,7 @@ fn check_single_recipient_header(out: &[u8], version: u8, ct_len: usize, kem_var
         "ORIGINAL_SIZE"
     );
 
-    if version == VERSION_V3 || version == VERSION_V5 {
+    if version_layout(version) == VERSION_V3 || version_layout(version) == VERSION_V5 {
         // BASE_NONCE bytes 8-11 must be zero (counter starts at 0).
         assert_eq!(
             &out[nonce_off + BASE_NONCE_LEN..nonce_off + NONCE_LEN],
@@ -127,7 +127,12 @@ fn v3_ml_kem_512() {
     )
     .unwrap();
 
-    check_single_recipient_header(&out, VERSION_V3, KEM_CT_LEN_512, KEM_VARIANT_512);
+    check_single_recipient_header(
+        &out,
+        VERSION_V3 | VERSION_AUTH_BIT,
+        KEM_CT_LEN_512,
+        KEM_VARIANT_512,
+    );
 
     let mut dec = Vec::new();
     decrypt_stream(&priv_pem, &mut out.as_slice(), &mut dec, None).unwrap();
@@ -150,7 +155,12 @@ fn v3_ml_kem_768() {
     )
     .unwrap();
 
-    check_single_recipient_header(&out, VERSION_V3, KEM_CT_LEN_768, KEM_VARIANT_768);
+    check_single_recipient_header(
+        &out,
+        VERSION_V3 | VERSION_AUTH_BIT,
+        KEM_CT_LEN_768,
+        KEM_VARIANT_768,
+    );
 
     // Single chunk: PLAINTEXT + 16-byte tag
     let header_len = 7 + KEM_CT_LEN_768 + NONCE_LEN + 8;
@@ -181,7 +191,12 @@ fn v3_ml_kem_1024() {
     )
     .unwrap();
 
-    check_single_recipient_header(&out, VERSION_V3, KEM_CT_LEN_1024, KEM_VARIANT_1024);
+    check_single_recipient_header(
+        &out,
+        VERSION_V3 | VERSION_AUTH_BIT,
+        KEM_CT_LEN_1024,
+        KEM_VARIANT_1024,
+    );
 
     let mut dec = Vec::new();
     decrypt_stream(&priv_pem, &mut out.as_slice(), &mut dec, None).unwrap();
@@ -204,7 +219,12 @@ fn v3_hybrid_x25519_ml_kem_768() {
     )
     .unwrap();
 
-    check_single_recipient_header(&out, VERSION_V3, HYBRID_CT_LEN_768, KEM_VARIANT_HYBRID_768);
+    check_single_recipient_header(
+        &out,
+        VERSION_V3 | VERSION_AUTH_BIT,
+        HYBRID_CT_LEN_768,
+        KEM_VARIANT_HYBRID_768,
+    );
 
     // KEM_VARIANT for hybrid is 0x0301
     let variant_bytes = out[5..7].to_vec();
@@ -245,7 +265,7 @@ fn v5_ml_kem_768_custom_chunk() {
     .unwrap();
 
     assert_eq!(&out[0..4], MAGIC);
-    assert_eq!(out[4], VERSION_V5, "v5 version byte");
+    assert_eq!(out[4], VERSION_V5 | VERSION_AUTH_BIT, "v5 version byte");
     assert_eq!(u16_le(&out, 5), KEM_VARIANT_768, "KEM_VARIANT");
 
     let nonce_off = 7 + KEM_CT_LEN_768;
@@ -298,7 +318,7 @@ fn v6_ml_kem_768_zstd() {
     .unwrap();
 
     assert_eq!(&out[0..4], MAGIC);
-    assert_eq!(out[4], VERSION_V6, "v6 version byte");
+    assert_eq!(out[4], VERSION_V6 | VERSION_AUTH_BIT, "v6 version byte");
     assert_eq!(u16_le(&out, 5), KEM_VARIANT_768, "KEM_VARIANT");
 
     let nonce_off = 7 + KEM_CT_LEN_768;
@@ -353,7 +373,7 @@ fn v4_ml_kem_768_two_recipients() {
     .unwrap();
 
     assert_eq!(&out[0..4], MAGIC);
-    assert_eq!(out[4], VERSION_V4, "v4 version byte");
+    assert_eq!(out[4], VERSION_V4 | VERSION_AUTH_BIT, "v4 version byte");
 
     let count = u16_le(&out, 5) as usize;
     assert_eq!(count, 2, "COUNT = 2 recipients");
@@ -410,7 +430,7 @@ fn v7_ml_kem_768_two_recipients() {
     .unwrap();
 
     assert_eq!(&out[0..4], MAGIC);
-    assert_eq!(out[4], VERSION_V8, "v8 version byte");
+    assert_eq!(out[4], VERSION_V8 | VERSION_AUTH_BIT, "v8 version byte");
 
     let count = u16_le(&out, 5) as usize;
     assert_eq!(count, 2, "COUNT = 2 recipients");
@@ -459,7 +479,7 @@ fn v8_three_recipients_all_can_decrypt() {
     )
     .unwrap();
 
-    assert_eq!(out[4], VERSION_V8);
+    assert_eq!(out[4], VERSION_V8 | VERSION_AUTH_BIT);
     let count = u16_le(&out, 5) as usize;
     assert_eq!(count, 3);
 
@@ -491,7 +511,7 @@ fn v8_mixed_variants_512_768_1024_hybrid_all_decrypt() {
     )
     .unwrap();
 
-    assert_eq!(out[4], VERSION_V8);
+    assert_eq!(out[4], VERSION_V8 | VERSION_AUTH_BIT);
     let count = u16_le(&out, 5) as usize;
     assert_eq!(count, 4);
 
@@ -583,7 +603,11 @@ fn v9_three_recipients_slots_padded_to_power_of_two() {
 
     // Header: MAGIC(4) + VERSION(1) + COUNT(2) = 7 bytes, then slot data.
     assert_eq!(&ct[..4], b"PQFL");
-    assert_eq!(ct[4], VERSION_V9, "version byte must be 0x09");
+    assert_eq!(
+        ct[4],
+        VERSION_V9 | VERSION_AUTH_BIT,
+        "version byte must be 0x09 + auth bit"
+    );
     let slot_count = u16::from_le_bytes([ct[5], ct[6]]) as usize;
     // 3 real recipients → padded to 4 (next power of 2 ≥ 3).
     assert_eq!(slot_count, 4, "3 recipients must be padded to 4 slots");
@@ -620,7 +644,7 @@ fn v9_single_recipient_no_padding_needed() {
         &mut ct,
     )
     .unwrap();
-    assert_eq!(ct[4], VERSION_V9);
+    assert_eq!(ct[4], VERSION_V9 | VERSION_AUTH_BIT);
     let slot_count = u16::from_le_bytes([ct[5], ct[6]]) as usize;
     assert_eq!(slot_count, 1, "single recipient needs no padding");
     let mut out = Vec::new();

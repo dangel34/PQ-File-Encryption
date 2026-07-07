@@ -41,6 +41,38 @@ pub const VERSION_V9: u8 = 0x09;
 /// Payload is chunked identically to v3 (standard AEAD AAD and key commitment).
 pub const VERSION_V10: u8 = 0x0A;
 
+/// Authenticated-header flag bit on the version byte.
+///
+/// When set (e.g. `0x83` = v3 layout + this bit), the chunk-0 key commitment is
+/// computed with [`compute_key_commitment`]'s v3 definition, which additionally
+/// binds the mutable header fields that are *not* self-healing under tampering:
+/// `chunk_size`, `compression_algo`, and (for v10) the Argon2id salt/parameters
+/// and flags byte. Flipping any of those fields on an authenticated file makes
+/// chunk-0's AEAD tag fail. Stripping or adding this bit also fails, because the
+/// two commitment definitions use different domain-separation contexts.
+///
+/// The version byte and `kem_variant` are deliberately *excluded* from the
+/// commitment preimage: both change during zero-copy `rekey` (v3 → v4) while the
+/// payload is preserved, and tampering with either is already self-healing
+/// (structural misparse or a wrong shared secret, ending in a tag failure).
+///
+/// pqfile ≤ 4.2.4 rejects these version bytes with `UnsupportedVersion`, which
+/// is the intended upgrade signal; all files written by older versions (bit
+/// clear) remain readable.
+pub const VERSION_AUTH_BIT: u8 = 0x80;
+
+/// Strips [`VERSION_AUTH_BIT`], returning the underlying layout version byte.
+#[must_use]
+pub fn version_layout(version: u8) -> u8 {
+    version & !VERSION_AUTH_BIT
+}
+
+/// Returns true if the version byte carries [`VERSION_AUTH_BIT`].
+#[must_use]
+pub fn is_header_authenticated(version: u8) -> bool {
+    version & VERSION_AUTH_BIT != 0
+}
+
 /// Maximum KEM ciphertext length across all supported variants (ML-KEM-1024).
 /// All v7 recipient entries use this fixed CT slot size.
 pub const PADDED_CT_LEN: usize = KEM_CT_LEN_1024;
@@ -148,10 +180,15 @@ pub(crate) struct PqfHeader {
 }
 
 impl PqfHeader {
+    /// Layout version byte with [`VERSION_AUTH_BIT`] stripped.
+    pub fn layout(&self) -> u8 {
+        version_layout(self.version)
+    }
+
     /// Total byte length of this header when serialized.
     pub fn header_len(&self) -> usize {
         let base = HEADER_PREFIX_LEN + self.kem_ciphertext.len() + HEADER_SUFFIX_LEN;
-        match self.version {
+        match self.layout() {
             v if v == VERSION_V5 => base + V5_CHUNK_SIZE_FIELD_LEN,
             v if v == VERSION_V6 => base + V5_CHUNK_SIZE_FIELD_LEN + V6_COMPRESSION_FIELD_LEN,
             _ => base,
@@ -166,10 +203,11 @@ impl PqfHeader {
         w.write_all(&self.kem_ciphertext)?;
         w.write_all(&self.nonce)?;
         w.write_all(&self.original_size.to_le_bytes())?;
-        if self.version == VERSION_V5 || self.version == VERSION_V6 {
+        let layout = self.layout();
+        if layout == VERSION_V5 || layout == VERSION_V6 {
             w.write_all(&self.chunk_size.to_le_bytes())?;
         }
-        if self.version == VERSION_V6 {
+        if layout == VERSION_V6 {
             w.write_all(&[self.compression_algo])?;
         }
         Ok(())
@@ -178,10 +216,13 @@ impl PqfHeader {
     /// Deserializes a v2/v3/v5/v6 header from `r`. Returns `UnsupportedVersion` for v4/v7.
     pub fn read<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
         let version = Self::read_magic_version(r)?;
-        if version != VERSION
-            && version != VERSION_V3
-            && version != VERSION_V5
-            && version != VERSION_V6
+        let layout = version_layout(version);
+        // v2 predates chunked commitments: the whole header is the AEAD AAD, so an
+        // authenticated-header variant of it does not exist and is rejected.
+        if version == VERSION_AUTH_BIT | VERSION {
+            return Err(PqfileError::UnsupportedVersion(version));
+        }
+        if layout != VERSION && layout != VERSION_V3 && layout != VERSION_V5 && layout != VERSION_V6
         {
             return Err(PqfileError::UnsupportedVersion(version));
         }
@@ -200,8 +241,11 @@ impl PqfHeader {
         Ok(v[0])
     }
 
-    /// Reads the header body (everything after MAGIC + VERSION).
+    /// Reads the header body (everything after MAGIC + VERSION). `version` is the
+    /// full on-the-wire version byte (it may carry [`VERSION_AUTH_BIT`]) and is
+    /// stored verbatim; layout decisions use the masked value.
     pub fn read_body<R: Read + ?Sized>(r: &mut R, version: u8) -> Result<Self, PqfileError> {
+        let layout = version_layout(version);
         let mut kem_variant_bytes = [0u8; 2];
         r.read_exact(&mut kem_variant_bytes)?;
         let kem_variant = u16::from_le_bytes(kem_variant_bytes);
@@ -212,13 +256,13 @@ impl PqfHeader {
         r.read_exact(&mut kem_ciphertext)?;
 
         let (nonce, original_size) = read_nonce_and_size(r)?;
-        let (chunk_size, compression_algo) = if version == VERSION_V5 {
+        let (chunk_size, compression_algo) = if layout == VERSION_V5 {
             let mut cs = [0u8; 4];
             r.read_exact(&mut cs)?;
             let val = u32::from_le_bytes(cs);
             validate_chunk_size(val)?;
             (val, COMPRESSION_NONE)
-        } else if version == VERSION_V6 {
+        } else if layout == VERSION_V6 {
             let mut cs = [0u8; 4];
             r.read_exact(&mut cs)?;
             let val = u32::from_le_bytes(cs);
@@ -283,9 +327,12 @@ fn write_nonce_and_size<W: Write + ?Sized>(
 }
 
 impl PqfHeaderV4 {
-    /// Serializes the v4 header to `w`.
-    pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
-        write_multi_header_prefix(w, VERSION_V4, self.recipients.len())?;
+    /// Serializes the v4 header to `w`. `version` is the full version byte to emit
+    /// (`VERSION_V4`, optionally with [`VERSION_AUTH_BIT`]); callers that rewrite an
+    /// existing file (`add_recipient`, `rekey`) must preserve the input file's bit so
+    /// the payload's chunk-0 commitment stays valid.
+    pub fn write<W: Write + ?Sized>(&self, w: &mut W, version: u8) -> Result<(), std::io::Error> {
+        write_multi_header_prefix(w, version, self.recipients.len())?;
         for r in &self.recipients {
             w.write_all(&r.kem_variant.to_le_bytes())?;
             w.write_all(&r.kem_ciphertext)?;
@@ -359,8 +406,9 @@ pub(crate) struct PqfHeaderV7 {
 
 impl PqfHeaderV7 {
     /// Serializes the v7 header to `w`, zero-padding each KEM ciphertext to PADDED_CT_LEN.
-    pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
-        write_multi_header_prefix(w, VERSION_V7, self.recipients.len())?;
+    /// `version` is the full version byte to emit (see [`PqfHeaderV4::write`]).
+    pub fn write<W: Write + ?Sized>(&self, w: &mut W, version: u8) -> Result<(), std::io::Error> {
+        write_multi_header_prefix(w, version, self.recipients.len())?;
         let pad = [0u8; PADDED_CT_LEN];
         for r in &self.recipients {
             w.write_all(&r.kem_variant.to_le_bytes())?;
@@ -442,12 +490,8 @@ pub(crate) struct PqfHeaderV8 {
 }
 
 impl PqfHeaderV8 {
-    /// Serializes the v8 header to `w`.
-    pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
-        self.write_with_version(w, VERSION_V8)
-    }
-
-    /// Serializes the header with the given version byte. Used by the v9 padded format.
+    /// Serializes the header with the given version byte (`VERSION_V8` or `VERSION_V9`,
+    /// optionally with [`VERSION_AUTH_BIT`]; see [`PqfHeaderV4::write`]).
     pub(crate) fn write_with_version<W: Write + ?Sized>(
         &self,
         w: &mut W,
@@ -524,10 +568,11 @@ pub(crate) struct PqfHeaderV10 {
 }
 
 impl PqfHeaderV10 {
-    /// Serializes the v10 header to `w`.
-    pub fn write<W: Write + ?Sized>(&self, w: &mut W) -> Result<(), std::io::Error> {
+    /// Serializes the v10 header to `w`. `version` is the full version byte to emit
+    /// (`VERSION_V10`, optionally with [`VERSION_AUTH_BIT`]).
+    pub fn write<W: Write + ?Sized>(&self, w: &mut W, version: u8) -> Result<(), std::io::Error> {
         w.write_all(MAGIC)?;
-        w.write_all(&[VERSION_V10])?;
+        w.write_all(&[version])?;
         w.write_all(&self.salt)?;
         w.write_all(&self.m_kib.to_le_bytes())?;
         w.write_all(&self.t_cost.to_le_bytes())?;
@@ -637,8 +682,16 @@ pub(crate) fn chunk_nonce(base_nonce: &[u8; BASE_NONCE_LEN], counter: u32) -> [u
     nonce
 }
 
-/// Domain separator for the session-key commitment hash (version 2).
+/// Domain separator for the session-key commitment hash (version 2, legacy files).
 const KEY_COMMITMENT_CTX: &[u8] = b"pqfile-session-key-commitment-v2";
+
+/// Domain separator for the session-key commitment hash (version 3,
+/// [`VERSION_AUTH_BIT`] files).
+const KEY_COMMITMENT_CTX_V3: &[u8] = b"pqfile-session-key-commitment-v3";
+
+/// Serialized length of the v10 KDF fields bound into the v3 commitment:
+/// salt(16) + m_kib(4) + t_cost(4) + p_cost(4) + flags(1).
+const V10_KDF_COMMIT_LEN: usize = 29;
 
 /// SHA3-256 of `KEY_COMMITMENT_CTX || session_key || nonce || original_size`.
 ///
@@ -659,6 +712,91 @@ pub(crate) fn compute_key_commitment(
     h.update(nonce.as_ref());
     h.update(original_size.to_le_bytes());
     h.finalize().into()
+}
+
+/// v3 commitment: SHA3-256 of `CTX_V3 || session_key || chunk_size || compression_algo
+/// || kdf_fields(29) || nonce || original_size`.
+///
+/// Extends the v2 commitment with the header fields whose tampering is *not*
+/// self-healing: `chunk_size` (v5/v6), `compression_algo` (v6 — flipping
+/// zstd → none would otherwise deliver compressed bytes as plaintext with all
+/// tags passing), and the v10 Argon2id salt/parameters/flags (zeros for every
+/// other layout). See [`VERSION_AUTH_BIT`] for what is deliberately excluded.
+fn compute_key_commitment_v3(
+    session_key: &[u8],
+    nonce: &[u8; NONCE_LEN],
+    original_size: u64,
+    chunk_size: u32,
+    compression_algo: u8,
+    kdf_fields: &[u8; V10_KDF_COMMIT_LEN],
+) -> [u8; 32] {
+    let mut h = Sha3_256::new();
+    h.update(KEY_COMMITMENT_CTX_V3);
+    h.update(session_key);
+    h.update(chunk_size.to_le_bytes());
+    h.update([compression_algo]);
+    h.update(kdf_fields);
+    h.update(nonce.as_ref());
+    h.update(original_size.to_le_bytes());
+    h.finalize().into()
+}
+
+/// Key commitment for chunked streaming layouts (v3/v4/v5/v6/v7/v8/v9).
+///
+/// Selects the commitment definition by the [`VERSION_AUTH_BIT`] of `version`:
+/// legacy files use the v2 commitment, authenticated-header files bind
+/// `chunk_size` and `compression_algo` as well. Multi-recipient layouts always
+/// pass `CHUNK_SIZE` / [`COMPRESSION_NONE`] (their only supported values).
+pub(crate) fn commitment_for_stream(
+    session_key: &[u8],
+    version: u8,
+    nonce: &[u8; NONCE_LEN],
+    original_size: u64,
+    chunk_size: u32,
+    compression_algo: u8,
+) -> [u8; 32] {
+    if is_header_authenticated(version) {
+        compute_key_commitment_v3(
+            session_key,
+            nonce,
+            original_size,
+            chunk_size,
+            compression_algo,
+            &[0u8; V10_KDF_COMMIT_LEN],
+        )
+    } else {
+        compute_key_commitment(session_key, nonce, original_size)
+    }
+}
+
+/// Key commitment for the v10 passphrase-only layout.
+///
+/// Authenticated-header files additionally bind the Argon2id salt, parameters,
+/// and flags byte, so a tampered KDF field (or a flipped keyfile flag) fails
+/// chunk-0 authentication even before the wrong derived key would.
+pub(crate) fn commitment_for_v10(
+    session_key: &[u8],
+    version: u8,
+    header: &PqfHeaderV10,
+) -> [u8; 32] {
+    if is_header_authenticated(version) {
+        let mut kdf = [0u8; V10_KDF_COMMIT_LEN];
+        kdf[..16].copy_from_slice(&header.salt);
+        kdf[16..20].copy_from_slice(&header.m_kib.to_le_bytes());
+        kdf[20..24].copy_from_slice(&header.t_cost.to_le_bytes());
+        kdf[24..28].copy_from_slice(&header.p_cost.to_le_bytes());
+        kdf[28] = header.flags;
+        compute_key_commitment_v3(
+            session_key,
+            &header.nonce,
+            header.original_size,
+            CHUNK_SIZE as u32,
+            COMPRESSION_NONE,
+            &kdf,
+        )
+    } else {
+        compute_key_commitment(session_key, &header.nonce, header.original_size)
+    }
 }
 
 /// Maximum AAD byte length across all chunk positions (first chunk is largest).

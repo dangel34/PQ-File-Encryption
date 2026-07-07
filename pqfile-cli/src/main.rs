@@ -64,6 +64,11 @@ enum Command {
         /// enforce it cryptographically. Cannot be combined with --hardware.
         #[arg(long, value_name = "DATE")]
         expiry: Option<String>,
+        /// Print the recipient string as a scannable QR code (terminal unicode).
+        /// ML-KEM-1024 and hybrid keys produce dense codes; a larger terminal
+        /// font or screenshot-zoom may be needed to scan them.
+        #[arg(long, default_value_t = false)]
+        qr: bool,
     },
     Encrypt {
         /// Recipient public key(s): a path to a pubkey.pem file, or a `pqf1…` recipient string.
@@ -142,6 +147,18 @@ enum Command {
         /// like a private key.
         #[arg(long, value_name = "PATH", requires = "passphrase_only")]
         keyfile: Option<PathBuf>,
+        /// Pad the plaintext length to a Padmé bucket before encrypting, so the
+        /// ciphertext length no longer reveals the exact plaintext size (only a
+        /// coarser range; overhead is at most ~12%). The true size still travels
+        /// in the authenticated header, so decryption strips the padding back off
+        /// automatically - no flag needed at decrypt time. Requires a known,
+        /// non-zero input size, so it is incompatible with stdin input, empty
+        /// files, --mmap, --pipeline, and --compress (compression would shrink
+        /// the padding back down, defeating it).
+        #[arg(long, default_value_t = false)]
+        pad: bool,
+        #[arg(long, default_value_t = false)]
+        stealth: bool,
     },
     Decrypt {
         /// Private key file for decryption. Required unless --passphrase is set (v10 files).
@@ -173,6 +190,8 @@ enum Command {
         /// encrypted with `encrypt --keyfile`). Must be the identical file content.
         #[arg(long, value_name = "PATH", requires = "passphrase_v10")]
         keyfile: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        stealth: bool,
     },
     /// Verify that a .pqf file authenticates end-to-end without writing any plaintext.
     ///
@@ -200,6 +219,10 @@ enum Command {
         /// encrypted with `encrypt --keyfile`). Must be the identical file content.
         #[arg(long, value_name = "PATH", requires = "passphrase_v10")]
         keyfile: Option<PathBuf>,
+        /// Check a file written with `encrypt --stealth`. Requires -k; mutually
+        /// exclusive with --passphrase.
+        #[arg(long, default_value_t = false, conflicts_with = "passphrase_v10")]
+        stealth: bool,
     },
     Inspect {
         input: PathBuf,
@@ -476,6 +499,9 @@ enum Command {
     Fingerprint {
         /// Public key: path to pubkey.pem or a `pqf1…` recipient string.
         key: String,
+        /// Print the recipient string as a scannable QR code (terminal unicode).
+        #[arg(long, default_value_t = false)]
+        qr: bool,
     },
 
     /// Import an existing key and derive an ML-KEM-768 key pair from it (one-way migration).
@@ -499,6 +525,47 @@ enum Command {
 
 const PARALLEL_BATCH_SIZE: usize = 8;
 
+/// Wraps a plaintext reader with Padmé length padding when requested,
+/// otherwise passes it through unchanged. A single concrete type keeps the
+/// two call sites (`run_encrypt_single`, `run_encrypt_passphrase`) from
+/// needing separate padded/unpadded code paths.
+enum MaybePadded<'a> {
+    Plain(&'a mut dyn io::Read),
+    Padded(pqfile::padding::PadmeReader<&'a mut dyn io::Read>),
+}
+
+impl<'a> MaybePadded<'a> {
+    fn new(
+        reader: &'a mut dyn io::Read,
+        pad: bool,
+        original_size: u64,
+    ) -> Result<Self, PqfileError> {
+        if !pad {
+            return Ok(MaybePadded::Plain(reader));
+        }
+        if original_size == 0 {
+            return Err(PqfileError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--pad requires a known, non-zero input size; not supported when reading \
+                 from stdin or for empty files",
+            )));
+        }
+        Ok(MaybePadded::Padded(pqfile::padding::PadmeReader::new(
+            reader,
+            original_size,
+        )))
+    }
+}
+
+impl io::Read for MaybePadded<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            MaybePadded::Plain(r) => r.read(buf),
+            MaybePadded::Padded(r) => r.read(buf),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct EncryptOpts {
     chunk_size: usize,
@@ -514,6 +581,8 @@ struct EncryptOpts {
     kdf_mem: u32,
     kdf_time: u32,
     keyfile: Option<PathBuf>,
+    pad: bool,
+    stealth: bool,
 }
 
 /// Optional user defaults loaded from the config file. Explicit flags always win;
@@ -626,6 +695,34 @@ fn ensure_overwrite_allowed(path: &Path, to_stdout: bool, force: bool) -> Result
 }
 
 fn main() {
+    // clap's derive-generated argument-parser construction for this many
+    // subcommands/flags is a deep (but finite) call chain once inlining is
+    // disabled (debug builds). Windows' default 1MB main-thread stack isn't
+    // enough for that depth - `cargo build --release` never hits this - so
+    // run everything on a spawned thread with a larger stack instead of
+    // directly on the OS-provided main thread. This is a standard, portable
+    // workaround (not platform-specific linker flags) and has no effect on
+    // program behavior.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run_main)
+        .expect("failed to spawn main worker thread")
+        .join()
+        .expect("main worker thread panicked");
+}
+
+fn run_main() {
+    // Bare invocation (no arguments at all) drops into a guided prompt flow
+    // instead of clap's usage/help text. Any argument, including a bare
+    // `--help` or `--json`, takes the normal clap path below.
+    if std::env::args().count() <= 1 {
+        if let Err(e) = run_interactive() {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let cli = Cli::parse();
     let json = cli.json;
     if let Err(e) = run(cli) {
@@ -636,6 +733,195 @@ fn main() {
         }
         std::process::exit(1);
     }
+}
+
+// ── Interactive (no-args) mode ─────────────────────────────────────────────
+//
+// A guided prompt flow for encrypt/decrypt/keygen, triggered only when
+// `pqfile` is run with no arguments. Delegates to the same run_* functions
+// the normal subcommand dispatch uses, so behavior (defaults, validation,
+// error messages) stays identical; this layer only gathers the inputs.
+
+fn prompt_line(label: &str) -> Result<String, PqfileError> {
+    print!("{label}");
+    io::stdout().flush().map_err(PqfileError::Io)?;
+    let mut buf = String::new();
+    io::stdin().read_line(&mut buf).map_err(PqfileError::Io)?;
+    Ok(buf.trim().to_string())
+}
+
+fn prompt_line_default(label: &str, default: &str) -> Result<String, PqfileError> {
+    let s = prompt_line(&format!("{label} [{default}]: "))?;
+    Ok(if s.is_empty() { default.to_string() } else { s })
+}
+
+fn prompt_required(label: &str) -> Result<String, PqfileError> {
+    let s = prompt_line(label)?;
+    if s.is_empty() {
+        return Err(PqfileError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a value is required",
+        )));
+    }
+    Ok(s)
+}
+
+fn prompt_yes_no(label: &str, default_yes: bool) -> Result<bool, PqfileError> {
+    let hint = if default_yes { "Y/n" } else { "y/N" };
+    let s = prompt_line(&format!("{label} [{hint}]: "))?;
+    Ok(match s.to_ascii_lowercase().as_str() {
+        "" => default_yes,
+        "y" | "yes" => true,
+        "n" | "no" => false,
+        _ => default_yes,
+    })
+}
+
+/// Prompts to overwrite `path` only if it already exists; returns `false` (no
+/// prompt) otherwise. Mirrors the `--force` flag's meaning for the run_* calls
+/// below.
+fn prompt_overwrite_if_exists(path: &str) -> Result<bool, PqfileError> {
+    if path.is_empty() || path == "-" || !Path::new(path).exists() {
+        return Ok(false);
+    }
+    prompt_yes_no(&format!("{path} already exists. Overwrite?"), false)
+}
+
+fn run_interactive() -> Result<(), PqfileError> {
+    println!("pqfile interactive mode (no arguments given).\n");
+    println!("What would you like to do?");
+    println!("  1) Encrypt a file");
+    println!("  2) Decrypt a file");
+    println!("  3) Generate a new key pair");
+    match prompt_required("Enter a number [1-3]: ")?.as_str() {
+        "1" => interactive_encrypt(),
+        "2" => interactive_decrypt(),
+        "3" => interactive_keygen(),
+        other => Err(PqfileError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unrecognized choice '{other}'; expected 1, 2, or 3"),
+        ))),
+    }
+}
+
+fn interactive_encrypt() -> Result<(), PqfileError> {
+    let input = prompt_required("Path to the file to encrypt: ")?;
+
+    println!("Encrypt using:");
+    println!("  1) A recipient's public key");
+    println!("  2) A passphrase (no key pair needed)");
+    let passphrase_only = prompt_line_default("Enter a number [1-2]", "1")? == "2";
+
+    let mut recipients = Vec::new();
+    if !passphrase_only {
+        recipients.push(prompt_required(
+            "Path to the recipient's pubkey.pem, or a pqf1… recipient string: ",
+        )?);
+    }
+
+    let default_output = format!("{input}.pqf");
+    let output = prompt_line_default("Output path", &default_output)?;
+    let force = prompt_overwrite_if_exists(&output)?;
+
+    run_encrypt(
+        recipients,
+        passphrase_only,
+        false,
+        input,
+        Some(output),
+        false,
+        EncryptOpts {
+            chunk_size: 0,
+            compress: false,
+            compress_level: 3,
+            parallel: false,
+            pipeline: false,
+            mmap: false,
+            anonymous_recipients: false,
+            pad_recipients: false,
+            force,
+            json: false,
+            kdf_mem: 65536,
+            kdf_time: 3,
+            keyfile: None,
+            pad: false,
+            stealth: false,
+        },
+    )
+}
+
+fn interactive_decrypt() -> Result<(), PqfileError> {
+    let input = prompt_required("Path to the .pqf file to decrypt: ")?;
+
+    println!("Decrypt using:");
+    println!("  1) A private key");
+    println!("  2) A passphrase (v10 passphrase-only files)");
+    let passphrase_v10 = prompt_line_default("Enter a number [1-2]", "1")? == "2";
+
+    let key = if passphrase_v10 {
+        None
+    } else {
+        Some(PathBuf::from(prompt_required(
+            "Path to your privkey.pem: ",
+        )?))
+    };
+
+    let default_output = Path::new(&input)
+        .with_extension("")
+        .to_string_lossy()
+        .into_owned();
+    let output = prompt_line_default("Output path", &default_output)?;
+    let force = prompt_overwrite_if_exists(&output)?;
+
+    run_decrypt(
+        key,
+        passphrase_v10,
+        None,
+        false,
+        65536,
+        3,
+        input,
+        Some(output),
+        false,
+        force,
+        false,
+        false,
+    )
+}
+
+fn interactive_keygen() -> Result<(), PqfileError> {
+    let out = PathBuf::from(prompt_line_default(
+        "Directory to write the key pair to",
+        "./keys",
+    )?);
+    std::fs::create_dir_all(&out)?;
+
+    let level: u16 = prompt_line_default("ML-KEM security level (512, 768, or 1024)", "768")?
+        .parse()
+        .map_err(|_| {
+            PqfileError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "level must be 512, 768, or 1024",
+            ))
+        })?;
+    let hybrid = prompt_yes_no(
+        "Use hybrid X25519+ML-KEM-768 (classical + post-quantum)?",
+        false,
+    )?;
+    let passphrase = prompt_yes_no("Protect the private key with a passphrase?", true)?;
+
+    let force = if out.join("pubkey.pem").exists() || out.join("privkey.pem").exists() {
+        prompt_yes_no(
+            "Key files already exist in that directory. Overwrite?",
+            false,
+        )?
+    } else {
+        false
+    };
+
+    run_keygen(
+        out, force, level, hybrid, passphrase, false, None, None, false, false,
+    )
 }
 
 fn run(cli: Cli) -> Result<(), PqfileError> {
@@ -655,10 +941,11 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             level,
             hybrid,
             hardware,
+            qr,
             label,
             expiry,
         } => run_keygen(
-            out, force, level, hybrid, passphrase, hardware, label, expiry, json,
+            out, force, level, hybrid, passphrase, hardware, label, expiry, qr, json,
         ),
         Command::Encrypt {
             recipients,
@@ -678,6 +965,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             kdf_mem,
             kdf_time,
             keyfile,
+            pad,
+            stealth,
         } => run_encrypt(
             recipients,
             passphrase_only,
@@ -699,6 +988,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
                 kdf_mem,
                 kdf_time,
                 keyfile,
+                pad,
+                stealth,
             },
         ),
         Command::Decrypt {
@@ -711,6 +1002,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             max_kdf_mem,
             max_kdf_time,
             keyfile,
+            stealth,
         } => run_decrypt(
             key,
             passphrase_v10,
@@ -722,6 +1014,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             output,
             parallel,
             force,
+            stealth,
             json,
         ),
         Command::Check {
@@ -731,6 +1024,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             max_kdf_mem,
             max_kdf_time,
             keyfile,
+            stealth,
         } => run_check(
             key,
             passphrase_v10,
@@ -739,6 +1033,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             max_kdf_mem,
             max_kdf_time,
             input,
+            stealth,
             json,
         ),
         Command::Inspect { input } => inspect(input.as_path(), json),
@@ -826,7 +1121,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             force,
             passphrase,
         } => run_import_key(from, out, force, passphrase, json),
-        Command::Fingerprint { key } => run_fingerprint(&key, json),
+        Command::Fingerprint { key, qr } => run_fingerprint(&key, qr, json),
     }
 }
 
@@ -840,6 +1135,7 @@ fn run_keygen(
     hardware: bool,
     label: Option<String>,
     expiry: Option<String>,
+    qr: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
     if hardware && passphrase {
@@ -944,7 +1240,33 @@ fn run_keygen(
             println!("Expiry: {date}");
         }
     }
+    if qr && !recipient_str.is_empty() {
+        print_recipient_qr(&recipient_str, json);
+    }
     Ok(())
+}
+
+/// Renders a `pqf1…` recipient string as a terminal QR code.
+///
+/// The string is uppercased first: Bech32m is case-insensitive and the QR
+/// alphanumeric mode (uppercase-only charset) packs ~45% more characters per
+/// version than byte mode, keeping the code as scannable as possible. In
+/// `--json` mode the QR goes to stderr so stdout stays machine-readable.
+fn print_recipient_qr(recipient_str: &str, json: bool) {
+    match qrcode::QrCode::new(recipient_str.to_ascii_uppercase().as_bytes()) {
+        Ok(code) => {
+            let rendered = code
+                .render::<qrcode::render::unicode::Dense1x2>()
+                .quiet_zone(true)
+                .build();
+            if json {
+                eprintln!("{rendered}");
+            } else {
+                println!("{rendered}");
+            }
+        }
+        Err(e) => eprintln!("warning: could not render QR code: {e}"),
+    }
 }
 
 fn run_encrypt(
@@ -961,6 +1283,11 @@ fn run_encrypt(
             return Err(PqfileError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "--passphrase and --recursive cannot be combined",
+            )));
+        }
+        if opts.stealth {
+            return Err(PqfileError::Io(std::io::Error::other(
+                "--stealth is not supported with --passphrase",
             )));
         }
         let pp = prompt_new_passphrase()?;
@@ -1011,6 +1338,16 @@ fn run_encrypt(
         })
         .collect::<Result<_, _>>()?;
     if recursive {
+        if opts.pad {
+            return Err(PqfileError::Io(std::io::Error::other(
+                "--pad is not supported with --recursive",
+            )));
+        }
+        if opts.stealth {
+            return Err(PqfileError::Io(std::io::Error::other(
+                "--stealth is not supported with --recursive",
+            )));
+        }
         if pubkey_pems.len() != 1 {
             return Err(PqfileError::Io(std::io::Error::other(
                 "--recursive supports only one recipient",
@@ -1018,8 +1355,98 @@ fn run_encrypt(
         }
         run_encrypt_recursive(&pubkey_pems[0], &input, opts)
     } else {
+        if opts.stealth {
+            if pubkey_pems.len() != 1 {
+                return Err(PqfileError::Io(std::io::Error::other(
+                    "--stealth supports only one recipient",
+                )));
+            }
+            if opts.mmap {
+                return Err(PqfileError::Io(std::io::Error::other(
+                    "--stealth is not supported with --mmap",
+                )));
+            }
+            if opts.pipeline {
+                return Err(PqfileError::Io(std::io::Error::other(
+                    "--stealth is not supported with --pipeline",
+                )));
+            }
+            if opts.compress {
+                return Err(PqfileError::Io(std::io::Error::other(
+                    "--stealth is not supported with --compress",
+                )));
+            }
+            if opts.parallel {
+                return Err(PqfileError::Io(std::io::Error::other(
+                    "--stealth is not supported with --parallel",
+                )));
+            }
+            if opts.anonymous_recipients || opts.pad_recipients {
+                return Err(PqfileError::Io(std::io::Error::other(
+                    "--stealth is not supported with --anonymous-recipients or --pad-recipients \
+                     (stealth mode is already single-recipient and reveals nothing about key type)",
+                )));
+            }
+            if opts.chunk_size != 0 && opts.chunk_size != format::CHUNK_SIZE {
+                return Err(PqfileError::Io(std::io::Error::other(
+                    "--stealth always uses the default chunk size; --chunk-size is not supported",
+                )));
+            }
+            return run_encrypt_stealth(&pubkey_pems[0], &input, output.as_deref(), opts);
+        }
         run_encrypt_single(&pubkey_pems, &input, output.as_deref(), opts)
     }
+}
+
+fn run_encrypt_stealth(
+    pubkey_pem: &str,
+    input: &str,
+    output: Option<&str>,
+    opts: EncryptOpts,
+) -> Result<(), PqfileError> {
+    let original_size: u64 = if input != "-" {
+        std::fs::metadata(input).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+
+    let out = output.unwrap_or_else(|| if input == "-" { "-" } else { "" });
+    let to_stdout = out == "-" || (out.is_empty() && input == "-");
+    let out_path: PathBuf = if to_stdout {
+        PathBuf::new()
+    } else if out.is_empty() {
+        let mut s = std::ffi::OsString::from(input);
+        s.push(".pqf");
+        PathBuf::from(s)
+    } else {
+        PathBuf::from(out)
+    };
+
+    ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
+    let mut raw_reader = open_reader(input)?;
+    let mut reader = MaybePadded::new(&mut *raw_reader, opts.pad, original_size)?;
+    let mut writer = CliOutput::new(to_stdout, &out_path)?;
+    encrypt::encrypt_stream_stealth(pubkey_pem, original_size, &mut reader, &mut writer)?;
+    writer.commit()?;
+
+    if opts.json {
+        let out_val = if to_stdout {
+            "-"
+        } else {
+            &out_path.to_string_lossy()
+        };
+        let target: &mut dyn io::Write = if to_stdout {
+            &mut io::stderr()
+        } else {
+            &mut io::stdout()
+        };
+        writeln!(
+            target,
+            "{}",
+            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
+        )?;
+    }
+    Ok(())
 }
 
 fn run_encrypt_passphrase(
@@ -1047,7 +1474,8 @@ fn run_encrypt_passphrase(
     };
 
     ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
-    let mut reader = open_reader(input)?;
+    let mut raw_reader = open_reader(input)?;
+    let mut reader = MaybePadded::new(&mut *raw_reader, opts.pad, original_size)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
     // p=4 matches the library default; --kdf-mem / --kdf-time only tune m and t.
     if let Some(ref kf_path) = opts.keyfile {
@@ -1059,7 +1487,7 @@ fn run_encrypt_passphrase(
             opts.kdf_time,
             4,
             original_size,
-            &mut *reader,
+            &mut reader,
             &mut writer,
         )?;
     } else {
@@ -1069,7 +1497,7 @@ fn run_encrypt_passphrase(
             opts.kdf_time,
             4,
             original_size,
-            &mut *reader,
+            &mut reader,
             &mut writer,
         )?;
     }
@@ -1121,6 +1549,25 @@ fn run_encrypt_single(
     };
 
     ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
+
+    if opts.pad {
+        if opts.mmap {
+            return Err(PqfileError::Io(std::io::Error::other(
+                "--pad is not supported with --mmap",
+            )));
+        }
+        if opts.pipeline {
+            return Err(PqfileError::Io(std::io::Error::other(
+                "--pad is not supported with --pipeline",
+            )));
+        }
+        if opts.compress {
+            return Err(PqfileError::Io(std::io::Error::other(
+                "--pad is not supported with --compress (compression would shrink the \
+                 padding back down, defeating it)",
+            )));
+        }
+    }
 
     // --mmap: native only, single recipient, no compress, file input only.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1196,9 +1643,10 @@ fn run_encrypt_single(
         return Ok(());
     }
 
-    let mut reader = open_reader(input)?;
+    let mut raw_reader = open_reader(input)?;
+    let mut reader = MaybePadded::new(&mut *raw_reader, opts.pad, original_size)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
-    perform_encrypt(pubkey_pems, original_size, &opts, &mut *reader, &mut writer)?;
+    perform_encrypt(pubkey_pems, original_size, &opts, &mut reader, &mut writer)?;
     writer.commit()?;
 
     if opts.json {
@@ -1452,6 +1900,7 @@ fn run_decrypt(
     output: Option<String>,
     parallel: bool,
     force: bool,
+    stealth: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
     let out = output.as_deref().unwrap_or("");
@@ -1466,7 +1915,47 @@ fn run_decrypt(
 
     ensure_overwrite_allowed(&out_path, to_stdout, force)?;
     let mut reader = open_reader(&input)?;
-    let mut writer = CliOutput::new(to_stdout, &out_path)?;
+
+    if stealth {
+        let key_path = resolve_key_path(key, no_config)?;
+        let privkey_pem = std::fs::read_to_string(&key_path)?;
+        let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
+        let pp_str = pp.as_deref().map(|z| z.as_str());
+        let mut writer = CliOutput::new(to_stdout, &out_path)?;
+        // decrypt_stream_stealth truncates any Padmé padding tail internally,
+        // so no TruncatingWriter wrapping is needed here (unlike the normal
+        // path below, there is no header to peek anyway).
+        decrypt::decrypt_stream_stealth(&privkey_pem, &mut *reader, &mut writer, pp_str)?;
+        writer.commit()?;
+        if json {
+            let out_val = if to_stdout {
+                "-"
+            } else {
+                &out_path.to_string_lossy()
+            };
+            let target: &mut dyn io::Write = if to_stdout {
+                &mut io::stderr()
+            } else {
+                &mut io::stdout()
+            };
+            writeln!(
+                target,
+                "{}",
+                json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
+            )?;
+        }
+        return Ok(());
+    }
+
+    // Cap decrypted output at the header's declared original_size, silently
+    // dropping any Padmé padding tail. A no-op for every file that wasn't
+    // padded (they already decrypt to exactly original_size bytes) or whose
+    // size couldn't be peeked (0 disables truncation) - no --pad flag needed
+    // at decrypt time.
+    let mut writer = pqfile::padding::TruncatingWriter::new(
+        CliOutput::new(to_stdout, &out_path)?,
+        peek_original_size(&input),
+    );
 
     if passphrase_v10 {
         let pp = prompt_passphrase("Enter passphrase: ")?;
@@ -1506,6 +1995,7 @@ fn run_decrypt(
             decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut writer, pp_str)?;
         }
     }
+    let mut writer = writer.into_inner();
     writer.commit()?;
 
     if json {
@@ -1566,10 +2056,44 @@ fn run_check(
     max_kdf_mem: u32,
     max_kdf_time: u32,
     input: String,
+    stealth: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
     let mut reader = open_reader(&input)?;
-    let mut sink = CountingSink(0);
+
+    if stealth {
+        let key_path = resolve_key_path(key, no_config)?;
+        let privkey_pem = std::fs::read_to_string(&key_path)?;
+        let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
+        let pp_str = pp.as_deref().map(|z| z.as_str());
+        let mut sink = CountingSink(0);
+        // decrypt_stream_stealth truncates internally, so sink.0 is already
+        // the true (unpadded) plaintext byte count.
+        decrypt::decrypt_stream_stealth(&privkey_pem, &mut *reader, &mut sink, pp_str)?;
+        let count = sink.0;
+        if json {
+            println!(
+                "{}",
+                json_object(&[
+                    kv_str("status", "ok"),
+                    kv_str("input", &input),
+                    kv_raw("plaintext_bytes", &count.to_string()),
+                ])
+            );
+        } else {
+            println!(
+                "OK: {input} authenticated ({count} plaintext byte{})",
+                if count == 1 { "" } else { "s" }
+            );
+        }
+        return Ok(());
+    }
+
+    // Cap the reported count at the header's declared original_size, so a
+    // padded file's plaintext_bytes reflects the true size, not the padded
+    // physical length. No-op for non-padded files; see peek_original_size.
+    let mut sink =
+        pqfile::padding::TruncatingWriter::new(CountingSink(0), peek_original_size(&input));
 
     if passphrase_v10 {
         let pp = prompt_passphrase("Enter passphrase: ")?;
@@ -1599,6 +2123,7 @@ fn run_check(
         let pp_str = pp.as_deref().map(|z| z.as_str());
         decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut sink, pp_str)?;
     }
+    let count = sink.into_inner().0;
 
     if json {
         println!(
@@ -1606,14 +2131,13 @@ fn run_check(
             json_object(&[
                 kv_str("status", "ok"),
                 kv_str("input", &input),
-                kv_raw("plaintext_bytes", &sink.0.to_string()),
+                kv_raw("plaintext_bytes", &count.to_string()),
             ])
         );
     } else {
         println!(
-            "OK: {input} authenticated ({} plaintext byte{})",
-            sink.0,
-            if sink.0 == 1 { "" } else { "s" }
+            "OK: {input} authenticated ({count} plaintext byte{})",
+            if count == 1 { "" } else { "s" }
         );
     }
     Ok(())
@@ -1624,6 +2148,30 @@ fn open_reader(input: &str) -> Result<Box<dyn io::Read>, PqfileError> {
         Ok(Box::new(io::stdin()))
     } else {
         Ok(Box::new(BufReader::new(std::fs::File::open(input)?)))
+    }
+}
+
+/// Peeks a `.pqf` file's header to read its declared `original_size`, without
+/// affecting the real decrypt call that follows (this opens its own,
+/// independent file handle and reads only the header). Returns 0 - the
+/// existing "unknown length, don't truncate" convention - for stdin input, or
+/// if the header can't be read (missing file, bad magic, unsupported
+/// version); the real decrypt call surfaces the accurate error in that case.
+fn peek_original_size(input: &str) -> u64 {
+    if input == "-" {
+        return 0;
+    }
+    let Ok(file) = std::fs::File::open(input) else {
+        return 0;
+    };
+    let mut reader = BufReader::new(file);
+    match inspect_stream(&mut reader) {
+        Ok(PqfHeaderInfo::Single { original_size, .. })
+        | Ok(PqfHeaderInfo::Multi { original_size, .. })
+        | Ok(PqfHeaderInfo::AnonMulti { original_size, .. })
+        | Ok(PqfHeaderInfo::AnonMultiV8 { original_size, .. })
+        | Ok(PqfHeaderInfo::Passphrase { original_size, .. }) => original_size,
+        _ => 0,
     }
 }
 
@@ -1815,9 +2363,22 @@ fn kem_variant_name(variant: u16) -> &'static str {
 }
 
 fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
-    let file = std::fs::File::open(input)?;
+    let mut file = std::fs::File::open(input)?;
+    // Peek the raw version byte: the Multi/AnonMulti inspect variants do not carry
+    // it, but the display should show the on-disk byte (which may include the
+    // authenticated-header bit). Errors are ignored here; inspect_stream below
+    // reports the canonical error for short or malformed files.
+    let mut preamble = [0u8; 5];
+    let raw_version = match std::io::Read::read_exact(&mut file, &mut preamble) {
+        Ok(()) => preamble[4],
+        Err(_) => 0,
+    };
+    std::io::Seek::rewind(&mut file)?;
     let mut reader = BufReader::new(file);
     let info = inspect_stream(&mut reader)?;
+    let authenticated = format::is_header_authenticated(raw_version);
+    let auth_str = if authenticated { "yes" } else { "no" };
+    let auth_json = if authenticated { "true" } else { "false" };
     match &info {
         PqfHeaderInfo::Single {
             version,
@@ -1829,7 +2390,8 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
         } => {
             let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
             let variant_name = kem_variant_name(*kem_variant);
-            let has_chunk_size = *version == format::VERSION_V5 || *version == format::VERSION_V6;
+            let layout = format::version_layout(*version);
+            let has_chunk_size = layout == format::VERSION_V5 || layout == format::VERSION_V6;
             let compression_name = match compression_algo {
                 v if *v == format::COMPRESSION_NONE => "none",
                 v if *v == format::COMPRESSION_ZSTD => "zstd",
@@ -1840,6 +2402,7 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                     kv_str("status", "ok"),
                     kv_str("magic", "PQFL"),
                     kv_str("version", &format!("{version:#04x}")),
+                    kv_raw("header_authenticated", auth_json),
                     kv_raw("kem_variant", &format!("{kem_variant}")),
                     kv_str("kem_variant_name", variant_name),
                     kv_str("nonce", &nonce_hex),
@@ -1848,20 +2411,21 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                 if has_chunk_size {
                     fields.push(kv_raw("chunk_size", &format!("{chunk_size}")));
                 }
-                if *version == format::VERSION_V6 {
+                if layout == format::VERSION_V6 {
                     fields.push(kv_str("compression", compression_name));
                 }
                 println!("{}", json_object(&fields));
             } else {
                 println!("Magic:              PQFL");
                 println!("Version:            {version:#04x}");
+                println!("Auth. header:       {auth_str}");
                 println!("KEM variant:        {kem_variant} ({variant_name})");
                 println!("Nonce:              {nonce_hex}");
                 println!("Original file size: {original_size} bytes");
                 if has_chunk_size {
                     println!("Chunk size:         {chunk_size} bytes");
                 }
-                if *version == format::VERSION_V6 {
+                if layout == format::VERSION_V6 {
                     println!("Compression:        {compression_name}");
                 }
             }
@@ -1871,8 +2435,9 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
             nonce,
             original_size,
         } => print_multi_header(
-            "0x04",
-            "0x04 (multi-recipient)",
+            &format!("{raw_version:#04x}"),
+            &format!("{raw_version:#04x} (multi-recipient)"),
+            authenticated,
             nonce,
             *original_size,
             recipients,
@@ -1886,8 +2451,9 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
             nonce,
             original_size,
         } => print_multi_header(
-            "0x07",
-            "0x07 (anonymous multi-recipient, legacy)",
+            &format!("{raw_version:#04x}"),
+            &format!("{raw_version:#04x} (anonymous multi-recipient, legacy)"),
+            authenticated,
             nonce,
             *original_size,
             recipients,
@@ -1904,15 +2470,16 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
         } => {
             let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
             let version_hex = format!("{version:#04x}");
-            let mode_label = if *version == pqfile::format::VERSION_V9 {
+            let is_v9 = format::version_layout(*version) == pqfile::format::VERSION_V9;
+            let mode_label = if is_v9 {
                 "anonymous-recipients-v9-padded"
             } else {
                 "anonymous-recipients-v8"
             };
-            let version_display = if *version == pqfile::format::VERSION_V9 {
-                "0x09 (padded anonymous multi-recipient)"
+            let version_display = if is_v9 {
+                format!("{version_hex} (padded anonymous multi-recipient)")
             } else {
-                "0x08 (variant-blind anonymous multi-recipient)"
+                format!("{version_hex} (variant-blind anonymous multi-recipient)")
             };
             if json {
                 println!(
@@ -1921,6 +2488,7 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                         kv_str("status", "ok"),
                         kv_str("magic", "PQFL"),
                         kv_str("version", &version_hex),
+                        kv_raw("header_authenticated", auth_json),
                         kv_str("mode", mode_label),
                         kv_raw("slot_count", &slot_count.to_string()),
                         kv_str("nonce", &nonce_hex),
@@ -1930,7 +2498,52 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
             } else {
                 println!("Magic:              PQFL");
                 println!("Version:            {version_display}");
+                println!("Auth. header:       {auth_str}");
                 println!("Slots:              {slot_count} (key types hidden)");
+                println!("Nonce:              {nonce_hex}");
+                println!("Original file size: {original_size} bytes");
+            }
+        }
+        PqfHeaderInfo::Passphrase {
+            version,
+            m_kib,
+            t_cost,
+            p_cost,
+            flags,
+            nonce,
+            original_size,
+        } => {
+            let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+            let keyfile_required = flags & 0x01 != 0;
+            if json {
+                println!(
+                    "{}",
+                    json_object(&[
+                        kv_str("status", "ok"),
+                        kv_str("magic", "PQFL"),
+                        kv_str("version", &format!("{version:#04x}")),
+                        kv_raw("header_authenticated", auth_json),
+                        kv_str("mode", "passphrase"),
+                        kv_raw("kdf_mem_kib", &m_kib.to_string()),
+                        kv_raw("kdf_time", &t_cost.to_string()),
+                        kv_raw("kdf_parallelism", &p_cost.to_string()),
+                        kv_raw(
+                            "keyfile_required",
+                            if keyfile_required { "true" } else { "false" },
+                        ),
+                        kv_str("nonce", &nonce_hex),
+                        kv_raw("original_size", &original_size.to_string()),
+                    ])
+                );
+            } else {
+                println!("Magic:              PQFL");
+                println!("Version:            {version:#04x} (passphrase-only)");
+                println!("Auth. header:       {auth_str}");
+                println!("Argon2id:           m={m_kib} KiB, t={t_cost}, p={p_cost}");
+                println!(
+                    "Keyfile required:   {}",
+                    if keyfile_required { "yes" } else { "no" }
+                );
                 println!("Nonce:              {nonce_hex}");
                 println!("Original file size: {original_size} bytes");
             }
@@ -1944,6 +2557,7 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
 fn print_multi_header(
     version_num: &str,
     version_label: &str,
+    authenticated: bool,
     nonce: &[u8; 12],
     original_size: u64,
     recipients: &[RecipientInfo],
@@ -1968,6 +2582,10 @@ fn print_multi_header(
             kv_str("status", "ok"),
             kv_str("magic", "PQFL"),
             kv_str("version", version_num),
+            kv_raw(
+                "header_authenticated",
+                if authenticated { "true" } else { "false" },
+            ),
         ];
         if let Some(m) = mode_json {
             fields.push(kv_str("mode", m));
@@ -1982,6 +2600,10 @@ fn print_multi_header(
     } else {
         println!("Magic:              PQFL");
         println!("Version:            {version_label}");
+        println!(
+            "Auth. header:       {}",
+            if authenticated { "yes" } else { "no" }
+        );
         println!("Recipients:         {}{count_suffix}", recipients.len());
         for (i, r) in recipients.iter().enumerate() {
             let name = kem_variant_name(r.kem_variant);
@@ -2811,7 +3433,7 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
             original_size,
             ..
         } => {
-            let v = "0x04".to_string();
+            let v = format!("{:#04x}", content.get(4).copied().unwrap_or(0));
             let k = format!("{} recipients", recipients.len());
             (v, k, *original_size)
         }
@@ -2820,7 +3442,7 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
             original_size,
             ..
         } => {
-            let v = "0x07".to_string();
+            let v = format!("{:#04x}", content.get(4).copied().unwrap_or(0));
             let k = format!("{} slots (anon)", recipients.len());
             (v, k, *original_size)
         }
@@ -2831,12 +3453,23 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
             ..
         } => {
             let v = format!("{version:#04x}");
-            let label = if *version == pqfile::format::VERSION_V9 {
+            let label = if format::version_layout(*version) == pqfile::format::VERSION_V9 {
                 "anon v9 padded"
             } else {
                 "anon v8"
             };
             let k = format!("{slot_count} slots ({label})");
+            (v, k, *original_size)
+        }
+        PqfHeaderInfo::Passphrase {
+            version,
+            m_kib,
+            t_cost,
+            original_size,
+            ..
+        } => {
+            let v = format!("{version:#04x}");
+            let k = format!("passphrase (m={m_kib} KiB, t={t_cost})");
             (v, k, *original_size)
         }
         _ => ("unknown".to_string(), "unknown".to_string(), 0u64),
@@ -2974,7 +3607,7 @@ fn json_error_from(e: &PqfileError) -> String {
 
 // ── fingerprint ───────────────────────────────────────────────────────────────
 
-fn run_fingerprint(key: &str, json: bool) -> Result<(), PqfileError> {
+fn run_fingerprint(key: &str, qr: bool, json: bool) -> Result<(), PqfileError> {
     let pub_pem = if pqfile::recipient_string::is_recipient_string(key) {
         pqfile::recipient_string::decode_pubkey(key)?
     } else {
@@ -2998,6 +3631,9 @@ fn run_fingerprint(key: &str, json: bool) -> Result<(), PqfileError> {
         if !recipient_str.is_empty() {
             println!("Recipient string: {recipient_str}");
         }
+    }
+    if qr && !recipient_str.is_empty() {
+        print_recipient_qr(&recipient_str, json);
     }
     Ok(())
 }

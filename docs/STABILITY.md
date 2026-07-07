@@ -30,8 +30,8 @@ surface.
 
 | Module | What is stable |
 |--------|----------------|
-| `pqfile::encrypt` | `encrypt_bytes`, `encrypt_stream`, `encrypt_stream_multi`, `encrypt_stream_multi_anon`, `encrypt_stream_multi_anon_padded`, `encrypt_stream_compressed`, `encrypt_stream_parallel`, `encrypt_stream_pipelined`, `encrypt_mmap` (native only) |
-| `pqfile::decrypt` | `decrypt_bytes`, `decrypt_stream`, `decrypt_stream_parallel` |
+| `pqfile::encrypt` | `encrypt_bytes`, `encrypt_stream`, `encrypt_stream_multi`, `encrypt_stream_multi_anon`, `encrypt_stream_multi_anon_padded`, `encrypt_stream_compressed`, `encrypt_stream_parallel`, `encrypt_stream_pipelined`, `encrypt_stream_passphrase`, `encrypt_stream_passphrase_with_params`, `encrypt_stream_passphrase_keyfile`, `encrypt_stream_passphrase_keyfile_with_params`, `encrypt_stream_stealth`, `encrypt_mmap` (native only) |
+| `pqfile::decrypt` | `decrypt_bytes`, `decrypt_stream`, `decrypt_stream_parallel`, `decrypt_stream_passphrase`, `decrypt_stream_passphrase_with_limits`, `decrypt_stream_passphrase_keyfile`, `decrypt_stream_passphrase_keyfile_with_limits`, `decrypt_stream_stealth` |
 | `pqfile::sign` | `sign_keygen`, `sign_keygen_bytes`, `sign_keygen_hardware`, `sign_keygen_hardware_bytes`, `sign_bytes`, `sign_file`, `verify_bytes`, `verify_file`, `encode_sig_pem`, `decode_sig_pem`, `default_sig_path`, `SignKeygenResult` |
 | `pqfile::signcrypt` | `signcrypt`, `signcrypt_bytes`, `signdecrypt` |
 | `pqfile::keygen` | `keygen`, `keygen_bytes`, `keygen_bytes_hybrid_768`, `keygen_hardware`, `keygen_bytes_hardware`, `keygen_bytes_hardware_hybrid`, `is_encrypted_key`, `is_hardware_key`, `fingerprint`, `fingerprint_pem` |
@@ -46,6 +46,7 @@ surface.
 | `pqfile::archive` | `create`, `extract`, `list`, `create_from_memory`, `extract_to_memory`, `ArchiveEntry` |
 | `pqfile::shamir` | `split_key`, `reconstruct_key`, `write_shares`, `SplitResult` |
 | `pqfile::rekey` | `rekey_stream` |
+| `pqfile::padding` | `padme_length`, `PadmeReader`, `TruncatingWriter` |
 | `pqfile::add_recipient` | `add_recipient_stream`, `AddRecipientInfo` |
 | `pqfile::revoke` | `revoke_key`, `check_not_revoked`, `revoked_path_for` |
 | `pqfile::shred` | `shred_file` |
@@ -53,7 +54,7 @@ surface.
 
 ### Format constants
 
-All public constants in `pqfile::format` (version bytes, KEM variant IDs, size constants, `adaptive_chunk_size`) are stable. Their **numeric values** will not change.
+All public constants in `pqfile::format` (version bytes, `VERSION_AUTH_BIT`, KEM variant IDs, size constants, `adaptive_chunk_size`) are stable. Their **numeric values** will not change. The helper functions `format::version_layout` and `format::is_header_authenticated` are also stable.
 
 ### Crate-level re-exports
 

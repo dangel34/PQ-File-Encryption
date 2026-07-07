@@ -53,6 +53,10 @@ pub struct PqfileApp {
     pub(crate) encrypt_batch_pending: BatchPending,
     /// Pad recipient count to the next power of two with random dummy slots (v9 format).
     pub(crate) encrypt_pad_recipients: bool,
+    /// Pad plaintext length to a Padmé bucket before encrypting (hides exact file size).
+    pub(crate) encrypt_pad: bool,
+    /// Omit the .pqf magic, version byte, and KEM variant field entirely (single recipient only).
+    pub(crate) encrypt_stealth: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) encrypt_compress: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -76,6 +80,8 @@ pub struct PqfileApp {
     pub(crate) decrypt_files: Vec<MultiFileEntry>,
     pub(crate) decrypt_batch_pending: BatchPending,
     pub(crate) decrypt_passphrase: Zeroizing<String>,
+    /// File(s) were written with Encrypt tab's Stealth mode (no magic bytes to auto-detect).
+    pub(crate) decrypt_stealth: bool,
     pub(crate) decrypt_status: OpStatus,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) decrypt_batch_job: Option<DecryptBatchJobHandle>,
@@ -179,8 +185,8 @@ pub struct PqfileApp {
     pub(crate) shamir_sub_tab: ShamirSubTab,
 
     // ── Batch operation summaries ─────────────────────────────────────────
-    pub(crate) encrypt_batch_summary: Option<String>,
-    pub(crate) decrypt_batch_summary: Option<String>,
+    pub(crate) encrypt_batch_summary: Option<OpStatus>,
+    pub(crate) decrypt_batch_summary: Option<OpStatus>,
 
     // ── Key expiry fields (keygen tab) ────────────────────────────────────
     pub(crate) keygen_use_expiry: bool,
@@ -243,6 +249,8 @@ impl Default for PqfileApp {
             encrypt_files: Vec::new(),
             encrypt_batch_pending: Arc::new(Mutex::new(None)),
             encrypt_pad_recipients: false,
+            encrypt_pad: false,
+            encrypt_stealth: false,
             #[cfg(not(target_arch = "wasm32"))]
             encrypt_compress: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -253,6 +261,7 @@ impl Default for PqfileApp {
             decrypt_files: Vec::new(),
             decrypt_batch_pending: Arc::new(Mutex::new(None)),
             decrypt_passphrase: Zeroizing::new(String::new()),
+            decrypt_stealth: false,
             decrypt_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
             decrypt_batch_job: None,
@@ -864,14 +873,14 @@ impl PqfileApp {
                 .iter()
                 .filter(|e| matches!(e.status, OpStatus::Err(_)))
                 .count();
-            if ok + err > 1 {
+            if ok + err > 0 {
                 self.encrypt_batch_summary = Some(if err == 0 {
-                    format!(
+                    OpStatus::Ok(format!(
                         "{ok} file{} encrypted successfully.",
                         if ok == 1 { "" } else { "s" }
-                    )
+                    ))
                 } else {
-                    format!("{ok} succeeded, {err} failed.")
+                    OpStatus::Err(format!("{ok} succeeded, {err} failed."))
                 });
             }
             // Record successfully encrypted source files as recent.
@@ -919,14 +928,14 @@ impl PqfileApp {
                 .iter()
                 .filter(|e| matches!(e.status, OpStatus::Err(_)))
                 .count();
-            if ok + err > 1 {
+            if ok + err > 0 {
                 self.decrypt_batch_summary = Some(if err == 0 {
-                    format!(
+                    OpStatus::Ok(format!(
                         "{ok} file{} decrypted successfully.",
                         if ok == 1 { "" } else { "s" }
-                    )
+                    ))
                 } else {
-                    format!("{ok} succeeded, {err} failed.")
+                    OpStatus::Err(format!("{ok} succeeded, {err} failed."))
                 });
             }
             // Record successfully decrypted source files as recent.
@@ -1529,6 +1538,16 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              format. This hides which key type each recipient uses and randomizes the order \
              of recipient entries, so an observer cannot tell how many or what kind of keys \
              were used.",
+            "## PADDING & STEALTH MODE",
+            "The Padding checkbox rounds the ciphertext length to a coarser bucket (at most \
+             ~12% overhead) so an observer watching file sizes cannot determine the exact \
+             plaintext length. The true size still travels inside the authenticated header; \
+             decrypting strips the padding back off automatically, with nothing to configure \
+             on the Decrypt tab. Stealth mode (single recipient only) goes further and omits \
+             the .pqf magic bytes, version byte, and KEM variant field entirely, so the output \
+             is not identifiable as pqfile ciphertext at all. Because there is nothing left on \
+             the wire to auto-detect, decrypting a stealth file requires checking \"Stealth \
+             mode\" on the Decrypt tab yourself.",
         ]),
         Tab::Decrypt => ("Decrypt / Rekey", &[
             "Decryption recovers the original file from a .pqf ciphertext using your private \
@@ -1554,6 +1573,11 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              payload. The session key is decapsulated using the old private key and then \
              re-encapsulated for the new recipient. The encrypted content itself is untouched. \
              Only supported for files using the default 64 KiB chunk size.",
+            "## STEALTH MODE FILES",
+            "If a file was encrypted with Stealth mode (Encrypt tab), it has no .pqf magic \
+             bytes or header for pqfile to recognize automatically. Check \"Stealth mode\" \
+             above the file list before decrypting; there is nothing in the file itself that \
+             reveals this.",
         ]),
         Tab::Inspect => ("Inspect File or Key", &[
             "Inspect runs health checks on a key file (.pem) or encrypted file (.pqf) and \
@@ -1567,7 +1591,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              header validity, and recipient anonymity grade. The Raw Details section shows \
              the nonce and hex version codes.",
             "## ICONS",
-            "✓ = pass, ⚠ = warning (action recommended), ✗ = fail (action required), \
+            "✔ = pass, ⚠ = warning (action recommended), ✖ = fail (action required), \
              · = informational or not applicable.",
         ]),
         Tab::Sign => ("Digital Signatures", &[
@@ -2018,14 +2042,14 @@ impl PqfileApp {
                                         Ok(ct) => {
                                             if !confirm || !out_path.exists() {
                                                 match std::fs::write(&out_path, &ct) {
-                                                    Ok(()) => format!("✓ {out_name}"),
-                                                    Err(e) => format!("✗ {name}: {e}"),
+                                                    Ok(()) => format!("✔ {out_name}"),
+                                                    Err(e) => format!("✖ {name}: {e}"),
                                                 }
                                             } else {
                                                 format!("⚠ skipped {name} (output exists)")
                                             }
                                         }
-                                        Err(e) => format!("✗ {name}: {e}"),
+                                        Err(e) => format!("✖ {name}: {e}"),
                                     };
                                     let _ = tx.send(msg);
                                     ctx.request_repaint();

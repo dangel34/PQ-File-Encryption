@@ -16,13 +16,13 @@ use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 use crate::format::{
-    chunk_nonce, compute_key_commitment, ct_len_for_variant, fill_chunk, hybrid_hkdf,
-    make_chunk_aad, PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, RecipientEntryV8,
-    BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD, HYBRID_CT_LEN_768,
-    HYBRID_SEED_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512, KEM_CT_LEN_768, KEM_VARIANT_1024,
-    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION, VERSION_V10,
-    VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8, VERSION_V9,
-    WRAPPED_KEY_LEN,
+    chunk_nonce, commitment_for_stream, commitment_for_v10, ct_len_for_variant, fill_chunk,
+    hybrid_hkdf, make_chunk_aad, version_layout, PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8,
+    RecipientEntryV8, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, COMPRESSION_ZSTD,
+    HYBRID_CT_LEN_768, HYBRID_SEED_LEN_768, KEM_CT_LEN_1024, KEM_CT_LEN_512, KEM_CT_LEN_768,
+    KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, VERSION,
+    VERSION_AUTH_BIT, VERSION_V10, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6, VERSION_V7,
+    VERSION_V8, VERSION_V9, WRAPPED_KEY_LEN,
 };
 use crate::hardware;
 use crate::keygen::{
@@ -123,7 +123,7 @@ pub fn decrypt_bytes(
     let mut cursor = Cursor::new(pqf_data);
     let header = PqfHeader::read(&mut cursor)?;
 
-    if header.version == VERSION_V3 || header.version == VERSION_V5 {
+    if header.layout() == VERSION_V3 || header.layout() == VERSION_V5 {
         return Err(PqfileError::UnsupportedVersion(header.version));
     }
 
@@ -165,7 +165,12 @@ pub fn decrypt_stream(
 
     let version = PqfHeader::read_magic_version(reader)?;
 
-    match version {
+    // v2 has no authenticated-header variant (its whole header is already the AAD).
+    if version_layout(version) == VERSION && version != VERSION {
+        return Err(PqfileError::UnsupportedVersion(version));
+    }
+
+    match version_layout(version) {
         VERSION | VERSION_V3 | VERSION_V5 => {
             let header = PqfHeader::read_body(reader, version)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
@@ -181,10 +186,13 @@ pub fn decrypt_stream(
                     decrypt_v2_payload(&cipher, &header.nonce, &header_bytes, reader, writer)
                 }
                 _ => {
-                    let key_commitment = compute_key_commitment(
+                    let key_commitment = commitment_for_stream(
                         ss_bytes.as_ref(),
+                        version,
                         &header.nonce,
                         header.original_size,
+                        header.chunk_size,
+                        header.compression_algo,
                     );
                     decrypt_v3_chunks(
                         &cipher,
@@ -205,8 +213,14 @@ pub fn decrypt_stream(
                 .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
                 .collect();
             let session_key = find_session_key(&dk, &entries)?;
-            let key_commitment =
-                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key_commitment = commitment_for_stream(
+                session_key.as_ref(),
+                version,
+                &header.nonce,
+                header.original_size,
+                CHUNK_SIZE as u32,
+                COMPRESSION_NONE,
+            );
             let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             decrypt_v3_chunks(
@@ -226,8 +240,14 @@ pub fn decrypt_stream(
                 .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
                 .collect();
             let session_key = find_session_key(&dk, &entries)?;
-            let key_commitment =
-                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key_commitment = commitment_for_stream(
+                session_key.as_ref(),
+                version,
+                &header.nonce,
+                header.original_size,
+                CHUNK_SIZE as u32,
+                COMPRESSION_NONE,
+            );
             let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             decrypt_v3_chunks(
@@ -243,8 +263,14 @@ pub fn decrypt_stream(
         VERSION_V8 | VERSION_V9 => {
             let header = PqfHeaderV8::read_body(reader)?;
             let session_key = find_session_key_v8(&dk, &header.recipients)?;
-            let key_commitment =
-                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key_commitment = commitment_for_stream(
+                session_key.as_ref(),
+                version,
+                &header.nonce,
+                header.original_size,
+                CHUNK_SIZE as u32,
+                COMPRESSION_NONE,
+            );
             let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             decrypt_v3_chunks(
@@ -257,13 +283,19 @@ pub fn decrypt_stream(
             )
         }
         VERSION_V6 => {
-            let header = PqfHeader::read_body(reader, VERSION_V6)?;
+            let header = PqfHeader::read_body(reader, version)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
             let ss_bytes = decapsulate_shared_secret(&dk, &header.kem_ciphertext)?;
             let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
-            let key_commitment =
-                compute_key_commitment(ss_bytes.as_ref(), &header.nonce, header.original_size);
+            let key_commitment = commitment_for_stream(
+                ss_bytes.as_ref(),
+                version,
+                &header.nonce,
+                header.original_size,
+                header.chunk_size,
+                header.compression_algo,
+            );
             match header.compression_algo {
                 COMPRESSION_NONE => {
                     // No compression: pipe authenticated chunks directly to writer.
@@ -313,10 +345,81 @@ pub fn decrypt_stream(
         VERSION_V10 => {
             // v10 files have no key pair; use decrypt_stream_passphrase instead.
             let _ = (privkey_pem, reader, writer, passphrase);
-            Err(PqfileError::UnsupportedVersion(VERSION_V10))
+            Err(PqfileError::UnsupportedVersion(version))
         }
-        v => Err(PqfileError::UnsupportedVersion(v)),
+        _ => Err(PqfileError::UnsupportedVersion(version)),
     }
+}
+
+/// Decrypts a stream produced by [`crate::encrypt::encrypt_stream_stealth`].
+///
+/// There is no magic or version byte to detect, so the caller must already
+/// know the input was written in stealth mode - that is the point of the
+/// format. The supplied private key's own KEM variant determines how many
+/// ciphertext bytes to read; a wrong key type (or non-stealth input) simply
+/// fails to parse into a valid ciphertext and surfaces as a decryption
+/// failure, the same as any other corrupt input.
+///
+/// Output is automatically capped at the header's `original_size` field (a
+/// no-op unless the sender combined stealth mode with
+/// [`crate::padding::PadmeReader`] padding), so no separate un-padding step
+/// is needed - unlike the non-stealth formats, this is safe to do
+/// unconditionally here because `decrypt_stream_stealth` has no prior
+/// callers whose behavior would change.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_stealth(
+    privkey_pem: &str,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    passphrase: Option<&str>,
+) -> Result<(), PqfileError> {
+    let dk = derive_dk(privkey_pem, passphrase)?;
+    let ct_len = ct_len_for_variant(dk.kem_variant())?;
+
+    let mut kem_ct = vec![0u8; ct_len];
+    reader.read_exact(&mut kem_ct)?;
+
+    let mut base_nonce = [0u8; BASE_NONCE_LEN];
+    reader.read_exact(&mut base_nonce)?;
+
+    let mut size_bytes = [0u8; 8];
+    reader.read_exact(&mut size_bytes)?;
+    let original_size = u64::from_le_bytes(size_bytes);
+    if original_size > crate::format::MAX_ORIGINAL_SIZE {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "original_size {original_size} exceeds maximum ({})",
+                crate::format::MAX_ORIGINAL_SIZE
+            ),
+        )));
+    }
+
+    let ss_bytes = decapsulate_shared_secret(&dk, &kem_ct)?;
+
+    let mut nonce = [0u8; NONCE_LEN];
+    nonce[..BASE_NONCE_LEN].copy_from_slice(&base_nonce);
+
+    let key_commitment = commitment_for_stream(
+        ss_bytes.as_ref(),
+        VERSION_V3 | VERSION_AUTH_BIT,
+        &nonce,
+        original_size,
+        CHUNK_SIZE as u32,
+        COMPRESSION_NONE,
+    );
+
+    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
+    let cipher = ChaCha20Poly1305::new(key);
+    let mut truncated = crate::padding::TruncatingWriter::new(writer, original_size);
+    decrypt_v3_chunks(
+        &cipher,
+        &nonce,
+        CHUNK_SIZE,
+        &key_commitment,
+        reader,
+        &mut truncated,
+    )
 }
 
 /// Decrypts a v10 passphrase-only `.pqf` stream using the default KDF ceiling
@@ -407,7 +510,7 @@ fn decrypt_stream_passphrase_inner(
     use crate::passphrase::{derive_key_with_params_and_secret, keyfile_secret};
 
     let version = PqfHeader::read_magic_version(reader)?;
-    if version != VERSION_V10 {
+    if version_layout(version) != VERSION_V10 {
         return Err(PqfileError::UnsupportedVersion(version));
     }
 
@@ -441,8 +544,7 @@ fn decrypt_stream_passphrase_inner(
         header.t_cost,
         header.p_cost,
     )?;
-    let key_commitment =
-        compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+    let key_commitment = commitment_for_v10(session_key.as_ref(), version, &header);
     let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
     let cipher = ChaCha20Poly1305::new(key);
     decrypt_v3_chunks(
@@ -594,7 +696,12 @@ pub(crate) fn decapsulate_stream_init(
     let dk = derive_dk(privkey_pem, passphrase)?;
     let version = PqfHeader::read_magic_version(reader)?;
 
-    match version {
+    // v2 has no authenticated-header variant (its whole header is already the AAD).
+    if version_layout(version) == VERSION && version != VERSION {
+        return Err(PqfileError::UnsupportedVersion(version));
+    }
+
+    match version_layout(version) {
         VERSION | VERSION_V3 | VERSION_V5 => {
             let header = PqfHeader::read_body(reader, version)?;
             check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
@@ -640,8 +747,14 @@ pub(crate) fn decapsulate_stream_init(
                     key_commitment: [0u8; 32],
                 })
             } else {
-                let key_commitment =
-                    compute_key_commitment(ss_bytes.as_ref(), &header.nonce, header.original_size);
+                let key_commitment = commitment_for_stream(
+                    ss_bytes.as_ref(),
+                    version,
+                    &header.nonce,
+                    header.original_size,
+                    header.chunk_size,
+                    header.compression_algo,
+                );
                 Ok(StreamDecryptState {
                     version,
                     kem_variant: header.kem_variant,
@@ -662,12 +775,18 @@ pub(crate) fn decapsulate_stream_init(
                 .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
                 .collect();
             let session_key = find_session_key(&dk, &entries)?;
-            let key_commitment =
-                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key_commitment = commitment_for_stream(
+                session_key.as_ref(),
+                version,
+                &header.nonce,
+                header.original_size,
+                CHUNK_SIZE as u32,
+                COMPRESSION_NONE,
+            );
             let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             Ok(StreamDecryptState {
-                version: VERSION_V4,
+                version,
                 kem_variant: dk.kem_variant(),
                 original_size: header.original_size,
                 chunk_size: CHUNK_SIZE,
@@ -685,12 +804,18 @@ pub(crate) fn decapsulate_stream_init(
                 .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
                 .collect();
             let session_key = find_session_key(&dk, &entries)?;
-            let key_commitment =
-                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key_commitment = commitment_for_stream(
+                session_key.as_ref(),
+                version,
+                &header.nonce,
+                header.original_size,
+                CHUNK_SIZE as u32,
+                COMPRESSION_NONE,
+            );
             let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             Ok(StreamDecryptState {
-                version: VERSION_V7,
+                version,
                 kem_variant: dk.kem_variant(),
                 original_size: header.original_size,
                 chunk_size: CHUNK_SIZE,
@@ -704,8 +829,14 @@ pub(crate) fn decapsulate_stream_init(
         VERSION_V8 | VERSION_V9 => {
             let header = PqfHeaderV8::read_body(reader)?;
             let session_key = find_session_key_v8(&dk, &header.recipients)?;
-            let key_commitment =
-                compute_key_commitment(session_key.as_ref(), &header.nonce, header.original_size);
+            let key_commitment = commitment_for_stream(
+                session_key.as_ref(),
+                version,
+                &header.nonce,
+                header.original_size,
+                CHUNK_SIZE as u32,
+                COMPRESSION_NONE,
+            );
             let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
             let cipher = ChaCha20Poly1305::new(key);
             Ok(StreamDecryptState {
@@ -720,7 +851,7 @@ pub(crate) fn decapsulate_stream_init(
             })
         }
         VERSION_V6 => Err(PqfileError::CompressionNotSupported),
-        v => Err(PqfileError::UnsupportedVersion(v)),
+        _ => Err(PqfileError::UnsupportedVersion(version)),
     }
 }
 
@@ -1061,7 +1192,8 @@ fn decapsulate_shared_secret(
                 .try_into()
                 .expect("HYBRID_CT_LEN_768 > 32; length checked above");
             let eph_pk = X25519PublicKey::from(eph_pk_bytes);
-            let x25519_ss = Zeroizing::new(x25519_sk.diffie_hellman(&eph_pk));
+            // SharedSecret zeroizes itself on drop (x25519-dalek "zeroize" feature).
+            let x25519_ss = x25519_sk.diffie_hellman(&eph_pk);
 
             let ml_ct_bytes = &kem_ct_bytes[32..];
             let ml_ct = Ciphertext::<MlKem768>::try_from(ml_ct_bytes).map_err(|_| {
@@ -1102,7 +1234,7 @@ pub fn decrypt_stream_parallel(
     }
     let version = preamble[4];
 
-    if version != VERSION_V3 && version != VERSION_V5 {
+    if version_layout(version) != VERSION_V3 && version_layout(version) != VERSION_V5 {
         // Stitch the consumed bytes back and delegate to single-threaded path.
         let prefix = Cursor::new(preamble.to_vec());
         let mut chained = prefix.chain(&mut *reader);
@@ -1121,8 +1253,14 @@ pub fn decrypt_stream_parallel(
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; field type guarantees 12 bytes");
 
-    let key_commitment =
-        compute_key_commitment(key_bytes.as_ref(), &header.nonce, header.original_size);
+    let key_commitment = commitment_for_stream(
+        key_bytes.as_ref(),
+        version,
+        &header.nonce,
+        header.original_size,
+        header.chunk_size,
+        header.compression_algo,
+    );
 
     let mut first = vec![0u8; max_chunk];
     let first_len = fill_chunk(reader, &mut first)?;
@@ -1296,7 +1434,10 @@ mod tests {
         let mut writer = Vec::new();
         encrypt_stream(&pub_pem, 7, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
         let result = decrypt_bytes(&priv_pem, &writer, None);
-        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x03))));
+        assert!(matches!(
+            result,
+            Err(PqfileError::UnsupportedVersion(v)) if version_layout(v) == VERSION_V3
+        ));
     }
 
     #[test]
@@ -1306,7 +1447,10 @@ mod tests {
         let mut writer = Vec::new();
         encrypt_stream(&pub_pem, 7, 4096, &mut reader, &mut writer).unwrap();
         let result = decrypt_bytes(&priv_pem, &writer, None);
-        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x05))));
+        assert!(matches!(
+            result,
+            Err(PqfileError::UnsupportedVersion(v)) if version_layout(v) == VERSION_V5
+        ));
     }
 
     #[test]
@@ -1675,9 +1819,12 @@ mod tests {
         )
         .unwrap();
 
-        // Header version byte should be v6.
+        // Header version byte should be v6 with the authenticated-header bit.
         let version_pos = crate::format::MAGIC.len();
-        assert_eq!(enc_out[version_pos], crate::format::VERSION_V6);
+        assert_eq!(
+            enc_out[version_pos],
+            crate::format::VERSION_V6 | crate::format::VERSION_AUTH_BIT
+        );
 
         let mut dec_out = Vec::new();
         decrypt_stream(&priv_pem, &mut enc_out.as_slice(), &mut dec_out, None).unwrap();
@@ -2076,7 +2223,10 @@ mod tests {
         let mut out = Vec::new();
         let result = decrypt_stream(&priv_pem, &mut ct.as_slice(), &mut out, None);
         assert!(
-            matches!(result, Err(PqfileError::UnsupportedVersion(0x0A))),
+            matches!(
+                result,
+                Err(PqfileError::UnsupportedVersion(v)) if version_layout(v) == VERSION_V10
+            ),
             "decrypt_stream must reject v10 with UnsupportedVersion"
         );
     }

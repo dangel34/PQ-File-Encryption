@@ -293,7 +293,12 @@ fn inspect_shows_header_fields() {
     assert!(output.status.success(), "inspect failed");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("PQFL"), "missing magic");
-    assert!(stdout.contains("0x03"), "missing version");
+    // v3 layout with the authenticated-header bit (0x80) set.
+    assert!(stdout.contains("0x83"), "missing version");
+    assert!(
+        stdout.contains("Auth. header:       yes"),
+        "missing auth flag"
+    );
     assert!(stdout.contains("768"), "missing KEM variant");
     assert!(stdout.contains("Original file size"), "missing size field");
     assert!(stdout.contains("20 bytes"), "wrong original size");
@@ -583,8 +588,8 @@ fn inspect_large_file_shows_v3_version() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("0x03"),
-        "expected v3 version in inspect output"
+        stdout.contains("0x83"),
+        "expected v3 (authenticated) version in inspect output"
     );
 }
 
@@ -1009,7 +1014,8 @@ fn json_inspect_output() {
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("not valid JSON");
     assert_eq!(v["status"], "ok");
     assert_eq!(v["magic"], "PQFL");
-    assert_eq!(v["version"], "0x03");
+    assert_eq!(v["version"], "0x83");
+    assert_eq!(v["header_authenticated"], true);
     assert_eq!(v["kem_variant"], 768);
     assert_eq!(v["original_size"], 25);
     assert!(v["nonce"].is_string());

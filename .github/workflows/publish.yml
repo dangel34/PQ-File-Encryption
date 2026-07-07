@@ -21,7 +21,7 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
 
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 (pinned for 1.96.0)
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # v1 (pinned for 1.96.0)
         with:
           toolchain: 1.96.0
 

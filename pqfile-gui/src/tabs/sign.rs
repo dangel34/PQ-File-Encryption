@@ -228,7 +228,7 @@ impl PqfileApp {
             .add_enabled(
                 ready,
                 egui::Button::new(
-                    RichText::new("✓  Verify Signature")
+                    RichText::new("✔  Verify Signature")
                         .size(14.0)
                         .color(c_chrome(dark))
                         .strong(),

@@ -40,6 +40,7 @@ impl PqfileApp {
         } else {
             Some(zeroize::Zeroizing::new((*self.decrypt_passphrase).clone()))
         };
+        let stealth = self.decrypt_stealth;
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -70,66 +71,79 @@ impl PqfileApp {
             self.decrypt_batch_job = Some(Arc::clone(&job));
 
             let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                for (i, name, data, path) in files {
-                    let pp = passphrase.as_deref().map(String::as_str);
-                    // Reset per-file byte progress.
-                    {
-                        let mut g = job.lock().unwrap();
-                        g.current_file_bytes_done = 0;
-                        g.current_file_bytes_total = 0;
-                    }
-                    let job_progress = Arc::clone(&job);
-                    let ctx_progress = ctx.clone();
-                    let result: Result<Vec<u8>, _> = {
-                        let mut cursor = Cursor::new(&data);
-                        let mut out = Vec::new();
-                        decrypt::decrypt_stream_parallel_with_progress(
-                            &priv_pem,
-                            &mut cursor,
-                            &mut out,
-                            pp,
-                            8, // parallel batch size (matches CLI default)
-                            0, // total_hint unknown until header is parsed
-                            &move |done: u64, total: u64| {
-                                let mut g = job_progress.lock().unwrap();
-                                g.current_file_bytes_done = done;
-                                g.current_file_bytes_total = total;
-                                drop(g);
-                                ctx_progress.request_repaint();
-                            },
-                        )
-                        .map(|_| out)
-                    };
-                    let status = match result {
-                        Ok(plain) => {
-                            // Strip .pqf from name (which may be a relative path like subdir/file.txt.pqf)
-                            let out_name = if name.ends_with(".pqf") {
-                                name[..name.len() - 4].to_owned()
-                            } else {
-                                name.clone()
-                            };
-                            let out_path = if let Some(ref dir) = output_dir {
-                                Some(dir.join(&out_name))
-                            } else {
-                                path.map(|p| p.with_extension(""))
-                            };
-                            save_result(&out_name, &plain, out_path, confirm)
+            // Post-quantum crypto (esp. unoptimized debug builds) can use more
+            // stack than the default ~2 MiB thread stack provides; spawn with a
+            // larger stack to avoid a silent stack-overflow crash.
+            std::thread::Builder::new()
+                .stack_size(16 * 1024 * 1024)
+                .spawn(move || {
+                    for (i, name, data, path) in files {
+                        let pp = passphrase.as_deref().map(String::as_str);
+                        // Reset per-file byte progress.
+                        {
+                            let mut g = job.lock().unwrap();
+                            g.current_file_bytes_done = 0;
+                            g.current_file_bytes_total = 0;
                         }
-                        Err(e) => OpStatus::Err(e.to_string()),
-                    };
-                    {
-                        let mut g = job.lock().unwrap();
-                        g.done += 1;
-                        g.current_file_bytes_done = 0;
-                        g.current_file_bytes_total = 0;
-                        g.results.push((i, status));
+                        let job_progress = Arc::clone(&job);
+                        let ctx_progress = ctx.clone();
+                        let result: Result<Vec<u8>, _> = if stealth {
+                            // decrypt_stream_stealth has no progress callback; the byte
+                            // progress bar simply stays at 0 for stealth files.
+                            let mut cursor = Cursor::new(&data);
+                            let mut out = Vec::new();
+                            decrypt::decrypt_stream_stealth(&priv_pem, &mut cursor, &mut out, pp)
+                                .map(|_| out)
+                        } else {
+                            let mut cursor = Cursor::new(&data);
+                            let mut out = Vec::new();
+                            decrypt::decrypt_stream_parallel_with_progress(
+                                &priv_pem,
+                                &mut cursor,
+                                &mut out,
+                                pp,
+                                8, // parallel batch size (matches CLI default)
+                                0, // total_hint unknown until header is parsed
+                                &move |done: u64, total: u64| {
+                                    let mut g = job_progress.lock().unwrap();
+                                    g.current_file_bytes_done = done;
+                                    g.current_file_bytes_total = total;
+                                    drop(g);
+                                    ctx_progress.request_repaint();
+                                },
+                            )
+                            .map(|_| out)
+                        };
+                        let status = match result {
+                            Ok(plain) => {
+                                // Strip .pqf from name (which may be a relative path like subdir/file.txt.pqf)
+                                let out_name = if name.ends_with(".pqf") {
+                                    name[..name.len() - 4].to_owned()
+                                } else {
+                                    name.clone()
+                                };
+                                let out_path = if let Some(ref dir) = output_dir {
+                                    Some(dir.join(&out_name))
+                                } else {
+                                    path.map(|p| p.with_extension(""))
+                                };
+                                save_result(&out_name, &plain, out_path, confirm)
+                            }
+                            Err(e) => OpStatus::Err(e.to_string()),
+                        };
+                        {
+                            let mut g = job.lock().unwrap();
+                            g.done += 1;
+                            g.current_file_bytes_done = 0;
+                            g.current_file_bytes_total = 0;
+                            g.results.push((i, status));
+                        }
+                        ctx.request_repaint();
                     }
+                    job.lock().unwrap().finished = true;
                     ctx.request_repaint();
-                }
-                job.lock().unwrap().finished = true;
-                ctx.request_repaint();
-            });
+                })
+                .expect("failed to spawn decrypt worker thread");
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -137,7 +151,12 @@ impl PqfileApp {
             let _ = ctx;
             let pp = passphrase.as_deref().map(String::as_str);
             for entry in &mut self.decrypt_files {
-                let result: Result<Vec<u8>, _> = {
+                let result: Result<Vec<u8>, _> = if stealth {
+                    let mut cursor = Cursor::new(&entry.data);
+                    let mut out = Vec::new();
+                    decrypt::decrypt_stream_stealth(&priv_pem, &mut cursor, &mut out, pp)
+                        .map(|_| out)
+                } else {
                     let mut cursor = Cursor::new(&entry.data);
                     let mut out = Vec::new();
                     decrypt::decrypt_stream(&priv_pem, &mut cursor, &mut out, pp).map(|_| out)
@@ -261,6 +280,27 @@ impl PqfileApp {
             self.decrypt_passphrase.clear();
         }
 
+        // ── Options ──────────────────────────────────────────────────────────
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            ui.horizontal(|ui| {
+                ui.add_enabled(
+                    !job_running,
+                    egui::Checkbox::new(&mut self.decrypt_stealth, ""),
+                );
+                ui.label(
+                    RichText::new("Stealth mode (file has no magic bytes / .pqf header)")
+                        .size(13.0)
+                        .color(c_text(dark)),
+                )
+                .on_hover_text(
+                    "Check this if the file(s) were encrypted with Stealth mode on the \
+                     Encrypt tab. Such files have no .pqf magic or version byte, so pqfile \
+                     cannot auto-detect them - you must say so yourself.",
+                );
+            });
+        });
+        ui.add_space(14.0);
+
         // ── Files to decrypt ──────────────────────────────────────────────────
         section_label(ui, "FILES TO DECRYPT", dark);
         let mut to_remove: Option<usize> = None;
@@ -373,7 +413,7 @@ impl PqfileApp {
 
             if !self.decrypt_files.is_empty() {
                 ui.add_space(6.0);
-                scrollable_list(ui, 154.0, c_card(dark), |ui| {
+                scrollable_list(ui, "decrypt_files", 154.0, c_card(dark), |ui| {
                     for (i, entry) in self.decrypt_files.iter().enumerate() {
                         let mut remove = false;
                         let w = ui.available_width();
@@ -491,18 +531,13 @@ impl PqfileApp {
                     0.0
                 };
                 ui.add_space(10.0);
-                ui.add(
-                    egui::ProgressBar::new(fraction)
-                        .desired_width(f32::INFINITY)
-                        .animate(true),
-                );
+                ui.add(egui::ProgressBar::new(fraction).animate(true));
                 if g.current_file_bytes_done > 0 {
                     ui.add_space(2.0);
                     let mib = g.current_file_bytes_done as f32 / (1024.0 * 1024.0);
                     // Show indeterminate bar (total is unknown for decrypt); display byte count.
                     ui.add(
                         egui::ProgressBar::new(0.0)
-                            .desired_width(f32::INFINITY)
                             .text(format!("{mib:.1} MiB"))
                             .animate(true),
                     );
@@ -517,15 +552,8 @@ impl PqfileApp {
         }
 
         // Batch operation summary
-        if let Some(ref summary) = self.decrypt_batch_summary.clone() {
-            ui.add_space(6.0);
-            let has_fail = summary.contains("failed");
-            let color = if has_fail {
-                c_subtext(dark)
-            } else {
-                c_green(dark)
-            };
-            ui.label(RichText::new(summary.as_str()).size(12.5).color(color));
+        if let Some(summary) = self.decrypt_batch_summary.clone() {
+            show_status(ui, &summary, dark);
         }
 
         show_status(ui, &self.decrypt_status, dark);

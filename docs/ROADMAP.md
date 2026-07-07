@@ -61,25 +61,16 @@ All features from v2.x through v4.2.4 are complete. Items from v10-format work o
 - **GUI `<meta>` CSP**: `pqfile-gui/index.html` carries an in-document Content-Security-Policy so the WASM app is protected even when served without the nginx header snippet
 - **Keyfile as a second factor for passphrase mode**: `--keyfile <path>` on v10 `encrypt`/`decrypt`/`check` mixes the keyfile's SHA3-256 hash into the Argon2id derivation as the secret (pepper) input; the v10 header gained a flags byte (bit 0 = keyfile required) with unknown-bit rejection, and missing/superfluous keyfiles fail fast with dedicated errors (codes 23/24/25) before the KDF runs
 - **Recursive directory packing with symlink/special-file rejection**: `pqfile archive --recursive` walks directory arguments (entry names keep the directory prefix, like tar), rejecting symlinks, devices, FIFOs, and sockets per-path, and rejecting duplicate entry names including case-insensitive collisions for all archives
+- **Authenticated headers (`VERSION_AUTH_BIT`)**: new files set bit 7 of the version byte and bind `chunk_size`, `compression_algo`, and the v10 KDF fields into the chunk-0 key commitment (v3 definition, distinct domain separation), closing the compression-flag-flip gap; the version byte and `kem_variant` stay excluded so zero-copy `rekey`/`add-recipient` still work; old files remain readable and old pqfile versions reject new files with a clean `UnsupportedVersion`. Implemented without new per-layout version bytes, so no v5.0 wire-format redesign was needed (release versioning decision — 4.x vs 5.0 — still open, since older readers cannot read newly written files)
+- **`--qr` on `keygen` and `fingerprint`**: renders the `pqf1…` recipient string as a terminal unicode QR code (uppercased for the denser QR alphanumeric mode; Bech32m is case-insensitive); goes to stderr under `--json`
+- **Constant-time harness extension**: `examples/ct_decrypt.rs` (tamper-position classes on the AEAD reject path) and `examples/ct_passphrase.rs` (unrelated vs near-miss wrong passphrase on v10) join `ct_shamir.rs`; all three use the same dudect-style Welch t-test
+- **Interactive no-args CLI mode**: running bare `pqfile` (no subcommand, no flags) drops into a guided prompt flow for encrypt/decrypt/keygen instead of clap's usage text; any argument (including `--help`) still takes the normal clap path. CLI-layer only, delegates to the same `run_*` functions as the flag-driven paths so behavior stays identical.
+- **Plaintext length padding (Padmé)**: `pqfile::padding::padme_length`/`PadmeReader`/`TruncatingWriter` and `encrypt --pad` round the plaintext length to a coarser bucket (≤ ~12% overhead) before encryption, so ciphertext length no longer reveals the exact plaintext size. The true length still travels in the existing authenticated `original_size` header field; decrypt strips the padding back off by capping output at that field (a no-op for every non-padded file, so no `--pad` flag is needed at decrypt time). Incompatible with stdin input, empty files, `--mmap`, `--pipeline`, and `--compress` (compression would shrink the padding back down). Shipped without a wire-format change - no version bump required.
+- **Magic-free stealth mode**: `encrypt --stealth` / `decrypt --stealth` / `check --stealth` (new library functions `encrypt_stream_stealth`/`decrypt_stream_stealth`) omit the `.pqf` magic, version byte, and KEM variant field entirely; wire layout is `KEM_CT || BASE_NONCE(8) || ORIGINAL_SIZE(8) || <chunked ciphertext>`, using the recipient's own key type (known to the decryptor already) instead of a variant field. Single recipient only; composes with `--pad`. There is nothing on the wire to auto-detect, so the caller must already know a file was written in stealth mode. See `docs/FORMAT.md` §6.
 
 ---
 
 ## v4.x - Planned (no breaking format changes)
-
-### Performance
-
-- **Minimal encrypt-only WASM build**
-  Split the `pqfile-gui` WASM output into a full build and a stripped variant that includes only the encrypt path (no Argon2 KDF, no zstd, no Shamir, no signing). The smaller build loads faster for web deployments that only need to encrypt. Publish both from the release workflow.
-
-### Key sharing UX
-
-- **Passphrase on recipient strings**
-  `pqfile fingerprint` and `pqfile keygen` already emit `pqf1…` strings; consider a `--qr` flag that produces a scannable QR code for the recipient string without requiring the Shamir tab.
-
-### CLI UX
-
-- **Interactive mode with no arguments**
-  Running `pqfile` with no subcommand currently prints clap's help text. Add a guided prompt flow instead (pick encrypt/decrypt/keygen, then fill in the missing pieces interactively), matching FerroCrypt's no-args mode. CLI-layer only; no library changes.
 
 ### Supply chain
 
@@ -92,23 +83,14 @@ All features from v2.x through v4.2.4 are complete. Items from v10-format work o
 
 These items require a new major version because they change the wire format or public API in a backward-incompatible way.
 
-- **Authenticated header across all format versions**
-  Today only the legacy v2 whole-file format feeds the header bytes into the AEAD as AAD; the chunked formats (v3+) authenticate a counter, last-chunk flag, and key commitment per chunk (`make_chunk_aad`), but not the header itself. Bind the serialized header into the chunk-0 AAD for every new file written and bump the version byte. Old files remain readable but new files are protected against header tampering (e.g. flipping the compression flag or `kem_variant`) without any opt-in flag.
-
 - **Per-file entry AEAD in archives (PQFA v2)**
   The current `.pqfa` format authenticates the entire archive before any file is extracted, which requires buffering the full ciphertext in memory for in-memory extractions. A PQFA v2 layout gives each file entry its own AEAD tag derived from the session key and the entry index, so individual files can be extracted and verified without loading the whole archive.
 
-- **`PqfileError` refinement**
-  Break `DecryptionFailure` into specific variants: `AuthenticationFailure` (tag mismatch), `Truncated` (clean truncation), `UnsupportedVersion` (unknown format version), `RecipientNotFound` (none of the recipient slots matched). This is an API break but gives callers the precision they need for good error messages.
+- **`PqfileError` refinement** *(substantially complete)*
+  `Truncated`, `UnsupportedVersion`, and `NoMatchingRecipient { slots_tried }` already exist as distinct variants, and `DecryptionFailure` is now returned only for genuine AEAD tag mismatches (plus deliberate anti-oracle collapsing of malformed-ciphertext cases). The only remaining piece of the original item is renaming `DecryptionFailure` → `AuthenticationFailure`, a pure rename whose API break buys no new information for callers; do it only if a v5.0 major happens for other reasons.
 
 - **Misuse-resistant nonces (nonce-SIV construction)**
-  Replace random nonces with synthetic nonces derived from a hash of the session key and plaintext chunk (a simplified SIV mode). With random nonces, a nonce collision is possible if the same key encrypts a very large number of chunks; SIV derivation makes collision probability zero regardless of how many files are encrypted under a given session key. This is a format break because the nonce field changes meaning in the chunk header.
-
-- **Plaintext length padding (Padmé)**
-  v9 hides the recipient count and `--stealth` (below) would hide the file type, but the ciphertext length still reveals the plaintext length almost exactly. Pad the plaintext to a Padmé-bounded size (max ~12% overhead, decreasing with file size) before encryption, storing the true length inside the authenticated stream. Complements v9 and stealth mode to close the last major metadata leak.
-
-- **Magic-free output mode**
-  Currently all `.pqf` files begin with the four-byte magic `PQFL`, which immediately identifies them as pqfile output to any observer. A `--stealth` flag omits the magic bytes and version header, producing output that is indistinguishable from random bytes. The decryptor uses `--stealth` as a hint to skip magic validation and attempt raw decryption. Useful when revealing that a file is encrypted at all is itself sensitive.
+  Replace random nonces with synthetic nonces derived from a hash of the session key and plaintext chunk (a simplified SIV mode). With random nonces, a nonce collision is possible if the same key encrypts a very large number of chunks; SIV derivation makes collision probability zero regardless of how many files are encrypted under a given session key. This is a format break because the nonce field changes meaning in the chunk header. Lower priority than it may sound: every file already gets a fresh session key, so the collision scenario this defends against is already negligible in practice.
 
 ---
 
@@ -152,9 +134,9 @@ A lightweight certificate format where a CA signing key (ML-DSA-65) signs a publ
 
 A mode where the raw ciphertext bytes are split across N output files using a secret sharing scheme (or simpler XOR splitting for K=N), requiring any K files to reconstruct. Different from key splitting: the key stays intact and the payload itself is distributed. Useful for backup scenarios where the ciphertext is spread across cloud providers that are mutually untrusted; no single provider has a usable ciphertext.
 
-### Constant-time test harness extension
+### Constant-time test harness extension *(complete)*
 
-`pqfile/examples/ct_shamir.rs` is a standalone `dudect-bencher` binary covering the Shamir GF(256) reconstruction path. Extension to the decryption error path and passphrase-comparison path remains future work.
+`pqfile/examples/ct_shamir.rs` (Shamir GF(256) reconstruction), `ct_decrypt.rs` (decryption error path: tamper-position timing), and `ct_passphrase.rs` (wrong-passphrase rejection: unrelated vs near-miss guess) are standalone dudect-style Welch t-test binaries. All three require a quiet machine and ≥100 000 samples for a meaningful verdict; they are deliberately not run in CI.
 
 ### Proxy re-encryption
 

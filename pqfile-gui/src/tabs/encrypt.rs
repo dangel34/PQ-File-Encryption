@@ -13,8 +13,9 @@ use crate::widgets::{
     tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
+use pqfile::padding::PadmeReader;
 use pqfile::{encrypt, format::adaptive_chunk_size};
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,6 +58,8 @@ impl PqfileApp {
         let compress = self.encrypt_compress;
         let compress_level = self.encrypt_compress_level;
         let pad_recipients = self.encrypt_pad_recipients;
+        let pad = self.encrypt_pad;
+        let stealth = self.encrypt_stealth;
         let output_dir: Option<PathBuf> = if self.settings.output_dir.is_empty() {
             None
         } else {
@@ -82,46 +85,54 @@ impl PqfileApp {
         self.encrypt_job = Some(Arc::clone(&job));
 
         let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            for (i, name, data, path) in files {
-                let out_name = format!("{name}.pqf");
-                let out_path = resolve_out_path(&output_dir, &out_name, path);
-                let original_size = data.len() as u64;
-                {
-                    let mut g = job.lock().unwrap();
-                    g.current_file_bytes_done = 0;
-                    g.current_file_bytes_total = original_size;
+        // Post-quantum crypto (esp. unoptimized debug builds) can use more
+        // stack than the default ~2 MiB thread stack provides; spawn with a
+        // larger stack to avoid a silent stack-overflow crash.
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || {
+                for (i, name, data, path) in files {
+                    let out_name = format!("{name}.pqf");
+                    let out_path = resolve_out_path(&output_dir, &out_name, path);
+                    let original_size = data.len() as u64;
+                    {
+                        let mut g = job.lock().unwrap();
+                        g.current_file_bytes_done = 0;
+                        g.current_file_bytes_total = original_size;
+                    }
+                    let job_progress = Arc::clone(&job);
+                    let ctx_progress = ctx.clone();
+                    let progress = move |done: u64, _total: u64| {
+                        job_progress.lock().unwrap().current_file_bytes_done = done;
+                        ctx_progress.request_repaint();
+                    };
+                    let status = encrypt_entry(
+                        &pub_pems,
+                        &data,
+                        original_size,
+                        &out_name,
+                        out_path,
+                        compress,
+                        compress_level,
+                        pad_recipients,
+                        pad,
+                        stealth,
+                        confirm,
+                        &progress,
+                    );
+                    {
+                        let mut g = job.lock().unwrap();
+                        g.done += 1;
+                        g.current_file_bytes_done = 0;
+                        g.current_file_bytes_total = 0;
+                        g.results.push((i, status));
+                    }
+                    ctx.request_repaint();
                 }
-                let job_progress = Arc::clone(&job);
-                let ctx_progress = ctx.clone();
-                let progress = move |done: u64, _total: u64| {
-                    job_progress.lock().unwrap().current_file_bytes_done = done;
-                    ctx_progress.request_repaint();
-                };
-                let status = encrypt_entry(
-                    &pub_pems,
-                    &data,
-                    original_size,
-                    &out_name,
-                    out_path,
-                    compress,
-                    compress_level,
-                    pad_recipients,
-                    confirm,
-                    &progress,
-                );
-                {
-                    let mut g = job.lock().unwrap();
-                    g.done += 1;
-                    g.current_file_bytes_done = 0;
-                    g.current_file_bytes_total = 0;
-                    g.results.push((i, status));
-                }
+                job.lock().unwrap().finished = true;
                 ctx.request_repaint();
-            }
-            job.lock().unwrap().finished = true;
-            ctx.request_repaint();
-        });
+            })
+            .expect("failed to spawn encrypt worker thread");
     }
 
     // Enqueue files for frame-by-frame processing on WASM.
@@ -160,7 +171,9 @@ impl PqfileApp {
         }
         let out_name = format!("{name}.pqf");
         let original_size = data.len() as u64;
-        let pad = self.encrypt_pad_recipients;
+        let pad_recipients = self.encrypt_pad_recipients;
+        let pad = self.encrypt_pad;
+        let stealth = self.encrypt_stealth;
         let status = encrypt_entry(
             &self.encrypt_wasm_pub_pems.clone(),
             &data,
@@ -169,7 +182,9 @@ impl PqfileApp {
             None,
             false,
             3,
+            pad_recipients,
             pad,
+            stealth,
             false,
             &|_, _| {},
         );
@@ -240,19 +255,14 @@ impl PqfileApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.show_compress_card(ui, dark);
 
+        self.show_padding_stealth_card(ui, dark);
+
         self.show_encrypt_button(ui, dark, job_running);
         self.show_encrypt_progress(ui, dark);
 
         // Batch summary after job completes
-        if let Some(ref summary) = self.encrypt_batch_summary.clone() {
-            ui.add_space(6.0);
-            let has_fail = summary.contains("failed");
-            let color = if has_fail {
-                c_subtext(dark)
-            } else {
-                c_green(dark)
-            };
-            ui.label(RichText::new(summary.as_str()).size(12.5).color(color));
+        if let Some(summary) = self.encrypt_batch_summary.clone() {
+            show_status(ui, &summary, dark);
         }
 
         let first_err = self.encrypt_files.iter().find_map(|e| {
@@ -288,6 +298,11 @@ impl PqfileApp {
         );
         ui.add_space(6.0);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
+            // Captured before entering `horizontal`: inside a horizontal layout,
+            // `ui.available_width()` reports f32::INFINITY (the row has no end
+            // yet), which previously fed an infinite desired_width into
+            // TextEdit and crashed egui's layout code with a NaN rect.
+            let row_w = ui.available_width();
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("Watch folder:")
@@ -297,7 +312,7 @@ impl PqfileApp {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.watch_dir)
                         .hint_text("/path/to/folder")
-                        .desired_width(ui.available_width() - 80.0),
+                        .desired_width((row_w - 80.0).max(50.0)),
                 );
                 if ui
                     .add(
@@ -316,9 +331,9 @@ impl PqfileApp {
             });
             if !self.watch_log.is_empty() {
                 ui.add_space(4.0);
-                scrollable_list(ui, 80.0, c_card(dark), |ui| {
+                scrollable_list(ui, "encrypt_watch_log", 80.0, c_card(dark), |ui| {
                     for msg in self.watch_log.iter().rev().take(50) {
-                        let color = if msg.starts_with('✓') {
+                        let color = if msg.starts_with('✔') {
                             c_green(dark)
                         } else if msg.starts_with('⚠') {
                             c_yellow(dark)
@@ -463,7 +478,7 @@ impl PqfileApp {
                 ui.add_space(6.0);
                 #[cfg(target_arch = "wasm32")]
                 let mut remember_idx: Option<usize> = None;
-                scrollable_list(ui, 154.0, c_card(dark), |ui| {
+                scrollable_list(ui, "encrypt_recipients", 154.0, c_card(dark), |ui| {
                     for (i, r) in self.encrypt_recipients.iter().enumerate() {
                         let remove = recipient_row(ui, &r.variant_name, &r.name, job_running, dark);
                         if remove && matches!(action, ListAction::None) {
@@ -572,7 +587,7 @@ impl PqfileApp {
             });
             if !self.encrypt_files.is_empty() {
                 ui.add_space(6.0);
-                scrollable_list(ui, 154.0, c_card(dark), |ui| {
+                scrollable_list(ui, "encrypt_files", 154.0, c_card(dark), |ui| {
                     for (i, entry) in self.encrypt_files.iter().enumerate() {
                         let remove =
                             file_entry_row(ui, &entry.name, &entry.status, job_running, dark);
@@ -692,6 +707,77 @@ impl PqfileApp {
         ui.add_space(14.0);
     }
 
+    /// Padmé length padding and stealth mode. Shown on both native and WASM
+    /// builds (unlike compression, neither depends on platform-specific
+    /// crates), so this is a separate card from `show_compress_card`.
+    fn show_padding_stealth_card(&mut self, ui: &mut egui::Ui, dark: bool) {
+        let single_recipient = self.encrypt_recipients.len() == 1;
+        let multi_recipient = self.encrypt_recipients.len() > 1;
+        #[cfg(not(target_arch = "wasm32"))]
+        let compress_active = self.encrypt_compress;
+        #[cfg(target_arch = "wasm32")]
+        let compress_active = false;
+
+        let pad_enabled = !compress_active;
+        let stealth_enabled = single_recipient && !compress_active;
+
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            ui.horizontal(|ui| {
+                ui.add_enabled(pad_enabled, egui::Checkbox::new(&mut self.encrypt_pad, ""));
+                ui.label(
+                    RichText::new("Pad plaintext length (hides exact file size)")
+                        .size(13.0)
+                        .color(if pad_enabled {
+                            c_text(dark)
+                        } else {
+                            c_overlay(dark)
+                        }),
+                )
+                .on_hover_text(
+                    "Rounds the ciphertext length to a coarser bucket (at most ~12% overhead) \
+                     so an observer watching file sizes cannot determine the exact plaintext \
+                     length. The true size still travels inside the authenticated header; \
+                     decrypting strips the padding back off automatically, with nothing to \
+                     configure on the Decrypt tab. Not available together with compression \
+                     (compression would shrink the padding back down, defeating it).",
+                );
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_enabled(
+                    stealth_enabled,
+                    egui::Checkbox::new(&mut self.encrypt_stealth, ""),
+                );
+                let stealth_lbl = ui.label(
+                    RichText::new("Stealth mode (no magic bytes, single recipient only)")
+                        .size(13.0)
+                        .color(if stealth_enabled {
+                            c_text(dark)
+                        } else {
+                            c_overlay(dark)
+                        }),
+                );
+                stealth_lbl.on_hover_text(
+                    "Omits the .pqf magic bytes, version byte, and KEM variant field entirely, \
+                     so the output is not identifiable as pqfile ciphertext to an observer. \
+                     Decrypting requires checking \"Stealth mode\" on the Decrypt tab yourself - \
+                     there is nothing left on the file to auto-detect this.",
+                );
+            });
+            if multi_recipient && self.encrypt_stealth {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Stealth mode requires exactly one recipient; ignored for this batch.",
+                    )
+                    .size(11.5)
+                    .color(c_yellow(dark)),
+                );
+            }
+        });
+        ui.add_space(14.0);
+    }
+
     fn show_encrypt_button(&mut self, ui: &mut egui::Ui, dark: bool, job_running: bool) {
         let n = self.encrypt_files.len();
         let ready = !self.encrypt_recipients.is_empty() && n > 0 && !job_running;
@@ -777,20 +863,12 @@ impl PqfileApp {
                     0.0
                 };
                 ui.add_space(10.0);
-                ui.add(
-                    egui::ProgressBar::new(fraction)
-                        .desired_width(f32::INFINITY)
-                        .animate(true),
-                );
+                ui.add(egui::ProgressBar::new(fraction).animate(true));
                 if g.current_file_bytes_total > 0 {
                     let byte_frac =
                         g.current_file_bytes_done as f32 / g.current_file_bytes_total as f32;
                     ui.add_space(2.0);
-                    ui.add(
-                        egui::ProgressBar::new(byte_frac)
-                            .desired_width(f32::INFINITY)
-                            .show_percentage(),
-                    );
+                    ui.add(egui::ProgressBar::new(byte_frac).show_percentage());
                 }
                 ui.add_space(4.0);
                 ui.label(
@@ -804,11 +882,7 @@ impl PqfileApp {
         if self.encrypt_wasm_total > 0 {
             let fraction = self.encrypt_wasm_done as f32 / self.encrypt_wasm_total as f32;
             ui.add_space(10.0);
-            ui.add(
-                egui::ProgressBar::new(fraction)
-                    .desired_width(f32::INFINITY)
-                    .animate(!self.encrypt_wasm_queue.is_empty()),
-            );
+            ui.add(egui::ProgressBar::new(fraction).animate(!self.encrypt_wasm_queue.is_empty()));
             ui.add_space(4.0);
             ui.label(
                 RichText::new(format!(
@@ -840,6 +914,16 @@ fn resolve_out_path(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Wraps `data` with Padmé length padding when `pad` is set, otherwise reads it unchanged.
+fn padded_reader(data: &[u8], original_size: u64, pad: bool) -> Box<dyn Read + '_> {
+    if pad {
+        Box::new(PadmeReader::new(Cursor::new(data), original_size))
+    } else {
+        Box::new(Cursor::new(data))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn encrypt_entry(
     pub_pems: &[String],
     data: &[u8],
@@ -849,15 +933,32 @@ fn encrypt_entry(
     compress: bool,
     compress_level: i32,
     pad_recipients: bool,
+    pad: bool,
+    stealth: bool,
     confirm: bool,
     progress: &dyn Fn(u64, u64),
 ) -> OpStatus {
     let chunk_size = adaptive_chunk_size(original_size);
     let (effective_path, effective_confirm) = (out_path, confirm);
+
+    // Stealth mode is single-recipient only; a stale checkbox left checked after adding a
+    // second recipient is silently ignored here rather than erroring, matching how `compress`
+    // is already silently ignored for the multi-recipient branch below.
+    if stealth && pub_pems.len() == 1 {
+        let mut reader = padded_reader(data, original_size, pad);
+        let mut out = Vec::new();
+        let result =
+            encrypt::encrypt_stream_stealth(&pub_pems[0], original_size, &mut *reader, &mut out);
+        return match result {
+            Ok(()) => save_result(out_name, &out, effective_path, effective_confirm),
+            Err(e) => OpStatus::Err(e.to_string()),
+        };
+    }
+
     if pub_pems.len() == 1 {
-        let mut reader = Cursor::new(data);
         let mut out = Vec::new();
         let result = if compress {
+            let mut reader = Cursor::new(data);
             encrypt::encrypt_stream_compressed(
                 &pub_pems[0],
                 original_size,
@@ -867,11 +968,12 @@ fn encrypt_entry(
                 &mut out,
             )
         } else {
+            let mut reader = padded_reader(data, original_size, pad);
             encrypt::encrypt_stream_with_progress(
                 &pub_pems[0],
                 original_size,
                 chunk_size,
-                &mut reader,
+                &mut *reader,
                 &mut out,
                 progress,
             )
@@ -882,7 +984,7 @@ fn encrypt_entry(
         }
     } else {
         let pem_refs: Vec<&str> = pub_pems.iter().map(|s| s.as_str()).collect();
-        let mut reader = Cursor::new(data);
+        let mut reader = padded_reader(data, original_size, pad);
         let mut out = Vec::new();
         // v9: pad slot count to next power of two (stronger recipient-count anonymity)
         // v8: variant-blind slots, shuffled order (hides key types only)
@@ -890,7 +992,7 @@ fn encrypt_entry(
             encrypt::encrypt_stream_multi_anon_padded_with_progress(
                 &pem_refs,
                 original_size,
-                &mut reader,
+                &mut *reader,
                 &mut out,
                 progress,
             )
@@ -898,7 +1000,7 @@ fn encrypt_entry(
             encrypt::encrypt_stream_multi_anon_with_progress(
                 &pem_refs,
                 original_size,
-                &mut reader,
+                &mut *reader,
                 &mut out,
                 progress,
             )

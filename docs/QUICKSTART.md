@@ -68,6 +68,8 @@ Output goes to `pqfile-gui/dist/`. Serve that folder with any static host.
 
 ## CLI - Common workflow
 
+The fastest start of all: run `pqfile` with no arguments. An interactive mode walks you through encrypting, decrypting, or generating a key pair with guided prompts, using the same code paths as the commands below. The rest of this section covers the flag-driven equivalents, which are what you want for scripts.
+
 ### 1. Generate a key pair
 
 ```
@@ -123,14 +125,15 @@ pqfile inspect secret.txt.pqf
 
 ```
 Magic:              PQFL
-Version:            0x05
+Version:            0x85
 KEM variant:        768
 Nonce:              a3f09c12de87b64c01e5a920
 Original file size: 2048 bytes
 Chunk size:         16384
+Auth. header:       yes
 ```
 
-Small files (under 1 MiB) now use a 16 KiB chunk size automatically when no `--chunk-size` flag is given, producing v5 format. Pass `--chunk-size 65536` to force v3.
+Small files (under 1 MiB) now use a 16 KiB chunk size automatically when no `--chunk-size` flag is given, producing v5 format. Pass `--chunk-size 65536` to force v3. The high bit of the version byte (`0x85` = v5 layout) marks an authenticated header; files written by pqfile 4.2.4 and earlier show the plain version byte and `Auth. header: no`.
 
 ### 5. Diagnose a key or ciphertext file
 
@@ -209,16 +212,22 @@ pqfile completions powershell >> $PROFILE
 
 ## GUI - Overview
 
-The GUI has six tabs and behaves identically on native and web, except that the web version downloads output files to the browser's downloads folder instead of writing them to disk. Files can be loaded via the Browse buttons or by dragging and dropping onto the window.
+The GUI behaves identically on native and web, except that the web version downloads output files to the browser's downloads folder instead of writing them to disk. Files can be loaded via the Browse buttons or by dragging and dropping onto the window.
 
 | Tab | What it does |
 |---|---|
-| **Keygen** | Generate a key pair and save (native) or download (web) the PEM files. Optional passphrase checkbox encrypts the private key at rest. |
-| **Encrypt** | Load a public key + plaintext file, produce a `.pqf` encrypted file |
-| **Decrypt** | Load a private key + `.pqf` file, recover the original file. A passphrase field appears automatically when an encrypted private key is loaded. |
-| **Inspect** | View the header of a `.pqf` file without decrypting it |
-| **Keys** | Persistent registry of named key pairs with fingerprints and quick-load buttons for the Encrypt and Decrypt tabs |
+| **Keys** | Persistent registry of named key pairs with fingerprints and quick-load buttons for the Encrypt and Decrypt tabs, plus passphrase change and key revocation (native only) |
+| **Keygen** | Generate an encryption or signing key pair and save (native) or download (web) the PEM files. Optional passphrase checkbox encrypts the private key at rest. |
+| **Encrypt** | Load a public key + plaintext files, produce `.pqf` encrypted files; optional compression, length padding, and stealth mode |
+| **Decrypt** | Load a private key + `.pqf` file, recover the original file. A passphrase field appears automatically when an encrypted private key is loaded. Includes a Rekey sub-tab. |
+| **Sign / Signcrypt** | Detached signatures (ML-DSA-65 or SLH-DSA-SHAKE-192f) and combined sign-then-encrypt |
+| **Archive** | Pack multiple files into one encrypted `.pqf` container and extract it |
+| **Shamir** | Split a private key into M-of-N shares and reconstruct it |
+| **Inspect** | View the header of a `.pqf` file, or health-check a key file, without decrypting |
+| **Clipboard** | Encrypt/decrypt short text snippets without touching disk |
 | **Settings** | Toggle dark/light theme, auto-clear inputs, overwrite protection |
+
+See the [README GUI section](../README.md#gui) for the full per-tab feature list.
 
 ---
 

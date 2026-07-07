@@ -82,11 +82,12 @@ impl PqfileApp {
                 .color(c_subtext(dark)),
             );
             ui.add_space(6.0);
+            let row_w = ui.available_width();
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.settings.output_dir)
                         .hint_text("Same folder as source file (default)")
-                        .desired_width(ui.available_width() - 80.0),
+                        .desired_width((row_w - 80.0).max(50.0)),
                 );
                 if ui
                     .add(

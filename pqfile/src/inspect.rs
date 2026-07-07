@@ -6,8 +6,9 @@ use std::io::Read;
 
 use crate::error::PqfileError;
 use crate::format::{
-    PqfHeader, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, NONCE_LEN, VERSION, VERSION_V3, VERSION_V4,
-    VERSION_V5, VERSION_V6, VERSION_V7, VERSION_V8, VERSION_V9,
+    version_layout, PqfHeader, PqfHeaderV10, PqfHeaderV4, PqfHeaderV7, PqfHeaderV8, NONCE_LEN,
+    VERSION, VERSION_AUTH_BIT, VERSION_V10, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V6,
+    VERSION_V7, VERSION_V8, VERSION_V9,
 };
 
 /// KEM variant information for a single recipient slot.
@@ -32,7 +33,10 @@ pub enum PqfHeaderInfo {
     /// Single-recipient formats: v2 (whole-file AEAD), v3 (chunked stream),
     /// v5 (configurable chunk size), v6 (compress-then-encrypt).
     Single {
-        /// Format version byte.
+        /// Format version byte as stored on disk. May carry
+        /// [`crate::format::VERSION_AUTH_BIT`] (e.g. `0x83` = v3 layout with an
+        /// authenticated header); mask with [`crate::format::version_layout`] to
+        /// compare against the `VERSION_*` constants.
         version: u8,
         /// KEM variant identifier (512, 768, 1024, or 0x0301 for hybrid).
         kem_variant: u16,
@@ -72,11 +76,32 @@ pub enum PqfHeaderInfo {
     /// 1616-byte entry with no KEM variant field. Only the slot count is observable.
     /// v9 additionally pads the count to the next power of two with random dummy slots.
     AnonMultiV8 {
-        /// Format version byte: `0x08` for standard or `0x09` for padded.
+        /// Format version byte: `0x08` for standard or `0x09` for padded, possibly
+        /// with [`crate::format::VERSION_AUTH_BIT`] set (mask with
+        /// [`crate::format::version_layout`] before comparing).
         version: u8,
         /// Number of recipient slots (includes dummy slots in v9).
         slot_count: usize,
         /// Base nonce for the STREAM payload.
+        nonce: [u8; NONCE_LEN],
+        /// Uncompressed plaintext size in bytes.
+        original_size: u64,
+    },
+    /// Passphrase-only format (v10): no key pair; the session key is derived from a
+    /// passphrase (and optional keyfile second factor) via Argon2id.
+    Passphrase {
+        /// Format version byte as stored on disk (`0x0A`, possibly with
+        /// [`crate::format::VERSION_AUTH_BIT`] set).
+        version: u8,
+        /// Argon2id memory cost in KiB.
+        m_kib: u32,
+        /// Argon2id time cost (iterations).
+        t_cost: u32,
+        /// Argon2id parallelism (lanes).
+        p_cost: u32,
+        /// Feature flag bits: bit 0 set means a keyfile second factor is required.
+        flags: u8,
+        /// Per-file base nonce (12 bytes).
         nonce: [u8; NONCE_LEN],
         /// Uncompressed plaintext size in bytes.
         original_size: u64,
@@ -94,7 +119,11 @@ pub enum PqfHeaderInfo {
 #[must_use = "inspect result must be used"]
 pub fn inspect_stream<R: Read>(reader: &mut R) -> Result<PqfHeaderInfo, PqfileError> {
     let version = PqfHeader::read_magic_version(reader)?;
-    match version {
+    // v2 has no authenticated-header variant.
+    if version == VERSION | VERSION_AUTH_BIT {
+        return Err(PqfileError::UnsupportedVersion(version));
+    }
+    match version_layout(version) {
         VERSION | VERSION_V3 | VERSION_V5 | VERSION_V6 => {
             let h = PqfHeader::read_body(reader, version)?;
             Ok(PqfHeaderInfo::Single {
@@ -144,6 +173,18 @@ pub fn inspect_stream<R: Read>(reader: &mut R) -> Result<PqfHeaderInfo, PqfileEr
                 original_size: h.original_size,
             })
         }
-        v => Err(PqfileError::UnsupportedVersion(v)),
+        VERSION_V10 => {
+            let h = PqfHeaderV10::read_body(reader)?;
+            Ok(PqfHeaderInfo::Passphrase {
+                version,
+                m_kib: h.m_kib,
+                t_cost: h.t_cost,
+                p_cost: h.p_cost,
+                flags: h.flags,
+                nonce: h.nonce,
+                original_size: h.original_size,
+            })
+        }
+        _ => Err(PqfileError::UnsupportedVersion(version)),
     }
 }

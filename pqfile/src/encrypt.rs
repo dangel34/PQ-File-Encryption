@@ -15,11 +15,12 @@ use crate::error::PqfileError;
 use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
 
 use crate::format::{
-    chunk_nonce, compute_key_commitment, fill_chunk, hybrid_hkdf, make_chunk_aad, PqfHeader,
-    PqfHeaderV4, PqfHeaderV8, RecipientEntryV4, RecipientEntryV8, BASE_NONCE_LEN, CHUNK_SIZE,
-    COMPRESSION_NONE, EK_LEN_1024, EK_LEN_512, EK_LEN_768, HEADER_LEN_768, HYBRID_CT_LEN_768,
-    HYBRID_EK_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
-    NONCE_LEN, PADDED_CT_LEN, VERSION, VERSION_V3, VERSION_V5, VERSION_V9, WRAPPED_KEY_LEN,
+    chunk_nonce, commitment_for_stream, commitment_for_v10, fill_chunk, hybrid_hkdf,
+    make_chunk_aad, PqfHeader, PqfHeaderV4, PqfHeaderV8, RecipientEntryV4, RecipientEntryV8,
+    BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, EK_LEN_1024, EK_LEN_512, EK_LEN_768,
+    HEADER_LEN_768, HYBRID_CT_LEN_768, HYBRID_EK_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512,
+    KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, PADDED_CT_LEN, VERSION, VERSION_AUTH_BIT,
+    VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V8, VERSION_V9, WRAPPED_KEY_LEN,
 };
 // Used only in the native compressed-encrypt path and its tests.
 #[cfg(not(target_arch = "wasm32"))]
@@ -106,11 +107,12 @@ pub fn encrypt_stream(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let version = if chunk_size == CHUNK_SIZE {
-        VERSION_V3
-    } else {
-        VERSION_V5
-    };
+    let version = VERSION_AUTH_BIT
+        | if chunk_size == CHUNK_SIZE {
+            VERSION_V3
+        } else {
+            VERSION_V5
+        };
     let header = PqfHeader {
         version,
         kem_variant,
@@ -121,7 +123,14 @@ pub fn encrypt_stream(
         compression_algo: COMPRESSION_NONE,
     };
     header.write(writer)?;
-    let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
+    let key_commitment = commitment_for_stream(
+        ss_bytes.as_ref(),
+        version,
+        &nonce_bytes,
+        original_size,
+        chunk_size as u32,
+        COMPRESSION_NONE,
+    );
 
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
@@ -132,6 +141,72 @@ pub fn encrypt_stream(
         &cipher,
         base_nonce,
         chunk_size,
+        &key_commitment,
+        reader,
+        writer,
+    )
+}
+
+/// Encrypts a stream in "stealth" mode: the `.pqf` magic, version byte, and KEM
+/// variant field are all omitted, so the output does not immediately identify
+/// itself as pqfile ciphertext to an observer. Single recipient only.
+///
+/// Wire layout: `KEM_CT(ct_len) || BASE_NONCE(8) || ORIGINAL_SIZE(8) || <chunked ciphertext>`,
+/// where `ct_len` depends on the recipient's KEM variant. There is nowhere on
+/// the wire to record which variant was used, because the decryptor's private
+/// key already implies it - [`crate::decrypt::decrypt_stream_stealth`] derives
+/// `ct_len` from the supplied key, so a wrong key type simply fails to parse
+/// rather than needing a field to check against.
+///
+/// The KEM ciphertext, X25519 ephemeral key (hybrid mode), and nonce are all
+/// computationally indistinguishable from random bytes; `ORIGINAL_SIZE` is the
+/// one field that is not (small files leave high-order zero bytes visible).
+/// Combine with [`PadmeReader`](crate::padding::PadmeReader) if the true
+/// plaintext length is also sensitive - `original_size` should still be the
+/// real length so the padding can be stripped back off on decrypt, exactly as
+/// with the non-stealth formats.
+///
+/// Always uses [`CHUNK_SIZE`] and no compression: both are constants baked
+/// into the key commitment (the same "v3 authenticated" definition used by
+/// [`encrypt_stream`]'s `VERSION_AUTH_BIT` files) even though no version byte
+/// travels on the wire to say so, so a chunk_size/compression downgrade attack
+/// has nothing to target.
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_stealth(
+    pubkey_pem: &str,
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let (ek, _kem_variant) = parse_encapsulation_key(pubkey_pem)?;
+    let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+
+    writer.write_all(&kem_ct_bytes)?;
+    writer.write_all(&nonce_bytes[..BASE_NONCE_LEN])?;
+    writer.write_all(&original_size.to_le_bytes())?;
+
+    let key_commitment = commitment_for_stream(
+        ss_bytes.as_ref(),
+        VERSION_V3 | VERSION_AUTH_BIT,
+        &nonce_bytes,
+        original_size,
+        CHUNK_SIZE as u32,
+        COMPRESSION_NONE,
+    );
+
+    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
+    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
+    let cipher = ChaCha20Poly1305::new(key);
+    encrypt_chunks(
+        &cipher,
+        base_nonce,
+        CHUNK_SIZE,
         &key_commitment,
         reader,
         writer,
@@ -284,10 +359,10 @@ pub(crate) fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>
             let eph_pk = X25519PublicKey::from(&eph_sk);
 
             let recipient_pk = X25519PublicKey::from(x25519_pk);
-            // x25519-dalek v2 with the "zeroize" feature implements Zeroize on
-            // both StaticSecret and SharedSecret, so both eph_sk and x25519_ss are
+            // x25519-dalek v3 with the "zeroize" feature zeroizes StaticSecret
+            // and SharedSecret on drop, so both eph_sk and x25519_ss are
             // overwritten on drop.
-            let x25519_ss = Zeroizing::new(eph_sk.diffie_hellman(&recipient_pk));
+            let x25519_ss = eph_sk.diffie_hellman(&recipient_pk);
 
             let (ml_ct, ml_ss) = ml_ek.encapsulate();
 
@@ -337,8 +412,16 @@ pub fn encrypt_stream_multi(
         nonce: nonce_bytes,
         original_size,
     };
-    header.write(writer)?;
-    let key_commitment = compute_key_commitment(session_key.as_ref(), &nonce_bytes, original_size);
+    let version = VERSION_V4 | VERSION_AUTH_BIT;
+    header.write(writer, version)?;
+    let key_commitment = commitment_for_stream(
+        session_key.as_ref(),
+        version,
+        &nonce_bytes,
+        original_size,
+        CHUNK_SIZE as u32,
+        COMPRESSION_NONE,
+    );
 
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
@@ -416,8 +499,16 @@ pub fn encrypt_stream_multi_anon(
         nonce: nonce_bytes,
         original_size,
     };
-    header.write(writer)?;
-    let key_commitment = compute_key_commitment(session_key.as_ref(), &nonce_bytes, original_size);
+    let version = VERSION_V8 | VERSION_AUTH_BIT;
+    header.write_with_version(writer, version)?;
+    let key_commitment = commitment_for_stream(
+        session_key.as_ref(),
+        version,
+        &nonce_bytes,
+        original_size,
+        CHUNK_SIZE as u32,
+        COMPRESSION_NONE,
+    );
 
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
@@ -512,9 +603,17 @@ pub fn encrypt_stream_multi_anon_padded(
         nonce: nonce_bytes,
         original_size,
     };
-    header.write_with_version(writer, VERSION_V9)?;
+    let version = VERSION_V9 | VERSION_AUTH_BIT;
+    header.write_with_version(writer, version)?;
 
-    let key_commitment = compute_key_commitment(session_key.as_ref(), &nonce_bytes, original_size);
+    let key_commitment = commitment_for_stream(
+        session_key.as_ref(),
+        version,
+        &nonce_bytes,
+        original_size,
+        CHUNK_SIZE as u32,
+        COMPRESSION_NONE,
+    );
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN");
@@ -698,8 +797,9 @@ pub fn encrypt_stream_compressed(
         getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
             .map_err(|_| PqfileError::EncryptionFailure)?;
 
+        let version = VERSION_V6 | VERSION_AUTH_BIT;
         let header = PqfHeader {
-            version: VERSION_V6,
+            version,
             kem_variant,
             kem_ciphertext: kem_ct_bytes,
             nonce: nonce_bytes,
@@ -708,7 +808,14 @@ pub fn encrypt_stream_compressed(
             compression_algo: COMPRESSION_ZSTD,
         };
         header.write(writer)?;
-        let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
+        let key_commitment = commitment_for_stream(
+            ss_bytes.as_ref(),
+            version,
+            &nonce_bytes,
+            original_size,
+            chunk_size as u32,
+            COMPRESSION_ZSTD,
+        );
 
         let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
             .try_into()
@@ -911,9 +1018,10 @@ fn encrypt_stream_passphrase_inner(
         nonce: nonce_bytes,
         original_size,
     };
-    header.write(writer).map_err(PqfileError::Io)?;
+    let version = crate::format::VERSION_V10 | VERSION_AUTH_BIT;
+    header.write(writer, version).map_err(PqfileError::Io)?;
 
-    let key_commitment = compute_key_commitment(session_key.as_ref(), &nonce_bytes, original_size);
+    let key_commitment = commitment_for_v10(session_key.as_ref(), version, &header);
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN");
@@ -1006,11 +1114,12 @@ pub fn encrypt_mmap(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let version = if chunk_size == CHUNK_SIZE {
-        VERSION_V3
-    } else {
-        VERSION_V5
-    };
+    let version = VERSION_AUTH_BIT
+        | if chunk_size == CHUNK_SIZE {
+            VERSION_V3
+        } else {
+            VERSION_V5
+        };
     let header = PqfHeader {
         version,
         kem_variant,
@@ -1021,7 +1130,14 @@ pub fn encrypt_mmap(
         compression_algo: COMPRESSION_NONE,
     };
     header.write(writer)?;
-    let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
+    let key_commitment = commitment_for_stream(
+        ss_bytes.as_ref(),
+        version,
+        &nonce_bytes,
+        original_size,
+        chunk_size as u32,
+        COMPRESSION_NONE,
+    );
 
     let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
@@ -1107,11 +1223,12 @@ where
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let version = if chunk_size == CHUNK_SIZE {
-        VERSION_V3
-    } else {
-        VERSION_V5
-    };
+    let version = VERSION_AUTH_BIT
+        | if chunk_size == CHUNK_SIZE {
+            VERSION_V3
+        } else {
+            VERSION_V5
+        };
     let header = PqfHeader {
         version,
         kem_variant,
@@ -1122,7 +1239,14 @@ where
         compression_algo: COMPRESSION_NONE,
     };
     header.write(writer)?;
-    let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
+    let key_commitment = commitment_for_stream(
+        ss_bytes.as_ref(),
+        version,
+        &nonce_bytes,
+        original_size,
+        chunk_size as u32,
+        COMPRESSION_NONE,
+    );
 
     let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
@@ -1308,11 +1432,12 @@ pub fn encrypt_stream_parallel(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let version = if chunk_size == CHUNK_SIZE {
-        VERSION_V3
-    } else {
-        VERSION_V5
-    };
+    let version = VERSION_AUTH_BIT
+        | if chunk_size == CHUNK_SIZE {
+            VERSION_V3
+        } else {
+            VERSION_V5
+        };
     let header = PqfHeader {
         version,
         kem_variant,
@@ -1323,7 +1448,14 @@ pub fn encrypt_stream_parallel(
         compression_algo: COMPRESSION_NONE,
     };
     header.write(writer)?;
-    let key_commitment = compute_key_commitment(ss_bytes.as_ref(), &nonce_bytes, original_size);
+    let key_commitment = commitment_for_stream(
+        ss_bytes.as_ref(),
+        version,
+        &nonce_bytes,
+        original_size,
+        chunk_size as u32,
+        COMPRESSION_NONE,
+    );
 
     let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
@@ -1548,7 +1680,8 @@ mod tests {
         encrypt_stream(&pub_pem, 4, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
 
         let header = PqfHeader::read(&mut Cursor::new(&writer)).unwrap();
-        assert_eq!(header.version, VERSION_V3);
+        assert_eq!(header.version, VERSION_V3 | VERSION_AUTH_BIT);
+        assert_eq!(header.layout(), VERSION_V3);
     }
 
     #[test]
@@ -1562,7 +1695,7 @@ mod tests {
         encrypt_stream(&pub_pem, 4, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
 
         let header = PqfHeader::read(&mut Cursor::new(&writer)).unwrap();
-        assert_eq!(header.version, VERSION_V3);
+        assert_eq!(header.version, VERSION_V3 | VERSION_AUTH_BIT);
         assert_eq!(header.kem_variant, KEM_VARIANT_1024);
         assert_eq!(header.kem_ciphertext.len(), 1568);
         // header + one small chunk
@@ -1582,7 +1715,7 @@ mod tests {
         encrypt_stream(&pub_pem, 4, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
 
         let header = PqfHeader::read(&mut Cursor::new(&writer)).unwrap();
-        assert_eq!(header.version, VERSION_V3);
+        assert_eq!(header.version, VERSION_V3 | VERSION_AUTH_BIT);
         assert_eq!(header.kem_variant, KEM_VARIANT_512);
         assert_eq!(header.kem_ciphertext.len(), 768);
         assert_eq!(writer.len(), HEADER_LEN_512 + 4 + 16);
@@ -1598,7 +1731,7 @@ mod tests {
         let mut writer = Vec::new();
         encrypt_stream(&pub_pem, 5, CHUNK_SIZE, &mut reader, &mut writer).unwrap();
         let header = PqfHeader::read(&mut Cursor::new(&writer)).unwrap();
-        assert_eq!(header.version, VERSION_V3);
+        assert_eq!(header.version, VERSION_V3 | VERSION_AUTH_BIT);
     }
 
     #[test]
@@ -1610,7 +1743,7 @@ mod tests {
         let mut writer = Vec::new();
         encrypt_stream(&pub_pem, 5, 4096, &mut reader, &mut writer).unwrap();
         let header = PqfHeader::read(&mut Cursor::new(&writer)).unwrap();
-        assert_eq!(header.version, VERSION_V5);
+        assert_eq!(header.version, VERSION_V5 | VERSION_AUTH_BIT);
         assert_eq!(header.chunk_size, 4096);
     }
 
@@ -1647,7 +1780,7 @@ mod tests {
         .unwrap();
 
         let version_pos = crate::format::MAGIC.len();
-        assert_eq!(out[version_pos], VERSION_V6);
+        assert_eq!(out[version_pos], VERSION_V6 | VERSION_AUTH_BIT);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1887,7 +2020,7 @@ mod tests {
             .encrypt(plaintext.len() as u64, &mut plaintext.as_slice(), &mut ct)
             .unwrap();
         let version_pos = crate::format::MAGIC.len();
-        assert_eq!(ct[version_pos], VERSION_V4);
+        assert_eq!(ct[version_pos], VERSION_V4 | VERSION_AUTH_BIT);
         for priv_pem in [&priv1, &priv2] {
             let mut out = Vec::new();
             decrypt_stream(priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
@@ -1906,7 +2039,7 @@ mod tests {
             .encrypt(plaintext.len() as u64, &mut plaintext.as_slice(), &mut ct)
             .unwrap();
         let version_pos = crate::format::MAGIC.len();
-        assert_eq!(ct[version_pos], VERSION_V8);
+        assert_eq!(ct[version_pos], VERSION_V8 | VERSION_AUTH_BIT);
         for priv_pem in [&priv1, &priv2] {
             let mut out = Vec::new();
             decrypt_stream(priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
@@ -1925,7 +2058,7 @@ mod tests {
             .encrypt(plaintext.len() as u64, &mut plaintext.as_slice(), &mut ct)
             .unwrap();
         let version_pos = crate::format::MAGIC.len();
-        assert_eq!(ct[version_pos], VERSION_V9);
+        assert_eq!(ct[version_pos], VERSION_V9 | VERSION_AUTH_BIT);
         for priv_pem in [&priv1, &priv2] {
             let mut out = Vec::new();
             decrypt_stream(priv_pem, &mut ct.as_slice(), &mut out, None).unwrap();
@@ -1949,7 +2082,8 @@ mod tests {
             .unwrap();
         let version_pos = crate::format::MAGIC.len();
         assert_eq!(
-            ct_ap[version_pos], VERSION_V9,
+            ct_ap[version_pos],
+            VERSION_V9 | VERSION_AUTH_BIT,
             ".anonymous().padded() => v9"
         );
 
@@ -1964,7 +2098,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            ct_pa[version_pos], VERSION_V8,
+            ct_pa[version_pos],
+            VERSION_V8 | VERSION_AUTH_BIT,
             ".padded().anonymous() => v8"
         );
     }

@@ -1,6 +1,6 @@
 # pqfile Format Specification
 
-This document is the authoritative byte-level description of all `.pqf` file format versions (v2 through v10). All multi-byte integers are little-endian unless stated otherwise.
+This document is the authoritative byte-level description of all `.pqf` file format versions (v2 through v10), plus the stealth mode (§5.10) and Padmé padding (§5.11) that layer on top without a version bump. All multi-byte integers are little-endian unless stated otherwise.
 
 ---
 
@@ -18,6 +18,7 @@ This document is the authoritative byte-level description of all `.pqf` file for
 | VERSION_V8 | `0x08` | Variant-blind anonymous multi-recipient |
 | VERSION_V9 | `0x09` | Padded anonymous multi-recipient |
 | VERSION_V10 | `0x0A` | Passphrase-only (no KEM) |
+| VERSION_AUTH_BIT | `0x80` | Authenticated-header flag bit, OR-ed onto the version byte (e.g. `0x83` = v3 layout + authenticated header). See §4.4. |
 | CHUNK_SIZE | 65536 | Default chunk size (bytes) |
 | BASE_NONCE_LEN | 8 | Random base-nonce bytes stored in header |
 | NONCE_LEN | 12 | Full per-chunk nonce length (base + counter) |
@@ -78,7 +79,8 @@ chunk_aad(counter, is_last) =
     b"pqfile"        (6 bytes, ASCII)
     counter         (4 bytes, big-endian u32)
     is_last         (1 byte: 0x01 for final chunk, 0x00 otherwise)
-// 11 bytes total
+    key_commitment  (32 bytes, chunk 0 only — see §4.4)
+// 43 bytes for chunk 0, 11 bytes for all later chunks
 ```
 
 ### 4.3 Chunk ciphertext
@@ -94,6 +96,55 @@ chunk_ciphertext = ChaCha20-Poly1305-encrypt(
 ```
 
 For an empty file, one zero-byte chunk is emitted (just the 16-byte tag).
+
+### 4.4 Chunk-0 key commitment and the authenticated-header bit
+
+The first chunk's AAD carries a 32-byte SHA3-256 **key commitment** binding the
+chunk-0 tag to the session key and the stable header fields. Which preimage is
+used depends on `VERSION_AUTH_BIT` in the version byte:
+
+**Legacy files (bit clear, written by pqfile ≤ 4.2.4):**
+
+```
+key_commitment = SHA3-256(
+    b"pqfile-session-key-commitment-v2"
+    || session_key (32 bytes)
+    || BASE_NONCE  (12 bytes as stored in the header)
+    || ORIGINAL_SIZE (8 bytes, little-endian)
+)
+```
+
+**Authenticated-header files (bit set, e.g. version byte `0x83`/`0x84`/…/`0x8A`):**
+
+```
+key_commitment = SHA3-256(
+    b"pqfile-session-key-commitment-v3"
+    || session_key      (32 bytes)
+    || chunk_size       (4 bytes LE; CHUNK_SIZE for layouts without the field)
+    || compression_algo (1 byte; 0x00 for layouts without the field)
+    || kdf_fields       (29 bytes: v10 SALT || M || T || P || FLAGS; all zero
+                         for every layout other than v10)
+    || BASE_NONCE       (12 bytes)
+    || ORIGINAL_SIZE    (8 bytes LE)
+)
+```
+
+The v3 commitment binds every header field whose tampering is not already
+self-healing. Flipping `compression_algo`, `chunk_size`, the v10 Argon2id
+parameters/flags, or the auth bit itself makes chunk-0 authentication fail (the
+two definitions use different domain-separation contexts, so the bit cannot be
+stripped or added). The version byte and `kem_variant` are deliberately
+**excluded** from the preimage: both change during zero-copy `rekey`
+(v3 → v4) while the payload is preserved, and tampering with either is
+self-healing — a structural misparse or wrong shared secret that ends in a tag
+failure. Recipient-slot contents are likewise excluded so `add-recipient` and
+`rekey` can rewrite headers without touching the payload.
+
+There is no `0x82`: v2 already authenticates its entire header as the
+whole-file AAD, so the bit is rejected on the v2 layout. pqfile ≤ 4.2.4
+rejects any bit-carrying version byte with `UnsupportedVersion` — the intended
+"upgrade to read this file" signal. Files written by older versions remain
+readable.
 
 ---
 
@@ -382,6 +433,38 @@ The 32-byte output is used directly as the ChaCha20-Poly1305 session key for the
 **Unknown flag bits:** decoders MUST reject a header with any reserved bit set (`PqfileError::UnsupportedHeaderFlags`) rather than ignore it, so files written by future versions with different derivation semantics are never silently misdecrypted.
 
 **Security note:** M_KIB, T_COST, and P_COST are attacker-controlled. Decryptors MUST enforce a ceiling before calling the KDF. Exceeding the ceiling returns `PqfileError::KdfLimitExceeded`. The default ceiling matches the encrypt-side default: 64 MiB / t=3.
+
+---
+
+### 5.10 Stealth mode - no magic, no version, no KEM variant field
+
+`encrypt_stream_stealth` / `decrypt_stream_stealth` (`pqfile::encrypt` / `pqfile::decrypt`) produce output with **no header at all** in the sense used by every other version above: no `PQFL` magic, no version byte, and no KEM variant field. The point is that the ciphertext is not identifiable as pqfile output (or as any particular key type) to an observer without the private key.
+
+```
+Offset  Len   Field
+0       ct    KEM_CT (length implied by the recipient's own KEM variant)
+ct      8     BASE_NONCE (random)
+ct+8    8     ORIGINAL_SIZE (u64 LE; informational, authenticated - see below)
+ct+16   var   STREAM chunks (chunk_size = 65536, no compression; identical construction to v3)
+```
+
+Single recipient only. `ct` (the KEM ciphertext length) is not stored anywhere on the wire - the decryptor already knows it, because `ct_len` is determined entirely by the *private key's own* KEM variant (`ct_len_for_variant(dk.kem_variant())`). A wrong-variant or unrelated key simply reads the wrong number of bytes and fails decapsulation or chunk-0 authentication, the same failure shape as any other corrupt input.
+
+**Key commitment:** identical to the `VERSION_AUTH_BIT` v3 definition (`commitment_for_stream` with `chunk_size = CHUNK_SIZE`, `compression_algo = COMPRESSION_NONE`), even though no version byte travels on the wire to select it - both sides derive the same commitment because both sides use the same hardcoded chunk_size/compression_algo constants.
+
+**Decrypt-side truncation:** `decrypt_stream_stealth` unconditionally caps its output at the parsed `ORIGINAL_SIZE` (via `pqfile::padding::TruncatingWriter`), unlike the non-stealth decrypt paths where this is left to the caller. There is no legacy caller whose behavior this could change, since the function is new, and it means [Padmé padding](#padding) composes with stealth mode with no extra steps at decrypt time.
+
+**Residual leakage:** the KEM ciphertext (and, in hybrid mode, the X25519 ephemeral public key) and the nonce are computationally indistinguishable from random bytes. `ORIGINAL_SIZE` is not - small files leave high-order zero bytes visible in that field. Pair with `PadmeReader` (encrypt-side, real length still passed to `encrypt_stream_stealth` so `ORIGINAL_SIZE` stays accurate) if the plaintext length is also sensitive.
+
+<a id="padding"></a>
+### 5.11 Plaintext length padding (Padmé)
+
+Padmé padding (`pqfile::padding::padme_length`/`PadmeReader`/`TruncatingWriter`) is **not a wire-format change** - every version above already has an `ORIGINAL_SIZE` field meaning "true plaintext length," and that field is already bound into the chunk-0 key commitment. Padding works entirely by:
+
+1. **Encrypt side:** wrap the plaintext reader in `PadmeReader::new(reader, real_len)`, which emits `real_len` real bytes followed by `padme_length(real_len) - real_len` zero bytes before EOF. Pass `real_len` (not the padded length) as `original_size` to the encrypt function unchanged - the header keeps recording the true size; only the physical byte count of the chunked payload grows.
+2. **Decrypt side:** wrap the output writer in `TruncatingWriter::new(writer, original_size)`, capping forwarded bytes at the header's (authenticated) `original_size` and silently dropping the padding tail. Because non-padded files already decrypt to exactly `original_size` bytes, this is a no-op unless the file was actually padded - callers do not need to know in advance.
+
+`padme_length(len)` rounds `len` up to a bucket whose low-order bits are masked to zero (the number of masked bits grows with `len`'s own bit-length), bounding overhead to roughly 1/2^k for a length k bits short of a power of two - in practice at most ~12% for real file sizes.
 
 ---
 

@@ -139,6 +139,9 @@ pub mod repassphrase;
 /// Hardware-backed private key support: OS credential store, future PKCS#11.
 pub mod hardware;
 
+/// Plaintext-length padding (Padmé) and output truncation for stripping it back off.
+pub mod padding;
+
 /// Async encrypt / decrypt streaming via `tokio::io` (requires the `async` feature).
 #[cfg(feature = "async")]
 pub mod async_io;

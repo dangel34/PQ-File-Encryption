@@ -135,9 +135,9 @@ impl PqfileApp {
                         }
                         DoctorRow::Check(kind, label, val) => {
                             let (badge, color) = match kind {
-                                CheckKind::Pass => ("✓  ", c_green(dark)),
+                                CheckKind::Pass => ("✔  ", c_green(dark)),
                                 CheckKind::Warn => ("⚠  ", c_yellow(dark)),
-                                CheckKind::Fail => ("✗  ", c_red(dark)),
+                                CheckKind::Fail => ("✖  ", c_red(dark)),
                                 CheckKind::Info => ("·  ", c_subtext(dark)),
                             };
                             ui.horizontal(|ui| {
@@ -411,7 +411,7 @@ fn doctor_pqf(info: &inspect::PqfHeaderInfo) -> Vec<DoctorRow> {
             chunk_size,
             compression_algo,
         } => {
-            let ver_label = match *version {
+            let ver_label = match format::version_layout(*version) {
                 v if v == format::VERSION => "v2 (single-recipient)",
                 v if v == format::VERSION_V3 => "v3 (streaming)",
                 v if v == format::VERSION_V5 => "v5 (configurable chunk)",
@@ -420,6 +420,14 @@ fn doctor_pqf(info: &inspect::PqfHeaderInfo) -> Vec<DoctorRow> {
             };
             rows.push(DoctorRow::Kv("Format".to_owned(), ver_label.to_owned()));
             rows.push(DoctorRow::Kv(
+                "Auth. header".to_owned(),
+                if format::is_header_authenticated(*version) {
+                    "yes".to_owned()
+                } else {
+                    "no".to_owned()
+                },
+            ));
+            rows.push(DoctorRow::Kv(
                 "KEM".to_owned(),
                 variant_name(*kem_variant).to_owned(),
             ));
@@ -427,13 +435,14 @@ fn doctor_pqf(info: &inspect::PqfHeaderInfo) -> Vec<DoctorRow> {
                 "Original size".to_owned(),
                 format!("{original_size} bytes"),
             ));
-            if *version == format::VERSION_V5 || *version == format::VERSION_V6 {
+            let layout = format::version_layout(*version);
+            if layout == format::VERSION_V5 || layout == format::VERSION_V6 {
                 rows.push(DoctorRow::Kv(
                     "Chunk size".to_owned(),
                     format!("{chunk_size} bytes"),
                 ));
             }
-            if *version == format::VERSION_V6 {
+            if layout == format::VERSION_V6 {
                 let algo = if *compression_algo == format::COMPRESSION_ZSTD {
                     "zstd"
                 } else {
@@ -524,7 +533,8 @@ fn doctor_pqf(info: &inspect::PqfHeaderInfo) -> Vec<DoctorRow> {
             nonce,
             original_size,
         } => {
-            let (ver_label, anon_detail) = if *version == format::VERSION_V9 {
+            let (ver_label, anon_detail) = if format::version_layout(*version) == format::VERSION_V9
+            {
                 (
                     "v9 (padded anonymous multi-recipient)",
                     "full (variant-blind + count-padded)",
@@ -541,6 +551,61 @@ fn doctor_pqf(info: &inspect::PqfHeaderInfo) -> Vec<DoctorRow> {
             rows.push(DoctorRow::Section("Health Checks".to_owned()));
             rows.push(chk(CheckKind::Pass, "Header validity", "OK"));
             rows.push(chk(CheckKind::Pass, "Recipient anonymity", anon_detail));
+            rows.push(DoctorRow::Section("Raw Details".to_owned()));
+            rows.push(DoctorRow::Kv(
+                "Version (hex)".to_owned(),
+                format!("{:#04x}", version),
+            ));
+            rows.push(DoctorRow::Kv(
+                "Nonce".to_owned(),
+                nonce.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            ));
+        }
+        inspect::PqfHeaderInfo::Passphrase {
+            version,
+            m_kib,
+            t_cost,
+            p_cost,
+            flags,
+            nonce,
+            original_size,
+        } => {
+            rows.push(DoctorRow::Kv(
+                "Format".to_owned(),
+                "v10 (passphrase-only)".to_owned(),
+            ));
+            rows.push(DoctorRow::Kv(
+                "Auth. header".to_owned(),
+                if format::is_header_authenticated(*version) {
+                    "yes".to_owned()
+                } else {
+                    "no".to_owned()
+                },
+            ));
+            rows.push(DoctorRow::Kv(
+                "Argon2id".to_owned(),
+                format!("m={m_kib} KiB, t={t_cost}, p={p_cost}"),
+            ));
+            let keyfile_required = flags & 0x01 != 0;
+            rows.push(DoctorRow::Kv(
+                "Keyfile required".to_owned(),
+                if keyfile_required {
+                    "yes".to_owned()
+                } else {
+                    "no".to_owned()
+                },
+            ));
+            rows.push(DoctorRow::Kv(
+                "Original size".to_owned(),
+                format!("{original_size} bytes"),
+            ));
+            rows.push(DoctorRow::Section("Health Checks".to_owned()));
+            rows.push(chk(CheckKind::Pass, "Header validity", "OK"));
+            rows.push(chk(
+                CheckKind::Info,
+                "Recipients",
+                "passphrase (no key pair)",
+            ));
             rows.push(DoctorRow::Section("Raw Details".to_owned()));
             rows.push(DoctorRow::Kv(
                 "Version (hex)".to_owned(),

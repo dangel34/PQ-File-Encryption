@@ -259,7 +259,7 @@ impl PqfileApp {
                 );
             } else {
                 let mut remove_idx: Option<usize> = None;
-                scrollable_list(ui, 154.0, c_card(dark), |ui| {
+                scrollable_list(ui, "shamir_shares", 154.0, c_card(dark), |ui| {
                     for (i, entry) in self.shamir_shares.iter().enumerate() {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(&entry.name).size(12.5).color(c_text(dark)));

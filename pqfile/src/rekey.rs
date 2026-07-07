@@ -13,7 +13,8 @@ use crate::decrypt::decapsulate_for_rekey;
 use crate::encrypt::encapsulate_for_rekey;
 use crate::error::PqfileError;
 use crate::format::{
-    fill_chunk, PqfHeader, PqfHeaderV4, RecipientEntryV4, CHUNK_SIZE, VERSION_V3, VERSION_V5,
+    fill_chunk, version_layout, PqfHeader, PqfHeaderV4, RecipientEntryV4, CHUNK_SIZE,
+    VERSION_AUTH_BIT, VERSION_V3, VERSION_V4, VERSION_V5,
 };
 
 /// Rekeys a v3/v5 file to a new public key without re-encrypting the payload.
@@ -30,9 +31,9 @@ pub fn rekey_stream(
     passphrase: Option<&str>,
 ) -> Result<(), PqfileError> {
     let version = PqfHeader::read_magic_version(reader)?;
-    match version {
+    match version_layout(version) {
         VERSION_V3 | VERSION_V5 => {}
-        v => return Err(PqfileError::UnsupportedVersion(v)),
+        _ => return Err(PqfileError::UnsupportedVersion(version)),
     }
 
     let header = PqfHeader::read_body(reader, version)?;
@@ -61,7 +62,11 @@ pub fn rekey_stream(
         nonce: header.nonce,
         original_size: header.original_size,
     };
-    v4_header.write(writer)?;
+    // Preserve the input file's authenticated-header bit: the payload's chunk-0
+    // commitment was computed with the matching definition and is copied verbatim.
+    // (The commitment binds chunk_size — CHUNK_SIZE, enforced above — but not the
+    // version byte or kem_variant, so the v3 → v4 conversion stays zero-copy.)
+    v4_header.write(writer, VERSION_V4 | (version & VERSION_AUTH_BIT))?;
 
     let mut buf = vec![0u8; CHUNK_SIZE + 16];
     loop {
@@ -152,7 +157,10 @@ mod tests {
         .unwrap();
         let mut out = Vec::new();
         let result = rekey_stream(&priv_pem, &pub2, &mut enc.as_slice(), &mut out, None);
-        assert!(matches!(result, Err(PqfileError::UnsupportedVersion(0x04))));
+        assert!(matches!(
+            result,
+            Err(PqfileError::UnsupportedVersion(v)) if version_layout(v) == VERSION_V4
+        ));
     }
 
     #[test]

@@ -16,6 +16,9 @@ path = "src/main.rs"
 pqfile        = { workspace = true }
 clap          = { version = "4", features = ["derive"] }
 clap_complete = "4"
+# Terminal QR rendering for `keygen --qr` / `fingerprint --qr` (unicode renderer
+# only; no image/svg features).
+qrcode        = { version = "0.14", default-features = false }
 rayon         = "1"
 rpassword     = "7"
 zeroize       = { version = "1", features = ["derive"] }

@@ -337,7 +337,7 @@ fn key_entry_row(
         let days = expiry_days_remaining(date)?;
         let (label, color) = if days < 0 {
             (
-                format!("✗ Expired {date} ({} days ago)", -days),
+                format!("✖ Expired {date} ({} days ago)", -days),
                 c_red(dark),
             )
         } else if days <= 30 {
