@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783212609309,
+  "lastUpdate": 1783457417644,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -1529,6 +1529,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48879,
             "range": "± 443",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "16dfe177b814154386c51199228b4f279bba1b1c",
+          "message": "fix: remove problematic Microsoft package repositories in CI workflows\n\n- Added commands to remove the Microsoft package repositories from the apt sources list in CI workflows to prevent intermittent failures during `apt-get update`.\n- This change is applied across the CI, release, and SonarQube workflows to ensure consistent behavior and reliability in dependency installation.",
+          "timestamp": "2026-07-07T16:46:00-04:00",
+          "tree_id": "13e8d6effdeea046792a36d185565133cbf366ce",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/16dfe177b814154386c51199228b4f279bba1b1c"
+        },
+        "date": 1783457417174,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 62410,
+            "range": "± 1189",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1040922,
+            "range": "± 4911",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 113693106,
+            "range": "± 4025567",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 100568,
+            "range": "± 349",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1052251,
+            "range": "± 14760",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 103081738,
+            "range": "± 142441",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 66067,
+            "range": "± 879",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1086276,
+            "range": "± 37513",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 110516081,
+            "range": "± 244236",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 104790,
+            "range": "± 1688",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1125656,
+            "range": "± 4431",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 110412049,
+            "range": "± 1101970",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 54305,
+            "range": "± 687",
             "unit": "ns/iter"
           }
         ]
