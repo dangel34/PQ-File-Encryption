@@ -25,6 +25,10 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          # Drop the runner image's packages.microsoft.com repos; they
+          # intermittently serve invalid InRelease files and fail apt-get
+          # update, and nothing we install comes from them.
+          sudo rm -f /etc/apt/sources.list.d/{microsoft-prod,azure-cli}.{list,sources}
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             libgtk-3-dev \
