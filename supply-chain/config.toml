@@ -232,7 +232,7 @@ version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.bytes]]
-version = "1.12.0"
+version = "1.12.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.calloop]]
@@ -249,10 +249,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.calloop-wayland-source]]
 version = "0.4.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.cc]]
-version = "1.2.65"
 criteria = "safe-to-deploy"
 
 [[exemptions.cc]]
@@ -340,23 +336,11 @@ version = "0.8.2"
 criteria = "safe-to-run"
 
 [[exemptions.crossbeam-deque]]
-version = "0.8.6"
-criteria = "safe-to-deploy"
-
-[[exemptions.crossbeam-deque]]
 version = "0.8.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam-epoch]]
-version = "0.9.18"
-criteria = "safe-to-deploy"
-
-[[exemptions.crossbeam-epoch]]
 version = "0.9.20"
-criteria = "safe-to-deploy"
-
-[[exemptions.crossbeam-utils]]
-version = "0.8.21"
 criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam-utils]]
@@ -385,10 +369,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.cursor-icon]]
 version = "1.2.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.curve25519-dalek]]
-version = "4.1.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.curve25519-dalek]]
@@ -513,10 +493,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.fearless_simd]]
 version = "0.4.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.fiat-crypto]]
-version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
@@ -716,15 +692,11 @@ version = "2.14.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.inotify]]
-version = "0.11.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.inotify]]
 version = "0.11.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.inotify-sys]]
-version = "0.1.7"
+version = "0.1.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.inout]]
@@ -761,10 +733,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.jni-sys-macros]]
 version = "0.4.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.jobserver]]
-version = "0.1.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.jobserver]]
@@ -860,7 +828,7 @@ version = "0.4.33"
 criteria = "safe-to-deploy"
 
 [[exemptions.memchr]]
-version = "2.8.2"
+version = "2.8.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.memmap2]]
@@ -969,10 +937,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.objc2-core-data]]
 version = "0.2.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.objc2-core-graphics]]
-version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.objc2-core-image]]
@@ -1176,10 +1140,6 @@ version = "1.11.0"
 criteria = "safe-to-run"
 
 [[exemptions.pxfm]]
-version = "0.1.29"
-criteria = "safe-to-deploy"
-
-[[exemptions.pxfm]]
 version = "0.1.30"
 criteria = "safe-to-deploy"
 
@@ -1272,10 +1232,6 @@ version = "0.0.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustc-hash]]
-version = "2.1.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.rustc-hash]]
 version = "2.1.3"
 criteria = "safe-to-deploy"
 
@@ -1289,10 +1245,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rustix]]
 version = "1.1.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.rustversion]]
-version = "1.0.22"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustversion]]
@@ -1880,10 +1832,6 @@ version = "0.13.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.x25519-dalek]]
-version = "2.0.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.x25519-dalek]]
 version = "3.0.0"
 criteria = "safe-to-deploy"
 
@@ -1912,7 +1860,7 @@ version = "0.8.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.zbus]]
-version = "5.16.0"
+version = "5.17.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zbus-lockstep]]
@@ -1924,27 +1872,19 @@ version = "0.5.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.zbus_macros]]
-version = "5.16.0"
+version = "5.17.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zbus_names]]
-version = "4.3.2"
+version = "4.3.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.zbus_xml]]
-version = "5.1.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.zerocopy]]
-version = "0.8.52"
+version = "5.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy]]
 version = "0.8.53"
-criteria = "safe-to-deploy"
-
-[[exemptions.zerocopy-derive]]
-version = "0.8.52"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy-derive]]
@@ -2004,13 +1944,13 @@ version = "0.5.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.zvariant]]
-version = "5.12.0"
+version = "5.13.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zvariant_derive]]
-version = "5.12.0"
+version = "5.13.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zvariant_utils]]
-version = "3.4.0"
+version = "3.5.0"
 criteria = "safe-to-deploy"
