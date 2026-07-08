@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783518348484,
+  "lastUpdate": 1783523129755,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -1733,6 +1733,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48755,
             "range": "± 150",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "15cb4ef17e49420a81ee0657a6a3b3857be658dd",
+          "message": "chore(deps): update dependency versions in config.toml and imports.lock\n\n- Bumped versions of several dependencies in `config.toml`, including `bytes`, `crossbeam-deque`, `crossbeam-epoch`, `crossbeam-utils`, `curve25519-dalek`, `inotify`, `jobserver`, `memchr`, `pxfm`, `rustc-hash`, `rustversion`, `x25519-dalek`, `zbus`, `zbus_macros`, `zbus_names`, `zbus_xml`, `zerocopy`, `zerocopy-derive`, `zvariant`, `zvariant_derive`, and `zvariant_utils` to their latest releases for improved performance and security.\n- Updated `imports.lock` to reflect new audits for `fiat-crypto` and `objc2-core-graphics`, ensuring compliance with safety criteria.",
+          "timestamp": "2026-07-08T11:01:36-04:00",
+          "tree_id": "e43e715c745bf9f921b94097ef855873aa73af74",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/15cb4ef17e49420a81ee0657a6a3b3857be658dd"
+        },
+        "date": 1783523129418,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 58329,
+            "range": "± 913",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 946197,
+            "range": "± 6626",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 106241353,
+            "range": "± 628199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 93059,
+            "range": "± 286",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 952172,
+            "range": "± 15840",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93547191,
+            "range": "± 393429",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 60937,
+            "range": "± 986",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 959469,
+            "range": "± 6070",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99860121,
+            "range": "± 1927746",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 97850,
+            "range": "± 1811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 993168,
+            "range": "± 6488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 98359139,
+            "range": "± 439797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 49090,
+            "range": "± 175",
             "unit": "ns/iter"
           }
         ]
