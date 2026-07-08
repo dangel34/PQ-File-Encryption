@@ -79,33 +79,45 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
     Ok(output)
 }
 
-/// Encrypts a stream of plaintext bytes.
-///
-/// When `chunk_size == CHUNK_SIZE` (65536), emits v3 format (backward-compatible).
-/// For any other value, emits v5 format which stores the chunk size in the header.
-/// Each chunk is authenticated with a position-bound nonce and AAD that prevents
-/// truncation and reordering attacks.
-///
-/// `original_size` is written into the header for informational purposes (pass 0
-/// when unknown, e.g. when reading from stdin).
-#[must_use = "encryption result must be used"]
-pub fn encrypt_stream(
+/// Per-stream secrets derived by [`begin_single_recipient_stream`] and shared by
+/// the single-recipient encrypt entry points.
+pub(crate) struct SingleRecipientStream {
+    pub(crate) ss_bytes: Zeroizing<[u8; 32]>,
+    pub(crate) key_commitment: [u8; 32],
+    pub(crate) base_nonce: [u8; BASE_NONCE_LEN],
+}
+
+impl SingleRecipientStream {
+    pub(crate) fn cipher(&self) -> ChaCha20Poly1305 {
+        let key: &Key = self.ss_bytes.as_ref().try_into().expect("32-byte key");
+        ChaCha20Poly1305::new(key)
+    }
+}
+
+/// Returns a fresh header nonce: the first `BASE_NONCE_LEN` bytes are random,
+/// the trailing per-chunk counter bytes stay zero.
+fn fresh_stream_nonce() -> Result<[u8; NONCE_LEN], PqfileError> {
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
+        .map_err(|_| PqfileError::EncryptionFailure)?;
+    Ok(nonce_bytes)
+}
+
+/// Encapsulates to `pubkey_pem` and writes the authenticated v3/v5 header,
+/// returning the secrets needed to encrypt the chunk stream that follows.
+pub(crate) fn begin_single_recipient_stream(
     pubkey_pem: &str,
     original_size: u64,
     chunk_size: usize,
-    reader: &mut dyn Read,
     writer: &mut dyn Write,
-) -> Result<(), PqfileError> {
+) -> Result<SingleRecipientStream, PqfileError> {
     if chunk_size == 0 {
         return Err(PqfileError::EncryptionFailure);
     }
     let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
-
     let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
 
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-        .map_err(|_| PqfileError::EncryptionFailure)?;
+    let nonce_bytes = fresh_stream_nonce()?;
 
     let version = VERSION_AUTH_BIT
         | if chunk_size == CHUNK_SIZE {
@@ -131,17 +143,73 @@ pub fn encrypt_stream(
         chunk_size as u32,
         COMPRESSION_NONE,
     );
+    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
+        .try_into()
+        .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
+    Ok(SingleRecipientStream {
+        ss_bytes,
+        key_commitment,
+        base_nonce,
+    })
+}
 
+/// Derives the chunk-stream secrets from a 32-byte session secret and encrypts
+/// `reader` into `writer` at the fixed [`CHUNK_SIZE`]. Shared tail of the
+/// stealth and multi-recipient (v4/v8/v9) encryptors.
+fn encrypt_session_chunks(
+    session_key: &[u8; 32],
+    version: u8,
+    nonce_bytes: &[u8; NONCE_LEN],
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let key_commitment = commitment_for_stream(
+        session_key,
+        version,
+        nonce_bytes,
+        original_size,
+        CHUNK_SIZE as u32,
+        COMPRESSION_NONE,
+    );
     let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
         .try_into()
         .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
-    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
+    let key: &Key = session_key.as_slice().try_into().expect("32-byte key");
     let cipher = ChaCha20Poly1305::new(key);
     encrypt_chunks(
         &cipher,
         base_nonce,
-        chunk_size,
+        CHUNK_SIZE,
         &key_commitment,
+        reader,
+        writer,
+    )
+}
+
+/// Encrypts a stream of plaintext bytes.
+///
+/// When `chunk_size == CHUNK_SIZE` (65536), emits v3 format (backward-compatible).
+/// For any other value, emits v5 format which stores the chunk size in the header.
+/// Each chunk is authenticated with a position-bound nonce and AAD that prevents
+/// truncation and reordering attacks.
+///
+/// `original_size` is written into the header for informational purposes (pass 0
+/// when unknown, e.g. when reading from stdin).
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream(
+    pubkey_pem: &str,
+    original_size: u64,
+    chunk_size: usize,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let stream = begin_single_recipient_stream(pubkey_pem, original_size, chunk_size, writer)?;
+    encrypt_chunks(
+        &stream.cipher(),
+        &stream.base_nonce,
+        chunk_size,
+        &stream.key_commitment,
         reader,
         writer,
     )
@@ -181,33 +249,17 @@ pub fn encrypt_stream_stealth(
     let (ek, _kem_variant) = parse_encapsulation_key(pubkey_pem)?;
     let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
 
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-        .map_err(|_| PqfileError::EncryptionFailure)?;
+    let nonce_bytes = fresh_stream_nonce()?;
 
     writer.write_all(&kem_ct_bytes)?;
     writer.write_all(&nonce_bytes[..BASE_NONCE_LEN])?;
     writer.write_all(&original_size.to_le_bytes())?;
 
-    let key_commitment = commitment_for_stream(
-        ss_bytes.as_ref(),
+    encrypt_session_chunks(
+        &ss_bytes,
         VERSION_V3 | VERSION_AUTH_BIT,
         &nonce_bytes,
         original_size,
-        CHUNK_SIZE as u32,
-        COMPRESSION_NONE,
-    );
-
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
-        .try_into()
-        .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
-    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
-    let cipher = ChaCha20Poly1305::new(key);
-    encrypt_chunks(
-        &cipher,
-        base_nonce,
-        CHUNK_SIZE,
-        &key_commitment,
         reader,
         writer,
     )
@@ -403,9 +455,7 @@ pub fn encrypt_stream_multi(
         });
     }
 
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-        .map_err(|_| PqfileError::EncryptionFailure)?;
+    let nonce_bytes = fresh_stream_nonce()?;
 
     let header = PqfHeaderV4 {
         recipients,
@@ -414,28 +464,62 @@ pub fn encrypt_stream_multi(
     };
     let version = VERSION_V4 | VERSION_AUTH_BIT;
     header.write(writer, version)?;
-    let key_commitment = commitment_for_stream(
-        session_key.as_ref(),
+    encrypt_session_chunks(
+        &session_key,
         version,
         &nonce_bytes,
         original_size,
-        CHUNK_SIZE as u32,
-        COMPRESSION_NONE,
-    );
-
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
-        .try_into()
-        .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
-    let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
-    let cipher = ChaCha20Poly1305::new(key);
-    encrypt_chunks(
-        &cipher,
-        base_nonce,
-        CHUNK_SIZE,
-        &key_commitment,
         reader,
         writer,
     )
+}
+
+/// Encapsulates `session_key` to each recipient as a uniform-size v8 slot:
+/// the KEM ciphertext is zero-padded to `PADDED_CT_LEN` so slot size reveals
+/// nothing about the recipient's key type.
+fn build_v8_recipients(
+    pubkey_pems: &[&str],
+    session_key: &[u8; 32],
+) -> Result<Vec<RecipientEntryV8>, PqfileError> {
+    let mut recipients: Vec<RecipientEntryV8> = Vec::with_capacity(pubkey_pems.len());
+    for pubkey_pem in pubkey_pems {
+        let (ek, _kem_variant) = parse_encapsulation_key(pubkey_pem)?;
+        let (kem_ct, ss) = encapsulate(ek)?;
+        let wrapped_key = wrap_session_key(session_key, &ss)?;
+        let mut padded_ct = [0u8; PADDED_CT_LEN];
+        padded_ct[..kem_ct.len()].copy_from_slice(&kem_ct);
+        recipients.push(RecipientEntryV8 {
+            padded_ct,
+            wrapped_key,
+        });
+    }
+    Ok(recipients)
+}
+
+/// Fisher-Yates shuffle with rejection sampling to eliminate modulo bias, so
+/// slot order reveals nothing about recipient identity (v8) or which slots are
+/// dummies (v9). For recipient counts up to 1000 the expected number of retries
+/// is < 1.001. A hard limit of 1000 retries per position guards against a
+/// malfunctioning entropy source causing an infinite loop.
+fn shuffle_recipients(recipients: &mut [RecipientEntryV8]) -> Result<(), PqfileError> {
+    const MAX_REJECTION_RETRIES: u32 = 1000;
+    for i in (1..recipients.len()).rev() {
+        let range = (i + 1) as u64;
+        let threshold = (1u64 << 32) - ((1u64 << 32) % range);
+        let j = 'sample: {
+            for _ in 0..MAX_REJECTION_RETRIES {
+                let mut r = [0u8; 4];
+                getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
+                let v = u32::from_le_bytes(r) as u64;
+                if v < threshold {
+                    break 'sample (v % range) as usize;
+                }
+            }
+            return Err(PqfileError::EncryptionFailure);
+        };
+        recipients.swap(i, j);
+    }
+    Ok(())
 }
 
 /// Encrypts a stream to multiple recipients in anonymous (v8) format.
@@ -454,45 +538,10 @@ pub fn encrypt_stream_multi_anon(
     let mut session_key = Zeroizing::new([0u8; 32]);
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let mut recipients: Vec<RecipientEntryV8> = Vec::with_capacity(pubkey_pems.len());
-    for pubkey_pem in pubkey_pems {
-        let (ek, _kem_variant) = parse_encapsulation_key(pubkey_pem)?;
-        let (kem_ct, ss) = encapsulate(ek)?;
-        let wrapped_key = wrap_session_key(&session_key, &ss)?;
-        // Pad actual CT to PADDED_CT_LEN; trailing bytes are zeros.
-        let mut padded_ct = [0u8; PADDED_CT_LEN];
-        padded_ct[..kem_ct.len()].copy_from_slice(&kem_ct);
-        recipients.push(RecipientEntryV8 {
-            padded_ct,
-            wrapped_key,
-        });
-    }
+    let mut recipients = build_v8_recipients(pubkey_pems, &session_key)?;
+    shuffle_recipients(&mut recipients)?;
 
-    // Fisher-Yates shuffle with rejection sampling to eliminate modulo bias.
-    // For recipient counts up to 1000 the expected number of retries is < 1.001.
-    // A hard limit of 1000 retries per position guards against a malfunctioning
-    // entropy source causing an infinite loop.
-    const MAX_REJECTION_RETRIES: u32 = 1000;
-    for i in (1..recipients.len()).rev() {
-        let range = (i + 1) as u64;
-        let threshold = (1u64 << 32) - ((1u64 << 32) % range);
-        let j = 'sample: {
-            for _ in 0..MAX_REJECTION_RETRIES {
-                let mut r = [0u8; 4];
-                getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
-                let v = u32::from_le_bytes(r) as u64;
-                if v < threshold {
-                    break 'sample (v % range) as usize;
-                }
-            }
-            return Err(PqfileError::EncryptionFailure);
-        };
-        recipients.swap(i, j);
-    }
-
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-        .map_err(|_| PqfileError::EncryptionFailure)?;
+    let nonce_bytes = fresh_stream_nonce()?;
 
     let header = PqfHeaderV8 {
         recipients,
@@ -501,25 +550,11 @@ pub fn encrypt_stream_multi_anon(
     };
     let version = VERSION_V8 | VERSION_AUTH_BIT;
     header.write_with_version(writer, version)?;
-    let key_commitment = commitment_for_stream(
-        session_key.as_ref(),
+    encrypt_session_chunks(
+        &session_key,
         version,
         &nonce_bytes,
         original_size,
-        CHUNK_SIZE as u32,
-        COMPRESSION_NONE,
-    );
-
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
-        .try_into()
-        .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
-    let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
-    let cipher = ChaCha20Poly1305::new(key);
-    encrypt_chunks(
-        &cipher,
-        base_nonce,
-        CHUNK_SIZE,
-        &key_commitment,
         reader,
         writer,
     )
@@ -544,18 +579,7 @@ pub fn encrypt_stream_multi_anon_padded(
     let mut session_key = Zeroizing::new([0u8; 32]);
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let mut recipients: Vec<RecipientEntryV8> = Vec::with_capacity(pubkey_pems.len());
-    for pubkey_pem in pubkey_pems {
-        let (ek, _kem_variant) = parse_encapsulation_key(pubkey_pem)?;
-        let (kem_ct, ss) = encapsulate(ek)?;
-        let wrapped_key = wrap_session_key(&session_key, &ss)?;
-        let mut padded_ct = [0u8; PADDED_CT_LEN];
-        padded_ct[..kem_ct.len()].copy_from_slice(&kem_ct);
-        recipients.push(RecipientEntryV8 {
-            padded_ct,
-            wrapped_key,
-        });
-    }
+    let mut recipients = build_v8_recipients(pubkey_pems, &session_key)?;
 
     // Pad with random dummy slots to the next power of two.
     let real_count = recipients.len();
@@ -571,31 +595,9 @@ pub fn encrypt_stream_multi_anon_padded(
         });
     }
 
-    // Fisher-Yates shuffle so dummy positions are unpredictable. Rejection sampling
-    // is bounded the same way as in encrypt_stream_multi_anon above: a hard limit of
-    // 1000 retries per position guards against a malfunctioning entropy source
-    // causing an infinite loop instead of returning an error.
-    const MAX_REJECTION_RETRIES: u32 = 1000;
-    for i in (1..recipients.len()).rev() {
-        let range = (i + 1) as u64;
-        let threshold = (1u64 << 32) - ((1u64 << 32) % range);
-        let j = 'sample: {
-            for _ in 0..MAX_REJECTION_RETRIES {
-                let mut r = [0u8; 4];
-                getrandom::fill(&mut r).map_err(|_| PqfileError::EncryptionFailure)?;
-                let v = u32::from_le_bytes(r) as u64;
-                if v < threshold {
-                    break 'sample (v % range) as usize;
-                }
-            }
-            return Err(PqfileError::EncryptionFailure);
-        };
-        recipients.swap(i, j);
-    }
+    shuffle_recipients(&mut recipients)?;
 
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-        .map_err(|_| PqfileError::EncryptionFailure)?;
+    let nonce_bytes = fresh_stream_nonce()?;
 
     // v9 uses the same wire format as v8 but with version byte 0x09.
     let header = PqfHeaderV8 {
@@ -605,25 +607,11 @@ pub fn encrypt_stream_multi_anon_padded(
     };
     let version = VERSION_V9 | VERSION_AUTH_BIT;
     header.write_with_version(writer, version)?;
-
-    let key_commitment = commitment_for_stream(
-        session_key.as_ref(),
+    encrypt_session_chunks(
+        &session_key,
         version,
         &nonce_bytes,
         original_size,
-        CHUNK_SIZE as u32,
-        COMPRESSION_NONE,
-    );
-    let base_nonce: &[u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
-        .try_into()
-        .expect("BASE_NONCE_LEN <= NONCE_LEN");
-    let key: &Key = session_key.as_ref().try_into().expect("32-byte key");
-    let cipher = ChaCha20Poly1305::new(key);
-    encrypt_chunks(
-        &cipher,
-        base_nonce,
-        CHUNK_SIZE,
-        &key_commitment,
         reader,
         writer,
     )
@@ -1107,51 +1095,16 @@ pub fn encrypt_mmap(
     let file = std::fs::File::open(source_path)?;
     let original_size = file.metadata()?.len();
 
-    let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
-    let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
-
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-        .map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let version = VERSION_AUTH_BIT
-        | if chunk_size == CHUNK_SIZE {
-            VERSION_V3
-        } else {
-            VERSION_V5
-        };
-    let header = PqfHeader {
-        version,
-        kem_variant,
-        kem_ciphertext: kem_ct_bytes,
-        nonce: nonce_bytes,
-        original_size,
-        chunk_size: chunk_size as u32,
-        compression_algo: COMPRESSION_NONE,
-    };
-    header.write(writer)?;
-    let key_commitment = commitment_for_stream(
-        ss_bytes.as_ref(),
-        version,
-        &nonce_bytes,
-        original_size,
-        chunk_size as u32,
-        COMPRESSION_NONE,
-    );
-
-    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
-        .try_into()
-        .expect("BASE_NONCE_LEN <= NONCE_LEN");
-    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
-    let cipher = ChaCha20Poly1305::new(key);
+    let stream = begin_single_recipient_stream(pubkey_pem, original_size, chunk_size, writer)?;
+    let cipher = stream.cipher();
 
     if original_size == 0 {
         // Empty file: emit single zero-length authenticated chunk.
         return encrypt_chunks(
             &cipher,
-            &base_nonce,
+            &stream.base_nonce,
             chunk_size,
-            &key_commitment,
+            &stream.key_commitment,
             &mut [].as_ref(),
             writer,
         );
@@ -1171,9 +1124,9 @@ pub fn encrypt_mmap(
     let _ = mmap.advise(memmap2::Advice::Sequential);
     encrypt_chunks(
         &cipher,
-        &base_nonce,
+        &stream.base_nonce,
         chunk_size,
-        &key_commitment,
+        &stream.key_commitment,
         &mut mmap.as_ref(),
         writer,
     )
@@ -1213,52 +1166,12 @@ pub fn encrypt_stream_pipelined<R>(
 where
     R: Read + Send + 'static,
 {
-    if chunk_size == 0 {
-        return Err(PqfileError::EncryptionFailure);
-    }
-    let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
-    let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
-
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-        .map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let version = VERSION_AUTH_BIT
-        | if chunk_size == CHUNK_SIZE {
-            VERSION_V3
-        } else {
-            VERSION_V5
-        };
-    let header = PqfHeader {
-        version,
-        kem_variant,
-        kem_ciphertext: kem_ct_bytes,
-        nonce: nonce_bytes,
-        original_size,
-        chunk_size: chunk_size as u32,
-        compression_algo: COMPRESSION_NONE,
-    };
-    header.write(writer)?;
-    let key_commitment = commitment_for_stream(
-        ss_bytes.as_ref(),
-        version,
-        &nonce_bytes,
-        original_size,
-        chunk_size as u32,
-        COMPRESSION_NONE,
-    );
-
-    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
-        .try_into()
-        .expect("BASE_NONCE_LEN <= NONCE_LEN");
-    let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
-    let cipher = ChaCha20Poly1305::new(key);
-
+    let stream = begin_single_recipient_stream(pubkey_pem, original_size, chunk_size, writer)?;
     encrypt_chunks_pipelined(
-        &cipher,
-        &base_nonce,
+        &stream.cipher(),
+        &stream.base_nonce,
         chunk_size,
-        &key_commitment,
+        &stream.key_commitment,
         reader,
         writer,
     )
@@ -1421,46 +1334,12 @@ pub fn encrypt_stream_parallel(
     if batch_size <= 1 {
         return encrypt_stream(pubkey_pem, original_size, chunk_size, reader, writer);
     }
-    if chunk_size == 0 {
-        return Err(PqfileError::EncryptionFailure);
-    }
 
-    let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
-    let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
-
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-        .map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let version = VERSION_AUTH_BIT
-        | if chunk_size == CHUNK_SIZE {
-            VERSION_V3
-        } else {
-            VERSION_V5
-        };
-    let header = PqfHeader {
-        version,
-        kem_variant,
-        kem_ciphertext: kem_ct_bytes,
-        nonce: nonce_bytes,
-        original_size,
-        chunk_size: chunk_size as u32,
-        compression_algo: COMPRESSION_NONE,
-    };
-    header.write(writer)?;
-    let key_commitment = commitment_for_stream(
-        ss_bytes.as_ref(),
-        version,
-        &nonce_bytes,
-        original_size,
-        chunk_size as u32,
-        COMPRESSION_NONE,
-    );
-
-    let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
-        .try_into()
-        .expect("BASE_NONCE_LEN <= NONCE_LEN");
-    let key_bytes = Zeroizing::new(*ss_bytes);
+    let SingleRecipientStream {
+        ss_bytes: key_bytes,
+        key_commitment,
+        base_nonce,
+    } = begin_single_recipient_stream(pubkey_pem, original_size, chunk_size, writer)?;
 
     // Prime: read the very first chunk
     let mut first = vec![0u8; chunk_size];

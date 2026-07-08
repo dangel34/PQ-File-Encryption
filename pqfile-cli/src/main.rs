@@ -1398,12 +1398,35 @@ fn run_encrypt(
     }
 }
 
-fn run_encrypt_stealth(
-    pubkey_pem: &str,
+/// Prints the `{"status":"ok","output":...}` line emitted by every command in
+/// `--json` mode. Goes to stderr when the payload itself went to stdout.
+fn emit_json_ok(json: bool, to_stdout: bool, out_path: &Path) -> Result<(), PqfileError> {
+    if !json {
+        return Ok(());
+    }
+    let lossy = out_path.to_string_lossy();
+    let out_val: &str = if to_stdout { "-" } else { &lossy };
+    let target: &mut dyn io::Write = if to_stdout {
+        &mut io::stderr()
+    } else {
+        &mut io::stdout()
+    };
+    writeln!(
+        target,
+        "{}",
+        json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
+    )?;
+    Ok(())
+}
+
+/// Resolves the plaintext size and output destination shared by the encrypt
+/// commands: default output is `<input>.pqf`; `-` (or stdin input with no
+/// `-o`) means stdout. Also enforces the overwrite guard.
+fn resolve_encrypt_output(
     input: &str,
     output: Option<&str>,
-    opts: EncryptOpts,
-) -> Result<(), PqfileError> {
+    force: bool,
+) -> Result<(u64, bool, PathBuf), PqfileError> {
     let original_size: u64 = if input != "-" {
         std::fs::metadata(input).map(|m| m.len()).unwrap_or(0)
     } else {
@@ -1422,30 +1445,24 @@ fn run_encrypt_stealth(
         PathBuf::from(out)
     };
 
-    ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
+    ensure_overwrite_allowed(&out_path, to_stdout, force)?;
+    Ok((original_size, to_stdout, out_path))
+}
+
+fn run_encrypt_stealth(
+    pubkey_pem: &str,
+    input: &str,
+    output: Option<&str>,
+    opts: EncryptOpts,
+) -> Result<(), PqfileError> {
+    let (original_size, to_stdout, out_path) = resolve_encrypt_output(input, output, opts.force)?;
     let mut raw_reader = open_reader(input)?;
     let mut reader = MaybePadded::new(&mut *raw_reader, opts.pad, original_size)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
     encrypt::encrypt_stream_stealth(pubkey_pem, original_size, &mut reader, &mut writer)?;
     writer.commit()?;
 
-    if opts.json {
-        let out_val = if to_stdout {
-            "-"
-        } else {
-            &out_path.to_string_lossy()
-        };
-        let target: &mut dyn io::Write = if to_stdout {
-            &mut io::stderr()
-        } else {
-            &mut io::stdout()
-        };
-        writeln!(
-            target,
-            "{}",
-            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
-        )?;
-    }
+    emit_json_ok(opts.json, to_stdout, &out_path)?;
     Ok(())
 }
 
@@ -1455,25 +1472,7 @@ fn run_encrypt_passphrase(
     output: Option<&str>,
     opts: EncryptOpts,
 ) -> Result<(), PqfileError> {
-    let original_size: u64 = if input != "-" {
-        std::fs::metadata(input).map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
-
-    let out = output.unwrap_or_else(|| if input == "-" { "-" } else { "" });
-    let to_stdout = out == "-" || (out.is_empty() && input == "-");
-    let out_path: PathBuf = if to_stdout {
-        PathBuf::new()
-    } else if out.is_empty() {
-        let mut s = std::ffi::OsString::from(input);
-        s.push(".pqf");
-        PathBuf::from(s)
-    } else {
-        PathBuf::from(out)
-    };
-
-    ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
+    let (original_size, to_stdout, out_path) = resolve_encrypt_output(input, output, opts.force)?;
     let mut raw_reader = open_reader(input)?;
     let mut reader = MaybePadded::new(&mut *raw_reader, opts.pad, original_size)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
@@ -1503,23 +1502,7 @@ fn run_encrypt_passphrase(
     }
     writer.commit()?;
 
-    if opts.json {
-        let out_val = if to_stdout {
-            "-"
-        } else {
-            &out_path.to_string_lossy()
-        };
-        let target: &mut dyn io::Write = if to_stdout {
-            &mut io::stderr()
-        } else {
-            &mut io::stdout()
-        };
-        writeln!(
-            target,
-            "{}",
-            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
-        )?;
-    }
+    emit_json_ok(opts.json, to_stdout, &out_path)?;
     Ok(())
 }
 
@@ -1529,26 +1512,7 @@ fn run_encrypt_single(
     output: Option<&str>,
     opts: EncryptOpts,
 ) -> Result<(), PqfileError> {
-    let original_size: u64 = if input != "-" {
-        std::fs::metadata(input).map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
-
-    let out = output.unwrap_or_else(|| if input == "-" { "-" } else { "" });
-    let to_stdout = out == "-" || (out.is_empty() && input == "-");
-
-    let out_path: PathBuf = if to_stdout {
-        PathBuf::new()
-    } else if out.is_empty() {
-        let mut s = std::ffi::OsString::from(input);
-        s.push(".pqf");
-        PathBuf::from(s)
-    } else {
-        PathBuf::from(out)
-    };
-
-    ensure_overwrite_allowed(&out_path, to_stdout, opts.force)?;
+    let (original_size, to_stdout, out_path) = resolve_encrypt_output(input, output, opts.force)?;
 
     if opts.pad {
         if opts.mmap {
@@ -1585,23 +1549,7 @@ fn run_encrypt_single(
             &mut writer,
         )?;
         writer.commit()?;
-        if opts.json {
-            let out_val = if to_stdout {
-                "-"
-            } else {
-                &out_path.to_string_lossy()
-            };
-            let target: &mut dyn io::Write = if to_stdout {
-                &mut io::stderr()
-            } else {
-                &mut io::stdout()
-            };
-            writeln!(
-                target,
-                "{}",
-                json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
-            )?;
-        }
+        emit_json_ok(opts.json, to_stdout, &out_path)?;
         return Ok(());
     }
 
@@ -1623,23 +1571,7 @@ fn run_encrypt_single(
             &mut writer,
         )?;
         writer.commit()?;
-        if opts.json {
-            let out_val = if to_stdout {
-                "-"
-            } else {
-                &out_path.to_string_lossy()
-            };
-            let target: &mut dyn io::Write = if to_stdout {
-                &mut io::stderr()
-            } else {
-                &mut io::stdout()
-            };
-            writeln!(
-                target,
-                "{}",
-                json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
-            )?;
-        }
+        emit_json_ok(opts.json, to_stdout, &out_path)?;
         return Ok(());
     }
 
@@ -1649,23 +1581,7 @@ fn run_encrypt_single(
     perform_encrypt(pubkey_pems, original_size, &opts, &mut reader, &mut writer)?;
     writer.commit()?;
 
-    if opts.json {
-        let out_val = if to_stdout {
-            "-"
-        } else {
-            &out_path.to_string_lossy()
-        };
-        let target: &mut dyn io::Write = if to_stdout {
-            &mut io::stderr()
-        } else {
-            &mut io::stdout()
-        };
-        writeln!(
-            target,
-            "{}",
-            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
-        )?;
-    }
+    emit_json_ok(opts.json, to_stdout, &out_path)?;
     Ok(())
 }
 
@@ -1927,23 +1843,7 @@ fn run_decrypt(
         // path below, there is no header to peek anyway).
         decrypt::decrypt_stream_stealth(&privkey_pem, &mut *reader, &mut writer, pp_str)?;
         writer.commit()?;
-        if json {
-            let out_val = if to_stdout {
-                "-"
-            } else {
-                &out_path.to_string_lossy()
-            };
-            let target: &mut dyn io::Write = if to_stdout {
-                &mut io::stderr()
-            } else {
-                &mut io::stdout()
-            };
-            writeln!(
-                target,
-                "{}",
-                json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
-            )?;
-        }
+        emit_json_ok(json, to_stdout, &out_path)?;
         return Ok(());
     }
 
@@ -1998,23 +1898,7 @@ fn run_decrypt(
     let mut writer = writer.into_inner();
     writer.commit()?;
 
-    if json {
-        let out_val = if to_stdout {
-            "-"
-        } else {
-            &out_path.to_string_lossy()
-        };
-        let target: &mut dyn io::Write = if to_stdout {
-            &mut io::stderr()
-        } else {
-            &mut io::stdout()
-        };
-        writeln!(
-            target,
-            "{}",
-            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
-        )?;
-    }
+    emit_json_ok(json, to_stdout, &out_path)?;
     Ok(())
 }
 
@@ -2801,23 +2685,7 @@ fn run_rekey(
     rekey::rekey_stream(&privkey_pem, &pubkey_pem, &mut *reader, &mut writer, pp_str)?;
     writer.commit()?;
 
-    if json {
-        let out_val = if to_stdout {
-            "-"
-        } else {
-            &out_path.to_string_lossy()
-        };
-        let target: &mut dyn io::Write = if to_stdout {
-            &mut io::stderr()
-        } else {
-            &mut io::stdout()
-        };
-        writeln!(
-            target,
-            "{}",
-            json_object(&[kv_str("status", "ok"), kv_str("output", out_val)])
-        )?;
-    }
+    emit_json_ok(json, to_stdout, &out_path)?;
     Ok(())
 }
 

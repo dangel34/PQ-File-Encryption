@@ -21,15 +21,11 @@
 /// ```
 use std::io::{self, Write};
 
-use chacha20poly1305::{aead::AeadInOut, ChaCha20Poly1305, Key, KeyInit};
+use chacha20poly1305::{aead::AeadInOut, ChaCha20Poly1305};
 use zeroize::Zeroizing;
 
-use crate::encrypt::{encapsulate, parse_encapsulation_key};
 use crate::error::PqfileError;
-use crate::format::{
-    chunk_nonce, commitment_for_stream, PqfHeader, BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE,
-    NONCE_LEN, VERSION_AUTH_BIT, VERSION_V3, VERSION_V5,
-};
+use crate::format::{chunk_nonce, BASE_NONCE_LEN};
 
 /// Streaming encryptor wrapping any `W: Write`.
 ///
@@ -52,61 +48,26 @@ impl<W: Write> PqfWriter<W> {
     ///
     /// `original_size` is stored in the header as an informational field (not used for
     /// allocation or decryption bounds). `chunk_size` must be in the range
-    /// `1..=256 MiB`; pass [`CHUNK_SIZE`] for the standard 64 KiB default.
+    /// `1..=256 MiB`; pass [`CHUNK_SIZE`](crate::format::CHUNK_SIZE) for the
+    /// standard 64 KiB default.
     pub fn new(
         mut sink: W,
         pubkey_pem: &str,
         original_size: u64,
         chunk_size: usize,
     ) -> Result<Self, PqfileError> {
-        if chunk_size == 0 {
-            return Err(PqfileError::EncryptionFailure);
-        }
-
-        let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
-        let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
-
-        let mut nonce_bytes = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
-            .map_err(|_| PqfileError::EncryptionFailure)?;
-
-        let version = VERSION_AUTH_BIT
-            | if chunk_size == CHUNK_SIZE {
-                VERSION_V3
-            } else {
-                VERSION_V5
-            };
-
-        let header = PqfHeader {
-            version,
-            kem_variant,
-            kem_ciphertext: kem_ct_bytes,
-            nonce: nonce_bytes,
+        let stream = crate::encrypt::begin_single_recipient_stream(
+            pubkey_pem,
             original_size,
-            chunk_size: chunk_size as u32,
-            compression_algo: COMPRESSION_NONE,
-        };
-        header.write(&mut sink)?;
-
-        let key_commitment = commitment_for_stream(
-            ss_bytes.as_ref(),
-            version,
-            &nonce_bytes,
-            original_size,
-            chunk_size as u32,
-            COMPRESSION_NONE,
-        );
-        let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
-            .try_into()
-            .expect("BASE_NONCE_LEN <= NONCE_LEN; slice length is always valid");
-        let key: &Key = ss_bytes.as_ref().try_into().expect("32-byte key");
-        let cipher = ChaCha20Poly1305::new(key);
+            chunk_size,
+            &mut sink,
+        )?;
 
         Ok(Self {
             inner: Some(sink),
-            cipher,
-            base_nonce,
-            key_commitment,
+            cipher: stream.cipher(),
+            base_nonce: stream.base_nonce,
+            key_commitment: stream.key_commitment,
             chunk_size,
             counter: 0,
             buf: Zeroizing::new(Vec::with_capacity(chunk_size)),
@@ -219,6 +180,7 @@ impl<W: Write> Drop for PqfWriter<W> {
 mod tests {
     use super::*;
     use crate::decrypt::decrypt_stream;
+    use crate::format::{CHUNK_SIZE, VERSION_AUTH_BIT, VERSION_V5};
     use crate::keygen::keygen_bytes;
     use std::io::Write;
 
