@@ -1,0 +1,50 @@
+name: Advisories
+
+# Scheduled RustSec advisory scan. ci.yml already runs cargo-deny on every
+# push and PR, but a CVE published against a dependency while the repo is
+# idle would go unnoticed until the next commit; this catches it within a
+# day. Advisories only: licenses, bans, and sources cannot change without a
+# commit, so re-checking them nightly is noise. Lives in its own workflow
+# file because a schedule: trigger fires every job in the file it is in.
+on:
+  schedule:
+    - cron: '0 6 * * *'  # 06:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  advisories:
+    name: cargo-deny advisories
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write  # for the failure-notification step
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+        with:
+          command: check
+          command-arguments: "advisories"
+
+      # GitHub's default scheduled-failure email goes only to the last
+      # committer of the workflow file, so surface failures as a pinned-style
+      # tracking issue instead: open one if none exists, otherwise add a
+      # comment so repeat failures don't pile up duplicate issues.
+      - name: Open or update tracking issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="Scheduled dependency advisory scan is failing"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="The nightly \`cargo deny check advisories\` run failed, most likely a new RustSec advisory against a dependency. See the run log: $run_url"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --label security --body "$body"
+          fi

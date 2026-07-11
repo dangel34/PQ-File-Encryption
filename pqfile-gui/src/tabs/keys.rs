@@ -4,7 +4,7 @@ use crate::colors::{c_accent, c_chrome, c_overlay, c_red, c_surface0, c_text, c_
 use crate::colors::{c_card, c_subtext, c_surface1};
 use crate::types::Tab;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::types::{expiry_days_remaining, read_pem_expiry, KeyDragPayload};
+use crate::types::{expiry_days_remaining, read_pem_expiry};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::{pem_variant_name, RecipientEntry};
 use crate::widgets::{card, tab_heading_help};
@@ -159,24 +159,7 @@ impl PqfileApp {
                         .as_deref()
                         .and_then(read_pem_expiry);
 
-                    // Build drag payload (read public key PEM from disk).
-                    let pub_pem_opt: Option<String> =
-                        std::fs::read_to_string(&entry.pubkey_path).ok();
-
-                    let drag_id = egui::Id::new("key_drag").with(i);
-                    let mut row_action: Option<KeyAction> = None;
-                    if let Some(ref pub_pem) = pub_pem_opt {
-                        let payload = std::sync::Arc::new(KeyDragPayload {
-                            label: entry.label.clone(),
-                            pub_pem: pub_pem.clone(),
-                            priv_path: entry.privkey_path.clone(),
-                        });
-                        ui.dnd_drag_source(drag_id, payload, |ui| {
-                            row_action = key_entry_row(ui, i, entry, expiry.as_deref(), dark);
-                        });
-                    } else {
-                        row_action = key_entry_row(ui, i, entry, expiry.as_deref(), dark);
-                    }
+                    let row_action = key_entry_row(ui, i, entry, expiry.as_deref(), dark);
                     if action.is_none() {
                         action = row_action;
                     }

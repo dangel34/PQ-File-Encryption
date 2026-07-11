@@ -28,19 +28,16 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
           toolchain: stable
 
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/cargo-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-mutants-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-mutants-
+          key-suffix: mutants
 
       # No GUI system deps needed: mutation scope is pqfile (core library only),
       # which has no GTK/XCB dependencies.
@@ -58,6 +55,9 @@ jobs:
       #   gives a 1.5-2x buffer over the observed baseline time; most mutants
       #   still fail within the first few tests (<10s).
       # --no-shuffle: stable ordering for reproducible logs.
+      # extra_flags goes through an env var rather than ${{ }} interpolation
+      # into the script (shell-injection vector, zizmor template-injection).
+      # Deliberately unquoted below so multiple flags word-split.
       - name: Run cargo-mutants on crypto-critical paths
         run: |
           cargo mutants \
@@ -69,9 +69,10 @@ jobs:
             --jobs 4 \
             --timeout 180 \
             --no-shuffle \
-            ${{ github.event.inputs.extra_flags }}
+            $EXTRA_FLAGS
         env:
           CARGO_INCREMENTAL: '0'
+          EXTRA_FLAGS: ${{ github.event.inputs.extra_flags }}
 
       - name: Upload mutants log
         if: always()

@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # v1 (pinned for 1.96.0)
         with:
@@ -60,6 +61,20 @@ jobs:
             echo "cli_published=false" >> "$GITHUB_OUTPUT"
             echo "pqfile-cli $VERSION not yet on crates.io -- will publish"
           fi
+
+      - name: Install cargo-semver-checks
+        if: steps.check.outputs.pqfile_published == 'false'
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # v2.82.10
+        with:
+          tool: cargo-semver-checks
+
+      # Pre-publish API stability gate: catches an accidental semver break that
+      # slipped past CI (e.g. a tag cut from a stale branch). Baseline is the
+      # latest published pqfile on crates.io; an intentional break passes once
+      # the version is bumped to the next major.
+      - name: Check pqfile API against latest published version
+        if: steps.check.outputs.pqfile_published == 'false'
+        run: cargo semver-checks --package pqfile --all-features
 
       - name: Publish pqfile
         if: steps.check.outputs.pqfile_published == 'false'
@@ -114,17 +129,41 @@ jobs:
     steps:
       - name: Check out repo (for nginx/ config)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
+      # The tag name goes through an env var rather than being interpolated
+      # into the script: release names are attacker-influenced in the general
+      # case and direct ${{ }} interpolation into run: is a shell-injection
+      # vector (zizmor template-injection).
       - name: Download WASM from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           rm -rf wasm-dist && mkdir wasm-dist
-          gh release download "${{ github.event.release.tag_name }}" \
-            --repo "${{ github.repository }}" \
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --pattern "pqfile-web.tar.gz" \
             --pattern "checksums.txt" \
+            --pattern "checksums.txt.bundle" \
             --dir wasm-dist/
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Close the loop on the SLSA/cosign chain release.yml already builds:
+      # don't just trust checksums.txt at face value, verify it was actually
+      # signed by this repo's release workflow via keyless cosign before
+      # using it to authenticate the tarball we're about to deploy.
+      - name: Verify checksums signature
+        run: |
+          cd wasm-dist
+          cosign verify-blob \
+            --bundle checksums.txt.bundle \
+            --certificate-identity-regexp 'https://github.com/dangel34/.*' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            checksums.txt
 
       - name: Verify and extract WASM
         run: |

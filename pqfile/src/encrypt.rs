@@ -26,6 +26,7 @@ use crate::format::{
 #[cfg(not(target_arch = "wasm32"))]
 use crate::format::{COMPRESSION_ZSTD, VERSION_V6};
 use crate::keygen::{PUB_TAG, PUB_TAG_1024, PUB_TAG_512, PUB_TAG_HYBRID_768};
+use crate::secret::LockedSecret;
 
 pub(crate) enum EkVariant {
     Kem512(EncapsulationKey512),
@@ -82,7 +83,7 @@ pub fn encrypt_bytes(pubkey_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>, Pqfi
 /// Per-stream secrets derived by [`begin_single_recipient_stream`] and shared by
 /// the single-recipient encrypt entry points.
 pub(crate) struct SingleRecipientStream {
-    pub(crate) ss_bytes: Zeroizing<[u8; 32]>,
+    pub(crate) ss_bytes: LockedSecret<32>,
     pub(crate) key_commitment: [u8; 32],
     pub(crate) base_nonce: [u8; BASE_NONCE_LEN],
 }
@@ -384,23 +385,23 @@ pub(crate) fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u1
     }
 }
 
-pub(crate) fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>), PqfileError> {
+pub(crate) fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, LockedSecret<32>), PqfileError> {
     match ek {
         EkVariant::Kem512(ek) => {
             let (ct, ss) = ek.encapsulate();
-            let mut ss_bytes = Zeroizing::new([0u8; 32]);
+            let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok((ct.as_slice().to_vec(), ss_bytes))
         }
         EkVariant::Kem768(ek) => {
             let (ct, ss) = ek.encapsulate();
-            let mut ss_bytes = Zeroizing::new([0u8; 32]);
+            let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok((ct.as_slice().to_vec(), ss_bytes))
         }
         EkVariant::Kem1024(ek) => {
             let (ct, ss) = ek.encapsulate();
-            let mut ss_bytes = Zeroizing::new([0u8; 32]);
+            let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok((ct.as_slice().to_vec(), ss_bytes))
         }
@@ -440,7 +441,7 @@ pub fn encrypt_stream_multi(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    let mut session_key = Zeroizing::new([0u8; 32]);
+    let mut session_key = LockedSecret::<32>::zeroed();
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
     let mut recipients: Vec<RecipientEntryV4> = Vec::with_capacity(pubkey_pems.len());
@@ -535,7 +536,7 @@ pub fn encrypt_stream_multi_anon(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    let mut session_key = Zeroizing::new([0u8; 32]);
+    let mut session_key = LockedSecret::<32>::zeroed();
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
     let mut recipients = build_v8_recipients(pubkey_pems, &session_key)?;
@@ -576,7 +577,7 @@ pub fn encrypt_stream_multi_anon_padded(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    let mut session_key = Zeroizing::new([0u8; 32]);
+    let mut session_key = LockedSecret::<32>::zeroed();
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
     let mut recipients = build_v8_recipients(pubkey_pems, &session_key)?;
@@ -763,6 +764,11 @@ pub(crate) fn encapsulate_for_rekey(
 
 /// Compress plaintext with zstd then encrypt as v6 format (native builds only).
 ///
+/// Compression uses zstd's own multithreaded worker pool, sized to
+/// [`rayon::current_num_threads`] so it stays within the same cap as `--threads`
+/// (e.g. the CLI's `--parallel` operations), even though this path doesn't itself
+/// run through Rayon. Falls back to single-threaded compression if that is 1.
+///
 /// WASM builds always return `CompressionNotSupported`.
 #[must_use = "encryption result must be used"]
 pub fn encrypt_stream_compressed(
@@ -813,6 +819,12 @@ pub fn encrypt_stream_compressed(
         // Stream through a zstd encoder instead of buffering the full compressed payload.
         let mut zstd_src =
             zstd::stream::read::Encoder::new(reader, compress_level).map_err(PqfileError::Io)?;
+        // zstd's worker pool is separate from Rayon's; size it off the same global pool
+        // so the CLI's --threads cap still bounds total parallelism.
+        let workers = rayon::current_num_threads() as u32;
+        if workers > 1 {
+            zstd_src.multithread(workers).map_err(PqfileError::Io)?;
+        }
         encrypt_chunks(
             &cipher,
             base_nonce,
@@ -950,9 +962,71 @@ pub fn encrypt_stream_passphrase_keyfile_with_params(
             "keyfile is empty; a keyfile must contain at least one byte",
         )));
     }
+    let secret = crate::passphrase::keyfile_secret(keyfile);
     encrypt_stream_passphrase_inner(
         passphrase,
-        Some(keyfile),
+        Some((crate::format::V10_FLAG_KEYFILE, secret)),
+        m_kib,
+        t_cost,
+        p_cost,
+        original_size,
+        reader,
+        writer,
+    )
+}
+
+/// [`encrypt_stream_passphrase`] with a FIDO2 hardware token as a second factor.
+///
+/// `hmac_secret` is the 32-byte output of the CTAP2 `hmac-secret` extension for
+/// a credential enrolled ahead of time; pqfile's core library does not talk to
+/// USB devices, so obtaining this value (touching the token, presenting the
+/// enrolled credential ID and a caller-chosen salt) is the caller's
+/// responsibility - see the CLI's `pqfile fido2-enroll` / `--fido2` flag. The
+/// value is domain-separated hashed and mixed into the Argon2id derivation as
+/// the secret (pepper) input, occupying the same slot
+/// [`encrypt_stream_passphrase_keyfile`] uses; the two are mutually exclusive.
+/// Decrypting without the same token fails with [`PqfileError::Fido2Required`]
+/// before the KDF runs. Use [`crate::decrypt::decrypt_stream_passphrase_fido2`]
+/// to decrypt.
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_passphrase_fido2(
+    passphrase: &str,
+    hmac_secret: &[u8; 32],
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::passphrase::{ARGON2_M_COST, ARGON2_P_COST, ARGON2_T_COST};
+    encrypt_stream_passphrase_fido2_with_params(
+        passphrase,
+        hmac_secret,
+        ARGON2_M_COST,
+        ARGON2_T_COST,
+        ARGON2_P_COST,
+        original_size,
+        reader,
+        writer,
+    )
+}
+
+/// [`encrypt_stream_passphrase_fido2`] with caller-chosen Argon2id parameters.
+/// See [`encrypt_stream_passphrase_with_params`] for the KDF-ceiling caveats.
+#[allow(clippy::too_many_arguments)]
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_passphrase_fido2_with_params(
+    passphrase: &str,
+    hmac_secret: &[u8; 32],
+    m_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let secret = crate::passphrase::fido2_secret(hmac_secret);
+    encrypt_stream_passphrase_inner(
+        passphrase,
+        Some((crate::format::V10_FLAG_FIDO2, secret)),
         m_kib,
         t_cost,
         p_cost,
@@ -965,7 +1039,7 @@ pub fn encrypt_stream_passphrase_keyfile_with_params(
 #[allow(clippy::too_many_arguments)]
 fn encrypt_stream_passphrase_inner(
     passphrase: &str,
-    keyfile: Option<&[u8]>,
+    second_factor: Option<(u8, crate::secret::LockedSecret<32>)>,
     m_kib: u32,
     t_cost: u32,
     p_cost: u32,
@@ -973,8 +1047,8 @@ fn encrypt_stream_passphrase_inner(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    use crate::format::{PqfHeaderV10, V10_FLAG_KEYFILE};
-    use crate::passphrase::{derive_key_with_params_and_secret, keyfile_secret};
+    use crate::format::PqfHeaderV10;
+    use crate::passphrase::derive_key_with_params_and_secret;
 
     let mut salt = [0u8; 16];
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
@@ -983,26 +1057,19 @@ fn encrypt_stream_passphrase_inner(
     getrandom::fill(&mut nonce_bytes[..BASE_NONCE_LEN])
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let secret = keyfile.map(keyfile_secret);
-    let session_key = derive_key_with_params_and_secret(
-        passphrase,
-        secret.as_deref().map(|s| s.as_slice()),
-        &salt,
-        m_kib,
-        t_cost,
-        p_cost,
-    )?;
+    let (flags, secret) = match &second_factor {
+        Some((bit, secret)) => (*bit, Some(secret.as_slice())),
+        None => (0, None),
+    };
+    let session_key =
+        derive_key_with_params_and_secret(passphrase, secret, &salt, m_kib, t_cost, p_cost)?;
 
     let header = PqfHeaderV10 {
         salt,
         m_kib,
         t_cost,
         p_cost,
-        flags: if keyfile.is_some() {
-            V10_FLAG_KEYFILE
-        } else {
-            0
-        },
+        flags,
         nonce: nonce_bytes,
         original_size,
     };

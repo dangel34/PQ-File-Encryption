@@ -96,6 +96,7 @@ pub mod keygen;
 pub(crate) mod fsutil;
 pub(crate) mod passphrase;
 pub(crate) mod progress;
+pub(crate) mod secret;
 
 /// Streaming decryptor: `PqfReader<R>` implements `std::io::Read`.
 pub mod reader;

@@ -19,6 +19,17 @@ qrcode = { version = "0.14", default-features = false, features = ["image"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+# CTAP2 USB HID for the FIDO2 second factor; optional so a default native build
+# never needs libusb/hidraw. No WASM target exists for this crate.
+ctap-hid-fido2 = { version = "3.5", optional = true }
+# Random challenge/salt generation for FIDO2 enroll/derive; optional alongside it.
+getrandom = { workspace = true, optional = true }
+
+[features]
+# FIDO2 hardware-token second factor for v10 passphrase files (desktop only;
+# mirrors pqfile-cli's `fido2` feature). Off by default: pulls in hidapi
+# (needs libudev-dev on Linux) purely for this one opt-in feature.
+fido2 = ["dep:ctap-hid-fido2", "dep:getrandom"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

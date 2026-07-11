@@ -10,7 +10,10 @@ name = "pqfile-desktop"
 path = "src/main.rs"
 
 [dependencies]
-pqfile-gui = { workspace = true }
+# fido2 always on: the desktop app is the one native GUI target, so it ships
+# with the FIDO2 hardware-token second factor built in (needs libudev-dev at
+# build time on Linux; see ci.yml's fido2-check job and release.yml).
+pqfile-gui = { workspace = true, features = ["fido2"] }
 eframe = { workspace = true }
 
 [build-dependencies]

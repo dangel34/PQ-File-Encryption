@@ -112,7 +112,8 @@ PQ-File-Encryption/
 │       ├── colors.rs, theme.rs     Catppuccin palette + egui theme
 │       ├── types.rs                Shared types (Tab, FileInput, Settings, ...)
 │       ├── widgets.rs              UI helper functions
-│       └── tabs/                   Keys, Keygen, Encrypt, Decrypt, Sign, Signcrypt, Archive, Shamir, Inspect, Clipboard, Settings
+│       ├── fido2.rs                CTAP2 enroll/derive (native, feature "fido2")
+│       └── tabs/                   Keys, Keygen, Encrypt, Decrypt, Sign, Signcrypt, Archive, Shamir, Inspect, Clipboard, Settings, fido2_ui
 └── pqfile-desktop/               Native desktop binary
     ├── build.rs                   Embeds icon/metadata via winres (Windows)
     ├── packaging/                 Inno Setup installer script, .ico asset
@@ -229,6 +230,10 @@ pqfile encrypt --passphrase --kdf-mem 189440 --kdf-time 3 secret.txt
 # Keyfile second factor for v10: decryption requires the passphrase AND this file
 pqfile encrypt --passphrase --keyfile usb/token.bin secret.txt
 
+# FIDO2 hardware token second factor for v10 (requires the `fido2` cargo
+# feature; see fido2-enroll below). Mutually exclusive with --keyfile.
+pqfile encrypt --passphrase --fido2 fido2-enrollment.txt secret.txt
+
 # Pad the plaintext to a coarser length bucket (Padme, <= ~12% overhead) so the
 # ciphertext length hides the exact file size; decryption strips it automatically
 pqfile encrypt -r pubkey.pem --pad secret.txt
@@ -269,9 +274,31 @@ pqfile decrypt --passphrase --max-kdf-mem 32 --max-kdf-time 2 secret.txt.pqf
 # v10 file encrypted with a keyfile second factor
 pqfile decrypt --passphrase --keyfile usb/token.bin secret.txt.pqf
 
+# v10 file encrypted with a FIDO2 hardware token second factor
+pqfile decrypt --passphrase --fido2 fido2-enrollment.txt secret.txt.pqf
+
 # File written with `encrypt --stealth` (magic-free; cannot be auto-detected)
 pqfile decrypt -k privkey.pem --stealth secret.txt.pqf
 ```
+
+### FIDO2 hardware token second factor
+
+**CLI**: requires building `pqfile-cli` with the `fido2` cargo feature (`cargo install pqfile-cli --features fido2`, or `cargo build --features fido2` from source); off by default so a normal build never needs USB HID system libraries (`libudev-dev` on Linux).
+
+```bash
+# Enroll a security key once: creates a non-resident CTAP2 credential
+# requesting the hmac-secret extension and writes an enrollment file. Not
+# sensitive on its own - reproducing the derived secret requires physically
+# touching the same token - so it can be backed up like ordinary configuration.
+pqfile fido2-enroll -o fido2-enrollment.txt
+
+# If the token requires a PIN for this operation:
+pqfile fido2-enroll -o fido2-enrollment.txt --pin
+```
+
+**Desktop GUI**: `pqfile-desktop` ships with this built in (no separate feature flag to pass). On the Encrypt or Decrypt tab, switch to Passphrase mode, then pick "FIDO2 token" under Second Factor and click "Enroll New Token…" the first time. Not available in the web (WASM) GUI - there is no browser-compatible USB HID backend, only the native `hidapi`-based one `pqfile-desktop` uses.
+
+Pass the enrollment file to `encrypt --fido2` / `decrypt --fido2` / `check --fido2` in place of `--keyfile`; the two are mutually exclusive. Each operation touches the token (and prompts for its PIN, if enrolled with one).
 
 If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v10 files (all single-recipient variants) and v4/v7/v8/v9 (multi-recipient).
 

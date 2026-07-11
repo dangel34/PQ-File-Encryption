@@ -1,0 +1,25 @@
+name: Install Linux build dependencies
+description: >
+  Installs the apt packages needed to build the native GUI (egui/eframe via
+  GTK/XCB) and libudev (needed for the desktop app and the optional fido2
+  feature's hidraw backend) on Ubuntu runners.
+
+runs:
+  using: composite
+  steps:
+    - name: Install system dependencies
+      shell: bash
+      run: |
+        # The runner image ships packages.microsoft.com apt repos (azure-cli,
+        # ubuntu prod) that intermittently serve invalid InRelease files and
+        # fail the whole apt-get update. Nothing we install comes from them.
+        sudo rm -f /etc/apt/sources.list.d/{microsoft-prod,azure-cli}.{list,sources}
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          libgtk-3-dev \
+          libxcb-render0-dev \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libssl-dev \
+          libudev-dev

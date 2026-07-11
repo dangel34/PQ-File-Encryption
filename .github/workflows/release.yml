@@ -12,6 +12,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Check all version fields match the tag
         run: |
@@ -67,6 +69,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
@@ -75,30 +79,12 @@ jobs:
 
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          # Drop the runner image's packages.microsoft.com repos; they
-          # intermittently serve invalid InRelease files and fail apt-get
-          # update, and nothing we install comes from them.
-          sudo rm -f /etc/apt/sources.list.d/{microsoft-prod,azure-cli}.{list,sources}
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libssl-dev
+        uses: ./.github/actions/install-linux-deps
 
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.target }}-
-
+      # No Cargo cache here, deliberately: restoring a poisonable cache into a
+      # release build would let a poisoned entry flow into the shipped,
+      # provenance-attested binaries (zizmor cache-poisoning). Releases are
+      # rare enough that a cold build is an acceptable price.
       - name: Install cargo-auditable
         uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # v2.82.10
         with:
@@ -118,14 +104,19 @@ jobs:
         shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
+      # The version goes through env vars rather than ${{ }} interpolation into
+      # scripts here and below (shell-injection vector, zizmor
+      # template-injection); it derives from the pushed tag name.
       - name: Build Windows installer
         if: matrix.os == 'windows-latest'
         shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           choco install innosetup -y --no-progress
           New-Item -ItemType Directory -Force target\release | Out-Null
           Copy-Item "target\${{ matrix.target }}\release\pqfile-desktop.exe" "target\release\pqfile-desktop.exe"
-          iscc /DAppVersion=${{ steps.version.outputs.version }} "pqfile-desktop\packaging\setup.iss"
+          iscc /DAppVersion=$env:APP_VERSION "pqfile-desktop\packaging\setup.iss"
 
       - name: Stage artifacts
         shell: bash
@@ -139,8 +130,10 @@ jobs:
       - name: Stage Windows installer
         if: matrix.os == 'windows-latest'
         shell: bash
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cp "pqfile-desktop/packaging/output/pqfile-setup-${{ steps.version.outputs.version }}.exe" dist/
+          cp "pqfile-desktop/packaging/output/pqfile-setup-${APP_VERSION}.exe" dist/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -155,6 +148,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
@@ -168,16 +163,8 @@ jobs:
       - name: Install binaryen (wasm-opt) and brotli
         run: sudo apt-get install -y binaryen brotli
 
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-wasm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-wasm-
-
+      # No Cargo cache here, deliberately: see the build job's note on
+      # cache poisoning in release builds.
       - name: Build WASM
         working-directory: pqfile-gui
         run: trunk build --release
@@ -208,6 +195,8 @@ jobs:
       attestations: write  # required to store SLSA build provenance attestations
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -238,7 +227,10 @@ jobs:
           cosign sign-blob --yes \
             --bundle artifacts/checksums.txt.bundle \
             artifacts/checksums.txt
-        # Verification: cosign verify-blob \
+        # Verified in publish.yml's `deploy` job (`Verify checksums signature`
+        # step) before checksums.txt is trusted to authenticate the WASM
+        # tarball pulled from the release. Manual verification uses the same
+        # command: cosign verify-blob \
         #   --bundle artifacts/checksums.txt.bundle \
         #   --certificate-identity-regexp 'https://github.com/dangel34/.*' \
         #   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
@@ -266,14 +258,15 @@ jobs:
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          existing=$(gh release view "${{ github.ref_name }}" --json isDraft -q '.isDraft' 2>/dev/null || echo "missing")
+          existing=$(gh release view "$RELEASE_TAG" --json isDraft -q '.isDraft' 2>/dev/null || echo "missing")
           if [ "$existing" = "false" ]; then
             echo "Release already published - skipping to avoid reverting to draft"
             exit 0
           fi
-          gh release create "${{ github.ref_name }}" \
-            --title "pqfile ${{ github.ref_name }}" \
+          gh release create "$RELEASE_TAG" \
+            --title "pqfile $RELEASE_TAG" \
             --generate-notes \
             --draft \
             ./artifacts/*

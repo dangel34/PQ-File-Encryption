@@ -153,6 +153,22 @@ pub enum PqfileError {
         "unsupported header flags: {0:#04x}; file was likely written by a newer pqfile version"
     )]
     UnsupportedHeaderFlags(u8),
+
+    /// The v10 file was encrypted with a FIDO2 hardware token second factor but
+    /// none was supplied (or a keyfile was supplied instead).
+    #[error(
+        "this file requires a FIDO2 security key: it was encrypted with a hardware token second \
+         factor; pass --fido2 <ENROLLMENT_FILE> with the same enrollment used at encryption"
+    )]
+    Fido2Required,
+
+    /// A FIDO2 token was supplied but the v10 file was not encrypted with one
+    /// (or was encrypted with a keyfile instead). Mirrors [`KeyfileNotRequired`]:
+    /// failing loudly here avoids silently deriving a wrong key.
+    ///
+    /// [`KeyfileNotRequired`]: PqfileError::KeyfileNotRequired
+    #[error("file was not encrypted with a FIDO2 second factor; remove --fido2 and retry")]
+    Fido2NotRequired,
 }
 
 impl PqfileError {
@@ -191,6 +207,8 @@ impl PqfileError {
             PqfileError::KeyfileRequired => 23,
             PqfileError::KeyfileNotRequired => 24,
             PqfileError::UnsupportedHeaderFlags(_) => 25,
+            PqfileError::Fido2Required => 26,
+            PqfileError::Fido2NotRequired => 27,
         }
     }
 }

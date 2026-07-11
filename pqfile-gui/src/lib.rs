@@ -1,5 +1,7 @@
 mod app;
 mod colors;
+#[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+mod fido2;
 mod tabs;
 mod theme;
 mod types;
@@ -56,7 +58,10 @@ pub fn start() -> Result<(), JsValue> {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use crate::app::PqfileApp;
-    use crate::types::{FileInput, MultiFileEntry, OpStatus, Settings, Tab};
+    use crate::types::{
+        DecryptMode, EncryptMode, FileInput, MultiFileEntry, OpStatus, SecondFactorMode, Settings,
+        Tab,
+    };
     use eframe::egui;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -250,6 +255,133 @@ mod tests {
 
         let decrypted = std::fs::read(tmp.path().join("input.txt")).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_decrypt_passphrase_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plaintext = b"v10 passphrase roundtrip".to_vec();
+        let plain_path = tmp.path().join("secret.txt");
+        std::fs::write(&plain_path, &plaintext).unwrap();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_mode = EncryptMode::Passphrase;
+        app.encrypt_passphrase = zeroize::Zeroizing::new("hunter2".to_owned());
+        app.encrypt_passphrase_confirm = zeroize::Zeroizing::new("hunter2".to_owned());
+        app.encrypt_files.push(file_entry(
+            "secret.txt",
+            plaintext.clone(),
+            Some(plain_path),
+        ));
+        app.handle_encrypt_all(&test_ctx());
+        flush_jobs(&mut app);
+        assert!(
+            matches!(app.encrypt_files[0].status, OpStatus::Ok(_)),
+            "encryption failed: {:?}",
+            app.encrypt_files[0].status
+        );
+
+        let pqf_path = tmp.path().join("secret.txt.pqf");
+        let pqf_data = std::fs::read(&pqf_path).unwrap();
+
+        app.decrypt_mode = DecryptMode::Passphrase;
+        app.decrypt_v10_passphrase = zeroize::Zeroizing::new("hunter2".to_owned());
+        app.decrypt_files
+            .push(file_entry("secret.txt.pqf", pqf_data, Some(pqf_path)));
+        app.handle_decrypt_batch(&test_ctx());
+        flush_jobs(&mut app);
+        assert!(
+            matches!(app.decrypt_files[0].status, OpStatus::Ok(_)),
+            "decryption failed: {:?}",
+            app.decrypt_files[0].status
+        );
+
+        let decrypted = std::fs::read(tmp.path().join("secret.txt")).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_decrypt_passphrase_keyfile_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plaintext = b"v10 keyfile second factor roundtrip".to_vec();
+        let plain_path = tmp.path().join("secret.txt");
+        std::fs::write(&plain_path, &plaintext).unwrap();
+        let keyfile_bytes = b"the shared keyfile".to_vec();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_mode = EncryptMode::Passphrase;
+        app.encrypt_passphrase = zeroize::Zeroizing::new("hunter2".to_owned());
+        app.encrypt_passphrase_confirm = zeroize::Zeroizing::new("hunter2".to_owned());
+        app.encrypt_second_factor = SecondFactorMode::Keyfile;
+        app.encrypt_keyfile = loaded_input("keyfile.bin", keyfile_bytes.clone(), None);
+        app.encrypt_files.push(file_entry(
+            "secret.txt",
+            plaintext.clone(),
+            Some(plain_path),
+        ));
+        app.handle_encrypt_all(&test_ctx());
+        flush_jobs(&mut app);
+        assert!(
+            matches!(app.encrypt_files[0].status, OpStatus::Ok(_)),
+            "encryption failed: {:?}",
+            app.encrypt_files[0].status
+        );
+
+        let pqf_path = tmp.path().join("secret.txt.pqf");
+        let pqf_data = std::fs::read(&pqf_path).unwrap();
+
+        // Wrong keyfile must fail.
+        let mut wrong = PqfileApp::default();
+        wrong.decrypt_mode = DecryptMode::Passphrase;
+        wrong.decrypt_v10_passphrase = zeroize::Zeroizing::new("hunter2".to_owned());
+        wrong.decrypt_second_factor = SecondFactorMode::Keyfile;
+        wrong.decrypt_keyfile = loaded_input("wrong.bin", b"wrong keyfile".to_vec(), None);
+        wrong
+            .decrypt_files
+            .push(file_entry("secret.txt.pqf", pqf_data.clone(), None));
+        wrong.handle_decrypt_batch(&test_ctx());
+        flush_jobs(&mut wrong);
+        assert!(
+            matches!(wrong.decrypt_files[0].status, OpStatus::Err(_)),
+            "decryption with the wrong keyfile must fail"
+        );
+
+        // Correct keyfile must succeed.
+        app.decrypt_mode = DecryptMode::Passphrase;
+        app.decrypt_v10_passphrase = zeroize::Zeroizing::new("hunter2".to_owned());
+        app.decrypt_second_factor = SecondFactorMode::Keyfile;
+        app.decrypt_keyfile = loaded_input("keyfile.bin", keyfile_bytes, None);
+        app.decrypt_files
+            .push(file_entry("secret.txt.pqf", pqf_data, Some(pqf_path)));
+        app.handle_decrypt_batch(&test_ctx());
+        flush_jobs(&mut app);
+        assert!(
+            matches!(app.decrypt_files[0].status, OpStatus::Ok(_)),
+            "decryption failed: {:?}",
+            app.decrypt_files[0].status
+        );
+
+        let decrypted = std::fs::read(tmp.path().join("secret.txt")).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_passphrase_mismatch_returns_error() {
+        let mut app = PqfileApp::default();
+        app.encrypt_mode = EncryptMode::Passphrase;
+        app.encrypt_passphrase = zeroize::Zeroizing::new("hunter2".to_owned());
+        app.encrypt_passphrase_confirm = zeroize::Zeroizing::new("different".to_owned());
+        app.encrypt_files
+            .push(file_entry("secret.txt", b"data".to_vec(), None));
+        app.handle_encrypt_all(&test_ctx());
+        assert!(
+            matches!(app.encrypt_batch_summary, Some(OpStatus::Err(_))),
+            "mismatched passphrases must be rejected before any job starts"
+        );
+        assert!(
+            matches!(app.encrypt_files[0].status, OpStatus::None),
+            "no encryption should have been attempted"
+        );
     }
 
     #[test]

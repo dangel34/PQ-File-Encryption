@@ -1,0 +1,8 @@
+rules:
+  use-trusted-publishing:
+    # crates.io Trusted Publishing (OIDC) would replace the long-lived
+    # CARGO_REGISTRY_TOKEN secret in publish.yml. Worth adopting, but it
+    # needs crates.io-side configuration by the crate owner first, so the
+    # token flow stays for now and this informational finding is accepted.
+    ignore:
+      - publish.yml

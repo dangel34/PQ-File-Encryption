@@ -6,6 +6,7 @@ use argon2::{Argon2, Params};
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
+use crate::secret::LockedSecret;
 
 // Current Argon2id parameters (pqfile >= 4.0): m=64 MiB, t=3, p=4.
 //
@@ -397,7 +398,7 @@ pub fn decrypt_slh_signing_seed(
     Ok(seed)
 }
 
-fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+fn derive_key(passphrase: &str, salt: &[u8]) -> Result<LockedSecret<32>, PqfileError> {
     derive_key_with_pcost(passphrase, salt, ARGON2_P_COST)
 }
 
@@ -405,7 +406,7 @@ fn derive_key_with_pcost(
     passphrase: &str,
     salt: &[u8],
     p_cost: u32,
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     derive_key_with_params(passphrase, salt, ARGON2_M_COST, ARGON2_T_COST, p_cost)
 }
 
@@ -417,7 +418,7 @@ pub(crate) fn derive_key_with_params(
     m_kib: u32,
     t_cost: u32,
     p_cost: u32,
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     derive_key_with_params_and_secret(passphrase, None, salt, m_kib, t_cost, p_cost)
 }
 
@@ -432,7 +433,7 @@ pub(crate) fn derive_key_with_params_and_secret(
     m_kib: u32,
     t_cost: u32,
     p_cost: u32,
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     let params =
         Params::new(m_kib, t_cost, p_cost, Some(32)).map_err(|_| PqfileError::EncryptionFailure)?;
     let argon2 = match secret {
@@ -445,7 +446,7 @@ pub(crate) fn derive_key_with_params_and_secret(
         .map_err(|_| PqfileError::EncryptionFailure)?,
         None => Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params),
     };
-    let mut key = Zeroizing::new([0u8; 32]);
+    let mut key = LockedSecret::<32>::zeroed();
     argon2
         .hash_password_into(passphrase.as_bytes(), salt, key.as_mut())
         .map_err(|_| PqfileError::EncryptionFailure)?;
@@ -455,12 +456,27 @@ pub(crate) fn derive_key_with_params_and_secret(
 /// Hashes raw keyfile bytes into the 32-byte Argon2 secret used by v10 keyfile
 /// mode. Domain-separated so a keyfile that happens to contain other pqfile
 /// material never collides with that material's own hash uses.
-pub(crate) fn keyfile_secret(keyfile: &[u8]) -> Zeroizing<[u8; 32]> {
+pub(crate) fn keyfile_secret(keyfile: &[u8]) -> LockedSecret<32> {
     use sha3::{Digest, Sha3_256};
     let mut hasher = Sha3_256::new();
     hasher.update(b"pqfile-keyfile-v1");
     hasher.update(keyfile);
-    let mut out = Zeroizing::new([0u8; 32]);
+    let mut out = LockedSecret::<32>::zeroed();
+    out.copy_from_slice(&hasher.finalize());
+    out
+}
+
+/// Hashes a FIDO2 `hmac-secret` extension output into the 32-byte Argon2
+/// secret used by v10 FIDO2 mode. The extension output is already a uniform
+/// 32-byte HMAC-SHA256 value, so this hash exists purely for domain
+/// separation from [`keyfile_secret`] and any other future pepper source,
+/// mirroring that function's rationale rather than adding entropy.
+pub(crate) fn fido2_secret(hmac_secret: &[u8; 32]) -> LockedSecret<32> {
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(b"pqfile-fido2-v1");
+    hasher.update(hmac_secret);
+    let mut out = LockedSecret::<32>::zeroed();
     out.copy_from_slice(&hasher.finalize());
     out
 }

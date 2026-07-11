@@ -35,6 +35,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
         with:
@@ -55,19 +57,16 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
           toolchain: stable
 
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/cargo-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-vet-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-vet-
+          key-suffix: vet
 
       - name: Install cargo-vet
         uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # v2.82.10
@@ -83,6 +82,69 @@ jobs:
       - name: Run cargo vet
         run: cargo vet --locked
 
+  # ── API stability gate ─────────────────────────────────────────────────────
+  # STABILITY.md makes a formal semver promise for the pqfile library crate and
+  # nothing verified it mechanically until this job. cargo-semver-checks
+  # compares the current API against the latest published pqfile on crates.io
+  # (fetched automatically as the baseline) via rustdoc JSON. Library crate
+  # only: pqfile-cli and the GUI crates make no API promise (see STABILITY.md).
+  # An intentional break passes as soon as the version is bumped to the next
+  # major, so this never blocks a planned v5.0.
+  cargo-semver-checks:
+    name: cargo-semver-checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: stable
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: semver
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # v2.82.10
+        with:
+          tool: cargo-semver-checks
+
+      # --all-features so the async API surface is covered too.
+      # --release-type minor: between releases the tree accumulates additive
+      # API (the version is only bumped at release time), so this job asserts
+      # "valid as a minor release", i.e. fails only on breaking changes. The
+      # publish.yml gate runs with the default inference against the stamped
+      # release version, which also rejects additions without a minor bump.
+      - name: Check pqfile API against latest published version
+        run: cargo semver-checks --package pqfile --all-features --release-type minor
+
+  # ── Workflow security audit ────────────────────────────────────────────────
+  # Pinned actions do not catch template injection, credential persistence,
+  # over-broad token permissions, or cache-poisoning vectors; zizmor audits
+  # the workflow files themselves for all of these. GH_TOKEN enables the
+  # online audits (ref confusion, stale action pins) as well.
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        run: pipx install zizmor==1.26.1
+
+      - name: Audit workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: zizmor --gh-token "$GH_TOKEN" .github/workflows/
+
   # ── Benchmark regression detection (main only) ────────────────────────────
   bench:
     name: bench
@@ -96,21 +158,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # Credentials stay persisted here (zizmor artipacked): the step below
+      # pushes the gh-pages branch and github-action-benchmark auto-pushes
+      # benchmark history to it.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0 # zizmor: ignore[artipacked]
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
           toolchain: stable
 
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/cargo-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-bench-
+          key-suffix: bench
+          cache-target: "true"
 
       - name: Ensure gh-pages branch exists
         run: |
@@ -148,6 +208,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0  # full history so gitleaks can scan all commits
+          persist-credentials: false
 
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
@@ -162,6 +223,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
@@ -173,30 +236,12 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
-      - name: Install system dependencies
-        run: |
-          # The runner image ships packages.microsoft.com apt repos (azure-cli,
-          # ubuntu prod) that intermittently serve invalid InRelease files and
-          # fail the whole apt-get update. Nothing we install comes from them.
-          sudo rm -f /etc/apt/sources.list.d/{microsoft-prod,azure-cli}.{list,sources}
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libssl-dev
+      - uses: ./.github/actions/install-linux-deps
 
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/cargo-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-test-
+          key-suffix: test
+          cache-target: "true"
 
       - name: Check formatting
         run: cargo fmt --check
@@ -214,6 +259,52 @@ jobs:
         if: github.event_name == 'push'
         run: cargo llvm-cov --workspace --features pqfile/async --summary-only
 
+  # ── Optional-feature compile check (fido2) ────────────────────────────────
+  # The `fido2` feature is off by default so the main test-and-lint job never
+  # needs libusb/hidraw system packages; this job exists purely so the
+  # feature-gated code doesn't silently bit-rot between uses. Native HID
+  # hardware isn't available on a CI runner, so this checks compilation and
+  # the feature's own unit tests (enrollment file parsing), not live USB I/O.
+  fido2-check:
+    name: fido2 feature check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: ./.github/actions/install-linux-deps
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: fido2
+          cache-target: "true"
+
+      - name: Clippy (pqfile-cli, fido2 feature)
+        run: cargo clippy -p pqfile-cli --all-targets --features fido2 -- --deny warnings
+
+      - name: Test (pqfile-cli, fido2 feature)
+        run: cargo test -p pqfile-cli --features fido2
+
+      # pqfile-desktop always enables pqfile-gui's fido2 feature (it's the one
+      # native GUI target), so the main test-and-lint job already builds it
+      # with FIDO2 code compiled in via --workspace. What it does not do is
+      # run pqfile-gui's OWN test binary with the feature on (that requires
+      # passing the feature to pqfile-gui specifically), so fido2.rs's unit
+      # tests (enrollment file parsing) need this separate invocation.
+      - name: Clippy (pqfile-gui, fido2 feature)
+        run: cargo clippy -p pqfile-gui --all-targets --features fido2 -- --deny warnings
+
+      - name: Test (pqfile-gui, fido2 feature)
+        run: cargo test -p pqfile-gui --features fido2
+
   # ── WASM smoke test ────────────────────────────────────────────────────────
   wasm-test:
     name: WASM smoke test
@@ -222,6 +313,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
@@ -233,15 +326,10 @@ jobs:
         with:
           tool: wasm-pack
 
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/cargo-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-wasm-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-wasm-test-
+          key-suffix: wasm-test
+          cache-target: "true"
 
       - name: Run WASM smoke tests (Node.js)
         run: wasm-pack test --node pqfile --test wasm_smoke

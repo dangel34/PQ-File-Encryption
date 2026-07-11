@@ -12,13 +12,29 @@ use std::path::Path;
 
 use pqfile::encrypt::{
     encrypt_stream, encrypt_stream_compressed, encrypt_stream_multi, encrypt_stream_multi_anon,
-    encrypt_stream_multi_anon_padded,
+    encrypt_stream_multi_anon_padded, encrypt_stream_passphrase_keyfile_with_params,
+    encrypt_stream_passphrase_with_params, encrypt_stream_stealth,
 };
 use pqfile::format::CHUNK_SIZE;
 use pqfile::keygen::{keygen_bytes, keygen_bytes_hybrid_768};
+use pqfile::padding::{padme_length, PadmeReader};
 
 const OUT_DIR: &str = "pqfile/tests/compat";
 const PLAINTEXT: &[u8] = b"pqfile compat vector - do not change";
+
+// v10 vectors: fixed passphrase/keyfile committed alongside the ciphertexts.
+// Low-cost Argon2id parameters keep the compat suite fast while staying under
+// the default decrypt ceiling (m <= 64 MiB, t <= 3).
+const PASSPHRASE: &str = "pqfile compat vector passphrase";
+const KEYFILE: &[u8] = b"pqfile compat vector keyfile contents";
+const KDF_M_KIB: u32 = 8192;
+const KDF_T_COST: u32 = 1;
+const KDF_P_COST: u32 = 1;
+
+// The Padme vector needs a plaintext whose padded length differs from its true
+// length, otherwise the vector would not exercise the truncation path at all.
+// 37 bytes pads to 40 (the 36-byte PLAINTEXT is already a Padme fixed point).
+const PADME_PLAINTEXT: &[u8] = b"pqfile compat vector - do not change.";
 
 fn write(dir: &Path, name: &str, data: &[u8]) {
     let path = dir.join(name);
@@ -180,6 +196,75 @@ fn main() {
         write(dir, "v9_padded.priv1.pem", priv1.as_bytes());
         write(dir, "v9_padded.priv2.pem", priv2.as_bytes());
         write(dir, "v9_padded.priv3.pem", priv3.as_bytes());
+    }
+
+    // v10 - passphrase-only (Argon2id, no KEM)
+    {
+        let mut ct = Vec::new();
+        encrypt_stream_passphrase_with_params(
+            PASSPHRASE,
+            KDF_M_KIB,
+            KDF_T_COST,
+            KDF_P_COST,
+            PLAINTEXT.len() as u64,
+            &mut { PLAINTEXT },
+            &mut ct,
+        )
+        .unwrap();
+        write(dir, "v10_passphrase.pqf", &ct);
+    }
+
+    // v10 - passphrase + keyfile second factor (flags bit 0)
+    {
+        let mut ct = Vec::new();
+        encrypt_stream_passphrase_keyfile_with_params(
+            PASSPHRASE,
+            KEYFILE,
+            KDF_M_KIB,
+            KDF_T_COST,
+            KDF_P_COST,
+            PLAINTEXT.len() as u64,
+            &mut { PLAINTEXT },
+            &mut ct,
+        )
+        .unwrap();
+        write(dir, "v10_keyfile.pqf", &ct);
+        write(dir, "v10_keyfile.bin", KEYFILE);
+    }
+
+    // Stealth - magic-free wire layout, ML-KEM-768. There is nothing on the
+    // wire to auto-detect, so the private key and its variant are the vector's
+    // required side channel, exactly as in real use.
+    {
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let mut ct = Vec::new();
+        encrypt_stream_stealth(
+            &pub_pem,
+            PLAINTEXT.len() as u64,
+            &mut { PLAINTEXT },
+            &mut ct,
+        )
+        .unwrap();
+        write(dir, "stealth_768.pqf", &ct);
+        write(dir, "stealth_768.priv.pem", priv_pem.as_bytes());
+    }
+
+    // Padme-padded, ML-KEM-768: header carries the true length while the
+    // payload carries padme_length(true) bytes; decrypt truncates back.
+    {
+        let real_len = PADME_PLAINTEXT.len() as u64;
+        assert!(
+            padme_length(real_len) > real_len,
+            "PADME_PLAINTEXT must have a padded length larger than its true \
+             length or the vector locks in nothing"
+        );
+        let (pub_pem, priv_pem) = keygen_bytes(768, None).unwrap();
+        let mut reader = PadmeReader::new(PADME_PLAINTEXT, real_len);
+        let mut ct = Vec::new();
+        encrypt_stream(&pub_pem, real_len, CHUNK_SIZE, &mut reader, &mut ct).unwrap();
+        write(dir, "padme_768.pqf", &ct);
+        write(dir, "padme_768.priv.pem", priv_pem.as_bytes());
+        write(dir, "padme_plaintext.bin", PADME_PLAINTEXT);
     }
 
     println!("done - test vectors written to {OUT_DIR}/");

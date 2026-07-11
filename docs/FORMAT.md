@@ -407,7 +407,8 @@ Offset  Len   Field
 21      4     M_KIB (u32 LE; Argon2id memory cost in kibibytes)
 25      4     T_COST (u32 LE; Argon2id time cost / iterations)
 29      4     P_COST (u32 LE; Argon2id parallelism lanes)
-33      1     FLAGS (bit 0 = keyfile required; bits 1-7 reserved, MUST be 0)
+33      1     FLAGS (bit 0 = keyfile required, bit 1 = FIDO2 token required
+                       [mutually exclusive]; bits 2-7 reserved, MUST be 0)
 34      12    BASE_NONCE (first 8 bytes random; bytes 8-11 are 0x00)
 46      8     ORIGINAL_SIZE (u64 LE; informational)
 54      var   STREAM chunks (chunk_size = 65536; identical to v3)
@@ -418,7 +419,8 @@ KDF:
 session_key = Argon2id(
     password = passphrase bytes (UTF-8),
     salt     = SALT (16 bytes),
-    secret   = SHA3-256("pqfile-keyfile-v1" || keyfile bytes)   -- only if FLAGS bit 0 set
+    secret   = SHA3-256("pqfile-keyfile-v1" || keyfile bytes)         -- only if FLAGS bit 0 set
+             | SHA3-256("pqfile-fido2-v1" || hmac-secret output)      -- only if FLAGS bit 1 set
     m_cost   = M_KIB,
     t_cost   = T_COST,
     p_cost   = P_COST,
@@ -430,7 +432,9 @@ The 32-byte output is used directly as the ChaCha20-Poly1305 session key for the
 
 **Keyfile second factor (FLAGS bit 0):** when set, the SHA3-256 hash of a caller-supplied keyfile (any non-empty byte string) is passed as the Argon2id *secret* (pepper) input, so deriving the session key requires both the passphrase and the identical keyfile bytes. A decryptor without a keyfile MUST fail with `PqfileError::KeyfileRequired` before running the KDF; a decryptor given a keyfile for a file whose bit is clear MUST fail with `PqfileError::KeyfileNotRequired`. The flag is not independently authenticated, but tampering with it cannot bypass the second factor: the keyfile hash is baked into the session key, so a cleared bit only produces an authentication failure.
 
-**Unknown flag bits:** decoders MUST reject a header with any reserved bit set (`PqfileError::UnsupportedHeaderFlags`) rather than ignore it, so files written by future versions with different derivation semantics are never silently misdecrypted.
+**FIDO2 token second factor (FLAGS bit 1):** the same pepper slot as the keyfile second factor, sourced from a hardware security key instead of a file. The secret is the domain-separated SHA3-256 hash of the 32-byte output of the CTAP2 `hmac-secret` extension, presented by a token holding the credential enrolled by `pqfile fido2-enroll` (credential ID and salt recorded in a separate, non-sensitive enrollment file - reproducing the output requires physically touching the same token). Mutually exclusive with bit 0: a header with both bits set is rejected as unsupported. Missing/superfluous-token failures mirror the keyfile case: `PqfileError::Fido2Required` / `PqfileError::Fido2NotRequired`, and tampering with the bit is likewise self-defeating since the derived secret is baked into the session key.
+
+**Unknown flag bits:** decoders MUST reject a header with any reserved bit set, or with both bit 0 and bit 1 set (`PqfileError::UnsupportedHeaderFlags`), rather than ignore it, so files written by future versions with different derivation semantics are never silently misdecrypted.
 
 **Security note:** M_KIB, T_COST, and P_COST are attacker-controlled. Decryptors MUST enforce a ceiling before calling the KDF. Exceeding the ceiling returns `PqfileError::KdfLimitExceeded`. The default ceiling matches the encrypt-side default: 64 MiB / t=3.
 

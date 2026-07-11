@@ -1,0 +1,41 @@
+name: Cache Cargo registry
+description: >
+  Restores/saves the Cargo registry (and optionally the target/ build
+  directory) keyed on Cargo.lock's hash plus a per-job suffix, so jobs with
+  different dependency/feature sets don't thrash each other's cache entries.
+  Not used by release.yml's build job: a poisoned cache entry flowing into a
+  shipped, provenance-attested binary is a real risk there, so that job stays
+  on a deliberately cold build.
+
+inputs:
+  key-suffix:
+    description: Short per-job identifier included in the cache key (e.g. "test", "vet", "bench").
+    required: true
+  cache-target:
+    description: Also cache the target/ build directory. Skip (default) for jobs that only need the registry, like cargo-vet/cargo-semver-checks/mutants.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Cargo registry
+      if: inputs.cache-target != 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-${{ inputs.key-suffix }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ inputs.key-suffix }}-
+
+    - name: Cache Cargo registry (with target)
+      if: inputs.cache-target == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-${{ inputs.key-suffix }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ inputs.key-suffix }}-

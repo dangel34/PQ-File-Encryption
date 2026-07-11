@@ -2,6 +2,8 @@ pub(crate) mod archive;
 pub(crate) mod decrypt;
 pub(crate) mod doctor;
 pub(crate) mod encrypt;
+#[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+pub(crate) mod fido2_ui;
 pub(crate) mod keygen;
 pub(crate) mod keys;
 pub(crate) mod settings;

@@ -17,7 +17,7 @@ pub(crate) enum Tab {
     Settings,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub(crate) enum OpStatus {
     #[default]
     None,
@@ -238,16 +238,6 @@ impl FileInput {
     }
 }
 
-/// Drag-and-drop payload when dragging a key from the Keys panel.
-/// Used with egui's `dnd_drag_source` / `dnd_drop_zone` API.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone)]
-pub(crate) struct KeyDragPayload {
-    pub(crate) label: String,
-    pub(crate) pub_pem: String,
-    pub(crate) priv_path: Option<std::path::PathBuf>,
-}
-
 /// Which sub-section is active in the Decrypt tab.
 #[derive(PartialEq, Default, Clone, Copy)]
 pub(crate) enum DecryptSubTab {
@@ -255,6 +245,49 @@ pub(crate) enum DecryptSubTab {
     Decrypt,
     Rekey,
 }
+
+/// Which mode is active in the Encrypt tab: public-key recipients (v2/v3/v4/v8/v9),
+/// or a v10 passphrase-only file with no key pair.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum EncryptMode {
+    #[default]
+    PublicKey,
+    Passphrase,
+}
+
+/// Which mode is active in the Decrypt tab: a private key, or a v10
+/// passphrase-only file.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum DecryptMode {
+    #[default]
+    PrivateKey,
+    Passphrase,
+}
+
+/// Which second factor (if any) accompanies v10 passphrase mode, mirroring the
+/// CLI's `--keyfile` / `--fido2` mutual exclusivity. The `Fido2` variant exists
+/// on every target for code-sharing simplicity; only native builds with the
+/// `fido2` feature ever expose UI to select it.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum SecondFactorMode {
+    #[default]
+    None,
+    Keyfile,
+    // Only ever constructed by UI code gated the same way; on a build without
+    // the feature this variant is legitimately unreachable, not a mistake.
+    #[cfg_attr(
+        not(all(not(target_arch = "wasm32"), feature = "fido2")),
+        allow(dead_code)
+    )]
+    Fido2,
+}
+
+/// Shared state for a background FIDO2 enrollment or secret-derivation
+/// operation (native, `fido2` feature only). Both are single blocking CTAP2
+/// round trips run on a spawned thread and polled from the UI thread, unlike
+/// the multi-file `EncryptJob`/`DecryptBatchJob` above.
+#[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+pub(crate) type Fido2Pending<T> = Arc<Mutex<Option<Result<T, String>>>>;
 
 /// Which sub-section is active in the Sign tab.
 #[derive(PartialEq, Default, Clone, Copy)]

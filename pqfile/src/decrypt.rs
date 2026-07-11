@@ -30,6 +30,7 @@ use crate::keygen::{
     PRIV_TAG_1024, PRIV_TAG_512, PRIV_TAG_HYBRID_768,
 };
 use crate::passphrase;
+use crate::secret::LockedSecret;
 
 enum DkVariant {
     Kem512(DecapsulationKey512),
@@ -197,7 +198,7 @@ fn read_single_recipient_crypto(
 
 /// Session key and header fields recovered from a multi-recipient header.
 struct MultiRecipientSession {
-    session_key: Zeroizing<[u8; 32]>,
+    session_key: LockedSecret<32>,
     nonce: [u8; NONCE_LEN],
     original_size: u64,
 }
@@ -478,7 +479,14 @@ pub fn decrypt_stream_passphrase_with_limits(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    decrypt_stream_passphrase_inner(passphrase, None, max_m_kib, max_t, reader, writer)
+    decrypt_stream_passphrase_inner(
+        passphrase,
+        SecondFactor::None,
+        max_m_kib,
+        max_t,
+        reader,
+        writer,
+    )
 }
 
 /// Decrypts a v10 passphrase-only `.pqf` stream that was encrypted with a
@@ -517,19 +525,84 @@ pub fn decrypt_stream_passphrase_keyfile_with_limits(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    decrypt_stream_passphrase_inner(passphrase, Some(keyfile), max_m_kib, max_t, reader, writer)
+    decrypt_stream_passphrase_inner(
+        passphrase,
+        SecondFactor::Keyfile(keyfile),
+        max_m_kib,
+        max_t,
+        reader,
+        writer,
+    )
 }
 
-fn decrypt_stream_passphrase_inner(
+/// Decrypts a v10 passphrase-only `.pqf` stream that was encrypted with a FIDO2
+/// hardware token second factor
+/// ([`crate::encrypt::encrypt_stream_passphrase_fido2`]), using the default KDF
+/// ceiling (m ≤ 64 MiB, t ≤ 3).
+///
+/// `hmac_secret` must be the same CTAP2 `hmac-secret` extension output produced
+/// at encryption time (same credential, same salt); obtaining it means talking
+/// to the token, which is the caller's responsibility - pqfile's core library
+/// has no USB dependency. Returns [`PqfileError::Fido2NotRequired`] if the file
+/// was not encrypted with a FIDO2 second factor; a wrong token surfaces as
+/// [`PqfileError::DecryptionFailure`], indistinguishable from a wrong passphrase.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_passphrase_fido2(
     passphrase: &str,
-    keyfile: Option<&[u8]>,
+    hmac_secret: &[u8; 32],
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    decrypt_stream_passphrase_fido2_with_limits(
+        passphrase,
+        hmac_secret,
+        crate::passphrase::ARGON2_M_COST,
+        crate::passphrase::ARGON2_T_COST,
+        reader,
+        writer,
+    )
+}
+
+/// [`decrypt_stream_passphrase_fido2`] with a custom KDF ceiling.
+/// See [`decrypt_stream_passphrase_with_limits`] for the ceiling semantics.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_passphrase_fido2_with_limits(
+    passphrase: &str,
+    hmac_secret: &[u8; 32],
     max_m_kib: u32,
     max_t: u32,
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    use crate::format::{PqfHeaderV10, V10_FLAG_KEYFILE};
-    use crate::passphrase::{derive_key_with_params_and_secret, keyfile_secret};
+    decrypt_stream_passphrase_inner(
+        passphrase,
+        SecondFactor::Fido2(hmac_secret),
+        max_m_kib,
+        max_t,
+        reader,
+        writer,
+    )
+}
+
+/// Which v10 second factor (if any) the caller is presenting at decrypt time.
+/// Distinct from the header's own flag bits, which record what the file
+/// actually requires; [`decrypt_stream_passphrase_inner`] reconciles the two.
+enum SecondFactor<'a> {
+    None,
+    Keyfile(&'a [u8]),
+    Fido2(&'a [u8; 32]),
+}
+
+fn decrypt_stream_passphrase_inner(
+    passphrase: &str,
+    second_factor: SecondFactor,
+    max_m_kib: u32,
+    max_t: u32,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::format::{PqfHeaderV10, V10_FLAG_FIDO2, V10_FLAG_KEYFILE};
+    use crate::passphrase::{derive_key_with_params_and_secret, fido2_secret, keyfile_secret};
 
     let version = PqfHeader::read_magic_version(reader)?;
     if version_layout(version) != VERSION_V10 {
@@ -538,15 +611,32 @@ fn decrypt_stream_passphrase_inner(
 
     let header = PqfHeaderV10::read_body(reader)?;
 
-    // Resolve the keyfile flag against what the caller supplied before any
-    // expensive work: a mismatch in either direction gets a specific error
-    // rather than an opaque authentication failure after the KDF.
+    // Resolve the header's required second factor against what the caller
+    // supplied before any expensive work: a mismatch in either direction (or
+    // presenting the wrong kind) gets a specific error rather than an opaque
+    // authentication failure after the KDF. read_body already rejects a
+    // header carrying both bits, so that combination cannot reach here.
     let keyfile_flag = header.flags & V10_FLAG_KEYFILE != 0;
-    let secret = match (keyfile_flag, keyfile) {
-        (true, Some(kf)) => Some(keyfile_secret(kf)),
-        (true, None) => return Err(PqfileError::KeyfileRequired),
-        (false, Some(_)) => return Err(PqfileError::KeyfileNotRequired),
-        (false, None) => None,
+    let fido2_flag = header.flags & V10_FLAG_FIDO2 != 0;
+    let secret = match (keyfile_flag, fido2_flag) {
+        (true, false) => match second_factor {
+            SecondFactor::Keyfile(kf) => Some(keyfile_secret(kf)),
+            SecondFactor::None | SecondFactor::Fido2(_) => {
+                return Err(PqfileError::KeyfileRequired)
+            }
+        },
+        (false, true) => match second_factor {
+            SecondFactor::Fido2(hs) => Some(fido2_secret(hs)),
+            SecondFactor::None | SecondFactor::Keyfile(_) => {
+                return Err(PqfileError::Fido2Required)
+            }
+        },
+        (false, false) => match second_factor {
+            SecondFactor::None => None,
+            SecondFactor::Keyfile(_) => return Err(PqfileError::KeyfileNotRequired),
+            SecondFactor::Fido2(_) => return Err(PqfileError::Fido2NotRequired),
+        },
+        (true, true) => return Err(PqfileError::UnsupportedHeaderFlags(header.flags)),
     };
 
     if header.m_kib > max_m_kib || header.t_cost > max_t {
@@ -626,9 +716,9 @@ pub fn decrypt_stream_parallel_with_progress(
 fn find_session_key(
     dk: &DkVariant,
     entries: &[(u16, &[u8], &[u8; WRAPPED_KEY_LEN])],
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     let dk_variant = dk.kem_variant();
-    let mut found: Option<Zeroizing<[u8; 32]>> = None;
+    let mut found: Option<LockedSecret<32>> = None;
     let mut slots_tried: usize = 0;
     // For v4 files, each slot carries an explicit kem_variant field in the header.
     // Skipping mismatched-variant slots does not leak information beyond what the
@@ -665,9 +755,9 @@ fn find_session_key(
 fn find_session_key_v8(
     dk: &DkVariant,
     entries: &[RecipientEntryV8],
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     let ct_len = ct_len_for_variant(dk.kem_variant())?;
-    let mut found: Option<Zeroizing<[u8; 32]>> = None;
+    let mut found: Option<LockedSecret<32>> = None;
     for entry in entries {
         let kem_ct = &entry.padded_ct[..ct_len];
         let ss = decapsulate_shared_secret(dk, kem_ct)?;
@@ -685,21 +775,21 @@ fn find_session_key_v8(
 fn unwrap_session_key(
     wrapped: &[u8; WRAPPED_KEY_LEN],
     ss: &[u8; 32],
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
-    use aes_gcm::aead::{Aead, KeyInit};
+) -> Result<LockedSecret<32>, PqfileError> {
+    use aes_gcm::aead::{AeadInOut, KeyInit};
     use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
     let cipher = Aes256Gcm::new(ss.as_slice().try_into().expect("32-byte key"));
     let nonce = AesNonce::from([0u8; 12]);
-    let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(&nonce, wrapped.as_slice())
-            .map_err(|_| PqfileError::DecryptionFailure)?,
-    );
-    if plaintext.len() != 32 {
-        return Err(PqfileError::DecryptionFailure);
-    }
-    let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&plaintext);
+    // Decrypt in place straight into the locked buffer instead of via an
+    // intermediate `Zeroizing<Vec<u8>>` return value - the unwrapped session
+    // key is exactly the class of secret `LockedSecret` exists for.
+    let (ct, tag_bytes) = wrapped.split_at(WRAPPED_KEY_LEN - 16);
+    let tag: Tag<Aes256Gcm> = tag_bytes.try_into().expect("16-byte tag");
+    let mut key = LockedSecret::<32>::zeroed();
+    key.copy_from_slice(ct);
+    cipher
+        .decrypt_inout_detached(&nonce, &[], (&mut key[..]).into(), &tag)
+        .map_err(|_| PqfileError::DecryptionFailure)?;
     Ok(key)
 }
 
@@ -802,7 +892,7 @@ pub(crate) fn decapsulate_for_rekey(
     privkey_pem: &str,
     passphrase: Option<&str>,
     header: &PqfHeader,
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     let dk = derive_dk(privkey_pem, passphrase)?;
     check_kem_variant_match(dk.kem_variant(), header.kem_variant)?;
     decapsulate_shared_secret(&dk, &header.kem_ciphertext)
@@ -816,7 +906,7 @@ pub(crate) fn recover_session_key_multi(
     privkey_pem: &str,
     passphrase: Option<&str>,
     entries: &[(u16, &[u8], &[u8; WRAPPED_KEY_LEN])],
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     let dk = derive_dk(privkey_pem, passphrase)?;
     find_session_key(&dk, entries)
 }
@@ -826,7 +916,7 @@ pub(crate) fn recover_session_key_v8(
     privkey_pem: &str,
     passphrase: Option<&str>,
     entries: &[RecipientEntryV8],
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     let dk = derive_dk(privkey_pem, passphrase)?;
     find_session_key_v8(&dk, entries)
 }
@@ -1085,7 +1175,7 @@ fn derive_hybrid_dk_from_seed(seed: &[u8; HYBRID_SEED_LEN_768]) -> Result<DkVari
 fn decapsulate_shared_secret(
     dk: &DkVariant,
     kem_ct_bytes: &[u8],
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
+) -> Result<LockedSecret<32>, PqfileError> {
     match dk {
         DkVariant::Kem512(dk) => {
             let ct = Ciphertext::<MlKem512>::try_from(kem_ct_bytes).map_err(|_| {
@@ -1095,7 +1185,7 @@ fn decapsulate_shared_secret(
                 }
             })?;
             let ss = dk.decapsulate(&ct);
-            let mut ss_bytes = Zeroizing::new([0u8; 32]);
+            let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok(ss_bytes)
         }
@@ -1107,7 +1197,7 @@ fn decapsulate_shared_secret(
                 }
             })?;
             let ss = dk.decapsulate(&ct);
-            let mut ss_bytes = Zeroizing::new([0u8; 32]);
+            let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok(ss_bytes)
         }
@@ -1119,7 +1209,7 @@ fn decapsulate_shared_secret(
                 }
             })?;
             let ss = dk.decapsulate(&ct);
-            let mut ss_bytes = Zeroizing::new([0u8; 32]);
+            let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok(ss_bytes)
         }
@@ -2354,6 +2444,141 @@ mod tests {
         assert!(
             ct.is_empty(),
             "nothing may be written for a rejected keyfile"
+        );
+    }
+
+    // ── FIDO2 hardware token second factor ──────────────────────────────────
+
+    /// Encrypts with a FIDO2 hmac-secret using weak (fast) KDF params for test
+    /// speed. The library never talks to a real token; tests stand in a fixed
+    /// 32-byte value for the CTAP2 hmac-secret extension output.
+    fn fido2_ciphertext(passphrase: &str, hmac_secret: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase_fido2_with_params(
+            passphrase,
+            hmac_secret,
+            16 * 1024, // 16 MiB
+            2,
+            4,
+            plaintext.len() as u64,
+            &mut &plaintext[..],
+            &mut ct,
+        )
+        .unwrap();
+        ct
+    }
+
+    #[test]
+    fn v10_fido2_roundtrip() {
+        let hmac_secret = [0x5Au8; 32];
+        let ct = fido2_ciphertext("hunter2", &hmac_secret, b"top secret");
+
+        let mut out = Vec::new();
+        decrypt_stream_passphrase_fido2("hunter2", &hmac_secret, &mut ct.as_slice(), &mut out)
+            .unwrap();
+        assert_eq!(out, b"top secret");
+    }
+
+    #[test]
+    fn v10_fido2_sets_flag_byte() {
+        let ct = fido2_ciphertext("hunter2", &[0x11u8; 32], b"secret");
+        assert_eq!(
+            ct[V10_FLAGS_OFFSET], 0x02,
+            "FIDO2 flag bit must be V10_FLAG_FIDO2 (0x02)"
+        );
+    }
+
+    #[test]
+    fn v10_fido2_wrong_hmac_secret_fails() {
+        let ct = fido2_ciphertext("hunter2", &[0x22u8; 32], b"secret");
+
+        let mut out = Vec::new();
+        let result =
+            decrypt_stream_passphrase_fido2("hunter2", &[0x33u8; 32], &mut ct.as_slice(), &mut out);
+        assert!(
+            matches!(result, Err(PqfileError::DecryptionFailure)),
+            "wrong hmac-secret must cause decryption failure"
+        );
+    }
+
+    #[test]
+    fn v10_fido2_wrong_passphrase_fails() {
+        let hmac_secret = [0x44u8; 32];
+        let ct = fido2_ciphertext("correct", &hmac_secret, b"secret");
+
+        let mut out = Vec::new();
+        let result =
+            decrypt_stream_passphrase_fido2("wrong", &hmac_secret, &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
+    }
+
+    #[test]
+    fn v10_fido2_missing_returns_fido2_required() {
+        let ct = fido2_ciphertext("hunter2", &[0x55u8; 32], b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::Fido2Required)));
+    }
+
+    #[test]
+    fn v10_fido2_on_plain_file_returns_fido2_not_required() {
+        let plaintext = b"no fido2 involved";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "hunter2",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        let result =
+            decrypt_stream_passphrase_fido2("hunter2", &[0x66u8; 32], &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::Fido2NotRequired)));
+    }
+
+    #[test]
+    fn v10_keyfile_file_rejects_fido2_secret() {
+        // A file that needs a keyfile must not accept a FIDO2 secret instead:
+        // wrong second-factor *kind*, not just a wrong value.
+        let ct = keyfile_ciphertext("hunter2", b"the keyfile", b"secret");
+
+        let mut out = Vec::new();
+        let result =
+            decrypt_stream_passphrase_fido2("hunter2", &[0x77u8; 32], &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::KeyfileRequired)));
+    }
+
+    #[test]
+    fn v10_fido2_file_rejects_keyfile_secret() {
+        let ct = fido2_ciphertext("hunter2", &[0x88u8; 32], b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_keyfile(
+            "hunter2",
+            b"wrong kind of second factor",
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(matches!(result, Err(PqfileError::Fido2Required)));
+    }
+
+    #[test]
+    fn v10_both_second_factor_flags_rejected() {
+        // pqfile never writes both bits; a header claiming to need both a
+        // keyfile and a FIDO2 token is rejected as unsupported rather than
+        // silently picked apart.
+        let mut ct = keyfile_ciphertext("hunter2", b"the keyfile", b"secret");
+        assert_eq!(ct[V10_FLAGS_OFFSET], 0x01);
+        ct[V10_FLAGS_OFFSET] = 0x03; // V10_FLAG_KEYFILE | V10_FLAG_FIDO2
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out);
+        assert!(
+            matches!(result, Err(PqfileError::UnsupportedHeaderFlags(0x03))),
+            "combined flags must be rejected, got {result:?}"
         );
     }
 }

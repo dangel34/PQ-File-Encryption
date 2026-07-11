@@ -3,9 +3,7 @@ use crate::colors::{
     c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1,
     c_text,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use crate::types::KeyDragPayload;
-use crate::types::{DecryptSubTab, OpStatus, Tab};
+use crate::types::{DecryptMode, DecryptSubTab, OpStatus, SecondFactorMode, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_pqf;
 use crate::widgets::{
@@ -18,6 +16,131 @@ use std::io::Cursor;
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
+use zeroize::Zeroizing;
+
+/// What to decrypt each file with, resolved once per batch: either a private
+/// key, or a v10 passphrase with an optional second factor. Mirrors
+/// `tabs::encrypt::EncryptTarget` - see its docs for why FIDO2 carries a path
+/// and PIN rather than an already-derived secret.
+enum DecryptTarget {
+    PrivateKey {
+        priv_pem: String,
+        unlock_passphrase: Option<Zeroizing<String>>,
+    },
+    Passphrase {
+        passphrase: Zeroizing<String>,
+        keyfile: Option<Vec<u8>>,
+        #[cfg_attr(
+            not(all(not(target_arch = "wasm32"), feature = "fido2")),
+            allow(dead_code)
+        )]
+        fido2: Option<(PathBuf, Option<Zeroizing<String>>)>,
+    },
+}
+
+/// [`DecryptTarget`] with any hardware-derived second factor already resolved
+/// to bytes, ready to reuse across every file in the batch.
+enum ResolvedDecryptTarget {
+    PrivateKey {
+        priv_pem: String,
+        unlock_passphrase: Option<Zeroizing<String>>,
+    },
+    Passphrase {
+        passphrase: Zeroizing<String>,
+        keyfile: Option<Vec<u8>>,
+        fido2_secret: Option<Zeroizing<[u8; 32]>>,
+    },
+}
+
+fn resolve_decrypt_target(target: DecryptTarget) -> Result<ResolvedDecryptTarget, String> {
+    match target {
+        DecryptTarget::PrivateKey {
+            priv_pem,
+            unlock_passphrase,
+        } => Ok(ResolvedDecryptTarget::PrivateKey {
+            priv_pem,
+            unlock_passphrase,
+        }),
+        DecryptTarget::Passphrase {
+            passphrase,
+            keyfile,
+            fido2,
+        } => {
+            let fido2_secret = match fido2 {
+                None => None,
+                Some((path, pin)) => Some(crate::tabs::encrypt::derive_fido2_secret(
+                    &path,
+                    pin.as_deref().map(String::as_str),
+                )?),
+            };
+            Ok(ResolvedDecryptTarget::Passphrase {
+                passphrase,
+                keyfile,
+                fido2_secret,
+            })
+        }
+    }
+}
+
+fn decrypt_entry(
+    target: &ResolvedDecryptTarget,
+    data: &[u8],
+    stealth: bool,
+    progress: &dyn Fn(u64, u64),
+) -> Result<Vec<u8>, pqfile::error::PqfileError> {
+    match target {
+        ResolvedDecryptTarget::PrivateKey {
+            priv_pem,
+            unlock_passphrase,
+        } => {
+            let pp = unlock_passphrase.as_deref().map(String::as_str);
+            if stealth {
+                // decrypt_stream_stealth has no progress callback; the byte
+                // progress bar simply stays at 0 for stealth files.
+                let mut cursor = Cursor::new(data);
+                let mut out = Vec::new();
+                decrypt::decrypt_stream_stealth(priv_pem, &mut cursor, &mut out, pp).map(|_| out)
+            } else {
+                let mut cursor = Cursor::new(data);
+                let mut out = Vec::new();
+                #[cfg(not(target_arch = "wasm32"))]
+                let result = decrypt::decrypt_stream_parallel_with_progress(
+                    priv_pem,
+                    &mut cursor,
+                    &mut out,
+                    pp,
+                    8, // parallel batch size (matches CLI default)
+                    0, // total_hint unknown until header is parsed
+                    progress,
+                );
+                // No parallel/progress-tracked decrypt on WASM (matches the
+                // original wasm-only branch this replaces).
+                #[cfg(target_arch = "wasm32")]
+                let result = {
+                    let _ = progress;
+                    decrypt::decrypt_stream(priv_pem, &mut cursor, &mut out, pp)
+                };
+                result.map(|_| out)
+            }
+        }
+        ResolvedDecryptTarget::Passphrase {
+            passphrase,
+            keyfile,
+            fido2_secret,
+        } => {
+            let mut cursor = Cursor::new(data);
+            let mut out = Vec::new();
+            let result = if let Some(kf) = keyfile {
+                decrypt::decrypt_stream_passphrase_keyfile(passphrase, kf, &mut cursor, &mut out)
+            } else if let Some(hs) = fido2_secret {
+                decrypt::decrypt_stream_passphrase_fido2(passphrase, hs, &mut cursor, &mut out)
+            } else {
+                decrypt::decrypt_stream_passphrase(passphrase, &mut cursor, &mut out)
+            };
+            result.map(|_| out)
+        }
+    }
+}
 
 impl PqfileApp {
     pub(crate) fn handle_decrypt_batch(&mut self, ctx: &egui::Context) {
@@ -25,22 +148,17 @@ impl PqfileApp {
             self.decrypt_status = OpStatus::Err("Add at least one .pqf file.".to_owned());
             return;
         }
-        let priv_pem = match self.decrypt_privkey.as_str().map(str::to_owned) {
-            Some(p) => p,
-            None => {
-                self.decrypt_status = OpStatus::Err("Load a private key first.".to_owned());
+        let target = match self.build_decrypt_target() {
+            Ok(t) => t,
+            Err(msg) => {
+                self.decrypt_status = OpStatus::Err(msg);
                 return;
             }
         };
         self.decrypt_status = OpStatus::None;
         self.decrypt_batch_summary = None;
 
-        let passphrase: Option<zeroize::Zeroizing<String>> = if self.decrypt_passphrase.is_empty() {
-            None
-        } else {
-            Some(zeroize::Zeroizing::new((*self.decrypt_passphrase).clone()))
-        };
-        let stealth = self.decrypt_stealth;
+        let stealth = self.decrypt_stealth && self.decrypt_mode == DecryptMode::PrivateKey;
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -77,8 +195,24 @@ impl PqfileApp {
             std::thread::Builder::new()
                 .stack_size(16 * 1024 * 1024)
                 .spawn(move || {
+                    // Resolve the FIDO2 second factor once for the whole batch: it
+                    // means touching hardware, so files reuse the same secret
+                    // rather than prompting a touch per file.
+                    let target = match resolve_decrypt_target(target) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            for (i, ..) in &files {
+                                job.lock()
+                                    .unwrap()
+                                    .results
+                                    .push((*i, OpStatus::Err(msg.clone())));
+                            }
+                            job.lock().unwrap().finished = true;
+                            ctx.request_repaint();
+                            return;
+                        }
+                    };
                     for (i, name, data, path) in files {
-                        let pp = passphrase.as_deref().map(String::as_str);
                         // Reset per-file byte progress.
                         {
                             let mut g = job.lock().unwrap();
@@ -87,33 +221,14 @@ impl PqfileApp {
                         }
                         let job_progress = Arc::clone(&job);
                         let ctx_progress = ctx.clone();
-                        let result: Result<Vec<u8>, _> = if stealth {
-                            // decrypt_stream_stealth has no progress callback; the byte
-                            // progress bar simply stays at 0 for stealth files.
-                            let mut cursor = Cursor::new(&data);
-                            let mut out = Vec::new();
-                            decrypt::decrypt_stream_stealth(&priv_pem, &mut cursor, &mut out, pp)
-                                .map(|_| out)
-                        } else {
-                            let mut cursor = Cursor::new(&data);
-                            let mut out = Vec::new();
-                            decrypt::decrypt_stream_parallel_with_progress(
-                                &priv_pem,
-                                &mut cursor,
-                                &mut out,
-                                pp,
-                                8, // parallel batch size (matches CLI default)
-                                0, // total_hint unknown until header is parsed
-                                &move |done: u64, total: u64| {
-                                    let mut g = job_progress.lock().unwrap();
-                                    g.current_file_bytes_done = done;
-                                    g.current_file_bytes_total = total;
-                                    drop(g);
-                                    ctx_progress.request_repaint();
-                                },
-                            )
-                            .map(|_| out)
+                        let progress = move |done: u64, total: u64| {
+                            let mut g = job_progress.lock().unwrap();
+                            g.current_file_bytes_done = done;
+                            g.current_file_bytes_total = total;
+                            drop(g);
+                            ctx_progress.request_repaint();
                         };
+                        let result = decrypt_entry(&target, &data, stealth, &progress);
                         let status = match result {
                             Ok(plain) => {
                                 // Strip .pqf from name (which may be a relative path like subdir/file.txt.pqf)
@@ -149,18 +264,15 @@ impl PqfileApp {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = ctx;
-            let pp = passphrase.as_deref().map(String::as_str);
+            let target = match resolve_decrypt_target(target) {
+                Ok(t) => t,
+                Err(msg) => {
+                    self.decrypt_status = OpStatus::Err(msg);
+                    return;
+                }
+            };
             for entry in &mut self.decrypt_files {
-                let result: Result<Vec<u8>, _> = if stealth {
-                    let mut cursor = Cursor::new(&entry.data);
-                    let mut out = Vec::new();
-                    decrypt::decrypt_stream_stealth(&priv_pem, &mut cursor, &mut out, pp)
-                        .map(|_| out)
-                } else {
-                    let mut cursor = Cursor::new(&entry.data);
-                    let mut out = Vec::new();
-                    decrypt::decrypt_stream(&priv_pem, &mut cursor, &mut out, pp).map(|_| out)
-                };
+                let result = decrypt_entry(&target, &entry.data, stealth, &|_, _| {});
                 entry.status = match result {
                     Ok(plain) => {
                         let out_name = if entry.name.ends_with(".pqf") {
@@ -182,6 +294,63 @@ impl PqfileApp {
                 self.decrypt_privkey.clear();
                 self.decrypt_files.clear();
                 self.decrypt_passphrase.clear();
+                self.decrypt_v10_passphrase.clear();
+            }
+        }
+    }
+
+    /// Validates the current mode's inputs and builds the `DecryptTarget` for
+    /// the batch, without touching any hardware beyond what's already loaded.
+    fn build_decrypt_target(&self) -> Result<DecryptTarget, String> {
+        match self.decrypt_mode {
+            DecryptMode::PrivateKey => {
+                let priv_pem = self
+                    .decrypt_privkey
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "Load a private key first.".to_owned())?;
+                let unlock_passphrase = if self.decrypt_passphrase.is_empty() {
+                    None
+                } else {
+                    Some(Zeroizing::new((*self.decrypt_passphrase).clone()))
+                };
+                Ok(DecryptTarget::PrivateKey {
+                    priv_pem,
+                    unlock_passphrase,
+                })
+            }
+            DecryptMode::Passphrase => {
+                if self.decrypt_v10_passphrase.is_empty() {
+                    return Err("Enter the passphrase.".to_owned());
+                }
+                let (keyfile, fido2) = match self.decrypt_second_factor {
+                    SecondFactorMode::None => (None, None),
+                    SecondFactorMode::Keyfile => {
+                        let Some(data) = self.decrypt_keyfile.data.clone() else {
+                            return Err("Choose the keyfile used at encryption time.".to_owned());
+                        };
+                        (Some(data), None)
+                    }
+                    SecondFactorMode::Fido2 => {
+                        let Some(path) = self.decrypt_fido2_enrollment.path.clone() else {
+                            return Err("Choose the FIDO2 enrollment file.".to_owned());
+                        };
+                        #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+                        let pin = if self.decrypt_fido2_pin.is_empty() {
+                            None
+                        } else {
+                            Some(self.decrypt_fido2_pin.clone())
+                        };
+                        #[cfg(not(all(not(target_arch = "wasm32"), feature = "fido2")))]
+                        let pin: Option<Zeroizing<String>> = None;
+                        (None, Some((path, pin)))
+                    }
+                };
+                Ok(DecryptTarget::Passphrase {
+                    passphrase: self.decrypt_v10_passphrase.clone(),
+                    keyfile,
+                    fido2,
+                })
             }
         }
     }
@@ -224,82 +393,138 @@ impl PqfileApp {
         #[cfg(target_arch = "wasm32")]
         let job_running = false;
 
-        // ── Private key ───────────────────────────────────────────────────────
-        section_label(ui, "PRIVATE KEY", dark);
-        // Accept drag-drop of private key from the Keys panel (native only).
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let (drop_resp, payload) =
-                ui.dnd_drop_zone::<std::sync::Arc<KeyDragPayload>, _>(egui::Frame::NONE, |_ui| {});
-            if drop_resp.response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
-            }
-            if let Some(payload) = payload {
-                if let Some(ref priv_path) = payload.priv_path {
-                    if let Ok(data) = std::fs::read(priv_path) {
-                        self.decrypt_privkey.name = priv_path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "privkey.pem".to_owned());
-                        self.decrypt_privkey.data = Some(data);
-                        self.decrypt_privkey.path = Some(priv_path.clone());
-                    }
+        seg_tabs(
+            ui,
+            &mut self.decrypt_mode,
+            &[
+                ("Private Key", DecryptMode::PrivateKey),
+                ("Passphrase", DecryptMode::Passphrase),
+            ],
+            dark,
+        );
+
+        match self.decrypt_mode {
+            DecryptMode::PrivateKey => {
+                // ── Private key ───────────────────────────────────────────
+                section_label(ui, "PRIVATE KEY", dark);
+                card(ui, c_card(dark), c_surface1(dark), |ui| {
+                    file_row(
+                        ui,
+                        "Private key (.pem)",
+                        &mut self.decrypt_privkey,
+                        "PEM",
+                        &["pem"],
+                        dark,
+                    );
+                });
+                ui.add_space(14.0);
+
+                // Show passphrase field only when the loaded key is encrypted.
+                let key_is_encrypted = self
+                    .decrypt_privkey
+                    .as_str()
+                    .map(keygen::is_encrypted_key)
+                    .unwrap_or(false);
+                if key_is_encrypted {
+                    section_label(ui, "PASSPHRASE", dark);
+                    card(ui, c_card(dark), c_surface1(dark), |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut *self.decrypt_passphrase)
+                                .hint_text("Enter passphrase for private key…")
+                                .password(true)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+                    ui.add_space(14.0);
+                } else if self.decrypt_privkey.loaded() {
+                    self.decrypt_passphrase.clear();
                 }
+
+                // ── Options ─────────────────────────────────────────────
+                card(ui, c_card(dark), c_surface1(dark), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(
+                            !job_running,
+                            egui::Checkbox::new(&mut self.decrypt_stealth, ""),
+                        );
+                        ui.label(
+                            RichText::new("Stealth mode (file has no magic bytes / .pqf header)")
+                                .size(13.0)
+                                .color(c_text(dark)),
+                        )
+                        .on_hover_text(
+                            "Check this if the file(s) were encrypted with Stealth mode on the \
+                             Encrypt tab. Such files have no .pqf magic or version byte, so pqfile \
+                             cannot auto-detect them - you must say so yourself.",
+                        );
+                    });
+                });
+                ui.add_space(14.0);
+            }
+            DecryptMode::Passphrase => {
+                section_label(ui, "PASSPHRASE", dark);
+                card(ui, c_card(dark), c_surface1(dark), |ui| {
+                    ui.add_enabled(
+                        !job_running,
+                        egui::TextEdit::singleline(&mut *self.decrypt_v10_passphrase)
+                            .hint_text("Enter passphrase…")
+                            .password(true)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                ui.label(
+                    RichText::new(
+                        "For files written with encrypt --passphrase (v10 format, no key pair).",
+                    )
+                    .size(11.5)
+                    .color(c_subtext(dark)),
+                );
+                ui.add_space(14.0);
+
+                section_label(ui, "SECOND FACTOR (IF ANY)", dark);
+                card(ui, c_card(dark), c_surface1(dark), |ui| {
+                    ui.add_enabled_ui(!job_running, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(
+                                &mut self.decrypt_second_factor,
+                                SecondFactorMode::None,
+                                "None",
+                            );
+                            ui.selectable_value(
+                                &mut self.decrypt_second_factor,
+                                SecondFactorMode::Keyfile,
+                                "Keyfile",
+                            );
+                            #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+                            ui.selectable_value(
+                                &mut self.decrypt_second_factor,
+                                SecondFactorMode::Fido2,
+                                "FIDO2 token",
+                            );
+                        });
+                        match self.decrypt_second_factor {
+                            SecondFactorMode::None => {}
+                            SecondFactorMode::Keyfile => {
+                                ui.add_space(6.0);
+                                file_row(
+                                    ui,
+                                    "Keyfile (same file used at encryption time)",
+                                    &mut self.decrypt_keyfile,
+                                    "",
+                                    &[],
+                                    dark,
+                                );
+                            }
+                            SecondFactorMode::Fido2 => {
+                                #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+                                self.show_decrypt_fido2_second_factor(ui, dark);
+                            }
+                        }
+                    });
+                });
+                ui.add_space(14.0);
             }
         }
-        card(ui, c_card(dark), c_surface1(dark), |ui| {
-            file_row(
-                ui,
-                "Private key (.pem)",
-                &mut self.decrypt_privkey,
-                "PEM",
-                &["pem"],
-                dark,
-            );
-        });
-        ui.add_space(14.0);
-
-        // Show passphrase field only when the loaded key is encrypted.
-        let key_is_encrypted = self
-            .decrypt_privkey
-            .as_str()
-            .map(keygen::is_encrypted_key)
-            .unwrap_or(false);
-        if key_is_encrypted {
-            section_label(ui, "PASSPHRASE", dark);
-            card(ui, c_card(dark), c_surface1(dark), |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut *self.decrypt_passphrase)
-                        .hint_text("Enter passphrase for private key…")
-                        .password(true)
-                        .desired_width(f32::INFINITY),
-                );
-            });
-            ui.add_space(14.0);
-        } else if self.decrypt_privkey.loaded() {
-            self.decrypt_passphrase.clear();
-        }
-
-        // ── Options ──────────────────────────────────────────────────────────
-        card(ui, c_card(dark), c_surface1(dark), |ui| {
-            ui.horizontal(|ui| {
-                ui.add_enabled(
-                    !job_running,
-                    egui::Checkbox::new(&mut self.decrypt_stealth, ""),
-                );
-                ui.label(
-                    RichText::new("Stealth mode (file has no magic bytes / .pqf header)")
-                        .size(13.0)
-                        .color(c_text(dark)),
-                )
-                .on_hover_text(
-                    "Check this if the file(s) were encrypted with Stealth mode on the \
-                     Encrypt tab. Such files have no .pqf magic or version byte, so pqfile \
-                     cannot auto-detect them - you must say so yourself.",
-                );
-            });
-        });
-        ui.add_space(14.0);
 
         // ── Files to decrypt ──────────────────────────────────────────────────
         section_label(ui, "FILES TO DECRYPT", dark);
@@ -482,7 +707,11 @@ impl PqfileApp {
 
         // ── Decrypt All button ────────────────────────────────────────────────
         let n = self.decrypt_files.len();
-        let ready = self.decrypt_privkey.loaded() && n > 0 && !job_running;
+        let mode_ready = match self.decrypt_mode {
+            DecryptMode::PrivateKey => self.decrypt_privkey.loaded(),
+            DecryptMode::Passphrase => !self.decrypt_v10_passphrase.is_empty(),
+        };
+        let ready = mode_ready && n > 0 && !job_running;
         let btn_label = if n == 0 {
             "🔓  Decrypt All".to_owned()
         } else {

@@ -3,9 +3,9 @@ use crate::colors::{
 };
 use crate::theme::apply_theme;
 use crate::types::{
-    pem_variant_name, ArchiveSubTab, BatchPending, DecryptSubTab, FileInput, KeygenAlgorithm,
-    MultiFileEntry, OpStatus, PickedFile, RecipientEntry, Settings, ShamirSubTab, SignSubTab,
-    SigncryptSubTab, Tab,
+    pem_variant_name, ArchiveSubTab, BatchPending, DecryptMode, DecryptSubTab, EncryptMode,
+    FileInput, KeygenAlgorithm, MultiFileEntry, OpStatus, PickedFile, RecipientEntry,
+    SecondFactorMode, Settings, ShamirSubTab, SignSubTab, SigncryptSubTab, Tab,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry};
@@ -51,6 +51,25 @@ pub struct PqfileApp {
     pub(crate) encrypt_recipients: Vec<RecipientEntry>,
     pub(crate) encrypt_files: Vec<MultiFileEntry>,
     pub(crate) encrypt_batch_pending: BatchPending,
+    /// Public-key recipients, or a v10 passphrase-only file with no key pair.
+    pub(crate) encrypt_mode: EncryptMode,
+    pub(crate) encrypt_passphrase: Zeroizing<String>,
+    pub(crate) encrypt_passphrase_confirm: Zeroizing<String>,
+    pub(crate) encrypt_passphrase_visible: bool,
+    /// Which v10 second factor (if any) accompanies the passphrase.
+    pub(crate) encrypt_second_factor: SecondFactorMode,
+    pub(crate) encrypt_keyfile: FileInput,
+    pub(crate) encrypt_fido2_enrollment: FileInput,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+    pub(crate) encrypt_fido2_pin: Zeroizing<String>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+    pub(crate) fido2_enroll_pin: Zeroizing<String>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+    pub(crate) fido2_enroll_use_pin: bool,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+    pub(crate) fido2_enroll_status: OpStatus,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+    pub(crate) fido2_enroll_pending: Option<crate::types::Fido2Pending<()>>,
     /// Pad recipient count to the next power of two with random dummy slots (v9 format).
     pub(crate) encrypt_pad_recipients: bool,
     /// Pad plaintext length to a Padmé bucket before encrypting (hides exact file size).
@@ -68,7 +87,7 @@ pub struct PqfileApp {
     #[cfg(target_arch = "wasm32")]
     pub(crate) encrypt_wasm_queue: Vec<(usize, String, Vec<u8>)>,
     #[cfg(target_arch = "wasm32")]
-    pub(crate) encrypt_wasm_pub_pems: Vec<String>,
+    pub(crate) encrypt_wasm_target: Option<crate::tabs::encrypt::ResolvedEncryptTarget>,
     #[cfg(target_arch = "wasm32")]
     pub(crate) encrypt_wasm_done: usize,
     #[cfg(target_arch = "wasm32")]
@@ -79,7 +98,17 @@ pub struct PqfileApp {
     pub(crate) decrypt_privkey: FileInput,
     pub(crate) decrypt_files: Vec<MultiFileEntry>,
     pub(crate) decrypt_batch_pending: BatchPending,
+    /// Passphrase unlocking `decrypt_privkey` itself, when that key is passphrase-encrypted.
+    /// Unrelated to `decrypt_v10_passphrase` below (v10 has no key pair at all).
     pub(crate) decrypt_passphrase: Zeroizing<String>,
+    /// A private key, or a v10 passphrase-only file with no key pair.
+    pub(crate) decrypt_mode: DecryptMode,
+    pub(crate) decrypt_v10_passphrase: Zeroizing<String>,
+    pub(crate) decrypt_second_factor: SecondFactorMode,
+    pub(crate) decrypt_keyfile: FileInput,
+    pub(crate) decrypt_fido2_enrollment: FileInput,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+    pub(crate) decrypt_fido2_pin: Zeroizing<String>,
     /// File(s) were written with Encrypt tab's Stealth mode (no magic bytes to auto-detect).
     pub(crate) decrypt_stealth: bool,
     pub(crate) decrypt_status: OpStatus,
@@ -248,6 +277,23 @@ impl Default for PqfileApp {
             encrypt_recipients: Vec::new(),
             encrypt_files: Vec::new(),
             encrypt_batch_pending: Arc::new(Mutex::new(None)),
+            encrypt_mode: EncryptMode::default(),
+            encrypt_passphrase: Zeroizing::new(String::new()),
+            encrypt_passphrase_confirm: Zeroizing::new(String::new()),
+            encrypt_passphrase_visible: false,
+            encrypt_second_factor: SecondFactorMode::default(),
+            encrypt_keyfile: FileInput::default(),
+            encrypt_fido2_enrollment: FileInput::default(),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+            encrypt_fido2_pin: Zeroizing::new(String::new()),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+            fido2_enroll_pin: Zeroizing::new(String::new()),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+            fido2_enroll_use_pin: false,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+            fido2_enroll_status: OpStatus::None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+            fido2_enroll_pending: None,
             encrypt_pad_recipients: false,
             encrypt_pad: false,
             encrypt_stealth: false,
@@ -261,6 +307,13 @@ impl Default for PqfileApp {
             decrypt_files: Vec::new(),
             decrypt_batch_pending: Arc::new(Mutex::new(None)),
             decrypt_passphrase: Zeroizing::new(String::new()),
+            decrypt_mode: DecryptMode::default(),
+            decrypt_v10_passphrase: Zeroizing::new(String::new()),
+            decrypt_second_factor: SecondFactorMode::default(),
+            decrypt_keyfile: FileInput::default(),
+            decrypt_fido2_enrollment: FileInput::default(),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+            decrypt_fido2_pin: Zeroizing::new(String::new()),
             decrypt_stealth: false,
             decrypt_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -373,7 +426,7 @@ impl Default for PqfileApp {
             #[cfg(target_arch = "wasm32")]
             encrypt_wasm_queue: Vec::new(),
             #[cfg(target_arch = "wasm32")]
-            encrypt_wasm_pub_pems: Vec::new(),
+            encrypt_wasm_target: None,
             #[cfg(target_arch = "wasm32")]
             encrypt_wasm_done: 0,
             #[cfg(target_arch = "wasm32")]
@@ -898,6 +951,10 @@ impl PqfileApp {
             if all_ok {
                 self.encrypt_recipients.clear();
                 self.encrypt_files.clear();
+                self.encrypt_passphrase.clear();
+                self.encrypt_passphrase_confirm.clear();
+                self.encrypt_keyfile.clear();
+                self.encrypt_fido2_pin.clear();
                 self.encrypt_batch_summary = None;
             }
             self.encrypt_job = None;
@@ -958,6 +1015,9 @@ impl PqfileApp {
                 self.decrypt_privkey.clear();
                 self.decrypt_files.clear();
                 self.decrypt_passphrase.clear();
+                self.decrypt_v10_passphrase.clear();
+                self.decrypt_keyfile.clear();
+                self.decrypt_fido2_pin.clear();
                 self.decrypt_batch_summary = None;
             }
             self.decrypt_batch_job = None;
@@ -972,7 +1032,11 @@ impl PqfileApp {
     pub(crate) fn poll_files(&mut self) -> bool {
         self.encrypt_pubkey.poll();
         self.promote_staged_pubkey();
+        self.encrypt_keyfile.poll();
+        self.encrypt_fido2_enrollment.poll();
         self.decrypt_privkey.poll();
+        self.decrypt_keyfile.poll();
+        self.decrypt_fido2_enrollment.poll();
         self.doctor_file.poll();
 
         // Sign tab
@@ -1019,6 +1083,9 @@ impl PqfileApp {
         let dec_update = self.drain_decrypt_job_results();
         #[cfg(target_arch = "wasm32")]
         let dec_update = false;
+
+        #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+        self.poll_fido2_jobs();
 
         // Clipboard tool file slots
         self.clipboard_pubkey.poll();

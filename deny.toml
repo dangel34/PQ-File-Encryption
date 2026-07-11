@@ -33,6 +33,12 @@ ignore = [
     # and `cargo update` picks it up.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # proc-macro-error2 is unmaintained (RUSTSEC-2026-0173); pulled in transitively
+    # by hax-lib-macros -> hax-lib -> the libcrux-ml-kem tree, which is a
+    # non-wasm32 dev-dependency only (pqfile/tests/kem_oracle.rs). Never compiled
+    # into a shipped binary or the WASM bundle. The advisory itself states no
+    # safe upgrade exists, so there is nothing to update from this repo.
+    "RUSTSEC-2026-0173",
 ]
 
 # ---------------------------------------------------------------------------

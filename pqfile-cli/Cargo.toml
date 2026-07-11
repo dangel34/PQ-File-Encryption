@@ -22,6 +22,16 @@ qrcode        = { version = "0.14", default-features = false }
 rayon         = "1"
 rpassword     = "7"
 zeroize       = { version = "1", features = ["derive"] }
+# CTAP2 USB HID for `--fido2`; optional so a default build never needs libusb/hidraw.
+ctap-hid-fido2 = { version = "3.5", optional = true }
+# Random salt generation for `fido2-enroll`; optional alongside ctap-hid-fido2.
+getrandom      = { workspace = true, optional = true }
+
+[features]
+# FIDO2 hardware-token second factor for v10 (`fido2-enroll`, `--fido2` on
+# encrypt/decrypt/check). Off by default: pulls in hidapi (needs libudev-dev
+# on Linux) purely for this one opt-in feature.
+fido2 = ["dep:ctap-hid-fido2", "dep:getrandom"]
 
 [dev-dependencies]
 tempfile     = { workspace = true }

@@ -22,21 +22,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0 # full history required for blame / new-code detection
+          persist-credentials: false
 
-      - name: Install system dependencies
-        run: |
-          # Drop the runner image's packages.microsoft.com repos; they
-          # intermittently serve invalid InRelease files and fail apt-get
-          # update, and nothing we install comes from them.
-          sudo rm -f /etc/apt/sources.list.d/{microsoft-prod,azure-cli}.{list,sources}
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libssl-dev
+      - uses: ./.github/actions/install-linux-deps
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
@@ -49,15 +37,10 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/cargo-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-sonar-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-sonar-
+          key-suffix: sonar
+          cache-target: "true"
 
       - name: Run tests with coverage
         run: cargo llvm-cov --workspace --features pqfile/async --lcov --output-path lcov.info

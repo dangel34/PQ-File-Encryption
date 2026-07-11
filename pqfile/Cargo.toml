@@ -42,11 +42,13 @@ getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 wasm-bindgen-test = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-zstd = "0.13.3"
+zstd = { version = "0.13.3", features = ["zstdmt"] }
 # Core types for hardware-backed key credential storage.
 keyring-core = "1"
 # Memory-mapped I/O for zero-copy file encryption.
 memmap2 = "0.9"
+# mlock/VirtualLock for in-flight secrets (secret.rs); no allocator features.
+memsec = { version = "0.7", default-features = false, features = ["use_os"] }
 
 # Platform-specific credential store backends (no sqlite/tantivy bloat).
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -77,6 +79,10 @@ tokio = { version = "1", features = ["rt", "macros"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 proptest = "1"
+# Cross-implementation oracle test only (tests/kem_oracle.rs); not a production
+# dependency of pqfile. See docs/ROADMAP.md "Optional formally verified ML-KEM
+# backend" for why this specific crate.
+libcrux-ml-kem = "0.0.9"
 
 [[bench]]
 name = "crypto"

@@ -3,9 +3,7 @@ use crate::colors::{
     c_accent, c_card, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1,
     c_text, c_yellow,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use crate::types::KeyDragPayload;
-use crate::types::{OpStatus, Tab};
+use crate::types::{EncryptMode, OpStatus, SecondFactorMode, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_files;
 use crate::widgets::{
@@ -19,6 +17,7 @@ use std::io::{Cursor, Read};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
 enum ListAction {
     None,
@@ -26,31 +25,104 @@ enum ListAction {
     ClearAll,
 }
 
+/// What to encrypt each file to, resolved once per batch (not once per file):
+/// either the public-key recipient list, or a v10 passphrase with an optional
+/// second factor. `Fido2 { .. }` carries the enrollment path and PIN rather
+/// than an already-derived secret, since deriving it means touching hardware
+/// and must happen on the worker thread, not the UI thread.
+enum EncryptTarget {
+    PublicKeys(Vec<String>),
+    Passphrase {
+        passphrase: Zeroizing<String>,
+        keyfile: Option<Vec<u8>>,
+        #[cfg_attr(
+            not(all(not(target_arch = "wasm32"), feature = "fido2")),
+            allow(dead_code)
+        )]
+        fido2: Option<(std::path::PathBuf, Option<Zeroizing<String>>)>,
+    },
+}
+
 impl PqfileApp {
     pub(crate) fn handle_encrypt_all(&mut self, ctx: &egui::Context) {
-        if self.encrypt_recipients.is_empty() {
-            return;
-        }
-        let pub_pems: Vec<String> = self
-            .encrypt_recipients
-            .iter()
-            .map(|r| r.pem.clone())
-            .collect();
+        let target = match self.build_encrypt_target() {
+            Ok(t) => t,
+            Err(msg) => {
+                self.encrypt_batch_summary = Some(OpStatus::Err(msg));
+                return;
+            }
+        };
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.start_encrypt_job(ctx, pub_pems);
+            self.start_encrypt_job(ctx, target);
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             let _ = ctx;
-            self.run_encrypt_wasm(pub_pems);
+            self.run_encrypt_wasm(target);
+        }
+    }
+
+    /// Validates the current mode's inputs and builds the `EncryptTarget` for
+    /// the batch, without touching any hardware or file I/O beyond what's
+    /// already loaded in memory (FIDO2 derivation happens later, per-batch,
+    /// on the worker thread).
+    fn build_encrypt_target(&self) -> Result<EncryptTarget, String> {
+        match self.encrypt_mode {
+            EncryptMode::PublicKey => {
+                if self.encrypt_recipients.is_empty() {
+                    return Err("Add at least one recipient.".to_owned());
+                }
+                Ok(EncryptTarget::PublicKeys(
+                    self.encrypt_recipients
+                        .iter()
+                        .map(|r| r.pem.clone())
+                        .collect(),
+                ))
+            }
+            EncryptMode::Passphrase => {
+                if self.encrypt_passphrase.is_empty() {
+                    return Err("Enter a passphrase.".to_owned());
+                }
+                if *self.encrypt_passphrase != *self.encrypt_passphrase_confirm {
+                    return Err("Passphrases do not match.".to_owned());
+                }
+                let (keyfile, fido2) = match self.encrypt_second_factor {
+                    SecondFactorMode::None => (None, None),
+                    SecondFactorMode::Keyfile => {
+                        let Some(data) = self.encrypt_keyfile.data.clone() else {
+                            return Err("Choose a keyfile.".to_owned());
+                        };
+                        (Some(data), None)
+                    }
+                    SecondFactorMode::Fido2 => {
+                        let Some(path) = self.encrypt_fido2_enrollment.path.clone() else {
+                            return Err("Choose a FIDO2 enrollment file.".to_owned());
+                        };
+                        #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+                        let pin = if self.encrypt_fido2_pin.is_empty() {
+                            None
+                        } else {
+                            Some(self.encrypt_fido2_pin.clone())
+                        };
+                        #[cfg(not(all(not(target_arch = "wasm32"), feature = "fido2")))]
+                        let pin: Option<Zeroizing<String>> = None;
+                        (None, Some((path, pin)))
+                    }
+                };
+                Ok(EncryptTarget::Passphrase {
+                    passphrase: self.encrypt_passphrase.clone(),
+                    keyfile,
+                    fido2,
+                })
+            }
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn start_encrypt_job(&mut self, ctx: &egui::Context, pub_pems: Vec<String>) {
+    fn start_encrypt_job(&mut self, ctx: &egui::Context, target: EncryptTarget) {
         use crate::types::EncryptJob;
         use std::sync::Mutex;
 
@@ -91,6 +163,23 @@ impl PqfileApp {
         std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
             .spawn(move || {
+                // Resolve the FIDO2 second factor once for the whole batch: it
+                // means touching hardware, so files reuse the same secret
+                // rather than prompting a touch per file.
+                let target = match resolve_encrypt_target(target) {
+                    Ok(t) => t,
+                    Err(msg) => {
+                        for (i, ..) in &files {
+                            job.lock()
+                                .unwrap()
+                                .results
+                                .push((*i, OpStatus::Err(msg.clone())));
+                        }
+                        job.lock().unwrap().finished = true;
+                        ctx.request_repaint();
+                        return;
+                    }
+                };
                 for (i, name, data, path) in files {
                     let out_name = format!("{name}.pqf");
                     let out_path = resolve_out_path(&output_dir, &out_name, path);
@@ -107,7 +196,7 @@ impl PqfileApp {
                         ctx_progress.request_repaint();
                     };
                     let status = encrypt_entry(
-                        &pub_pems,
+                        &target,
                         &data,
                         original_size,
                         &out_name,
@@ -137,17 +226,20 @@ impl PqfileApp {
 
     // Enqueue files for frame-by-frame processing on WASM.
     #[cfg(target_arch = "wasm32")]
-    fn run_encrypt_wasm(&mut self, pub_pems: Vec<String>) {
+    fn run_encrypt_wasm(&mut self, target: EncryptTarget) {
         let queue: Vec<(usize, String, Vec<u8>)> = self
             .encrypt_files
             .iter()
             .enumerate()
             .map(|(i, e)| (i, e.name.clone(), e.data.clone()))
             .collect();
+        // WASM has no FIDO2 backend at all; resolve_encrypt_target only ever
+        // does real work for the (unreachable here) Fido2 variant, so this
+        // can't fail on this target.
+        self.encrypt_wasm_target = resolve_encrypt_target(target).ok();
         self.encrypt_wasm_total = queue.len();
         self.encrypt_wasm_done = 0;
         self.encrypt_wasm_queue = queue;
-        self.encrypt_wasm_pub_pems = pub_pems;
     }
 
     // Called once per egui frame when the WASM queue is non-empty.
@@ -174,20 +266,24 @@ impl PqfileApp {
         let pad_recipients = self.encrypt_pad_recipients;
         let pad = self.encrypt_pad;
         let stealth = self.encrypt_stealth;
-        let status = encrypt_entry(
-            &self.encrypt_wasm_pub_pems.clone(),
-            &data,
-            original_size,
-            &out_name,
-            None,
-            false,
-            3,
-            pad_recipients,
-            pad,
-            stealth,
-            false,
-            &|_, _| {},
-        );
+        let status = if let Some(target) = &self.encrypt_wasm_target {
+            encrypt_entry(
+                target,
+                &data,
+                original_size,
+                &out_name,
+                None,
+                false,
+                3,
+                pad_recipients,
+                pad,
+                stealth,
+                false,
+                &|_, _| {},
+            )
+        } else {
+            OpStatus::Err("Encryption target was not resolved.".to_owned())
+        };
         if idx < self.encrypt_files.len() {
             self.encrypt_files[idx].status = status;
         }
@@ -205,8 +301,10 @@ impl PqfileApp {
                 self.encrypt_files.clear();
                 self.encrypt_wasm_total = 0;
                 self.encrypt_wasm_done = 0;
+                self.encrypt_passphrase.clear();
+                self.encrypt_passphrase_confirm.clear();
             }
-            self.encrypt_wasm_pub_pems.clear();
+            self.encrypt_wasm_target = None;
         }
 
         ctx.request_repaint();
@@ -228,17 +326,37 @@ impl PqfileApp {
         #[cfg(target_arch = "wasm32")]
         let job_running = !self.encrypt_wasm_queue.is_empty();
 
-        match self.show_recipients_card(ui, dark, job_running) {
-            ListAction::Remove(i) => {
-                self.encrypt_recipients.remove(i);
+        crate::widgets::seg_tabs(
+            ui,
+            &mut self.encrypt_mode,
+            &[
+                ("Public Key", EncryptMode::PublicKey),
+                ("Passphrase", EncryptMode::Passphrase),
+            ],
+            dark,
+        );
+
+        match self.encrypt_mode {
+            EncryptMode::PublicKey => {
+                match self.show_recipients_card(ui, dark, job_running) {
+                    ListAction::Remove(i) => {
+                        self.encrypt_recipients.remove(i);
+                    }
+                    ListAction::ClearAll => {
+                        self.encrypt_recipients.clear();
+                        self.encrypt_batch_summary = None;
+                    }
+                    ListAction::None => {}
+                }
+                ui.add_space(14.0);
             }
-            ListAction::ClearAll => {
-                self.encrypt_recipients.clear();
-                self.encrypt_batch_summary = None;
+            EncryptMode::Passphrase => {
+                self.show_encrypt_passphrase_card(ui, dark, job_running);
+                ui.add_space(14.0);
+                self.show_encrypt_second_factor_card(ui, dark, job_running);
+                ui.add_space(14.0);
             }
-            ListAction::None => {}
         }
-        ui.add_space(14.0);
 
         match self.show_files_card(ui, dark, job_running) {
             ListAction::Remove(i) => {
@@ -253,7 +371,9 @@ impl PqfileApp {
         ui.add_space(14.0);
 
         #[cfg(not(target_arch = "wasm32"))]
-        self.show_compress_card(ui, dark);
+        if self.encrypt_mode == EncryptMode::PublicKey {
+            self.show_compress_card(ui, dark);
+        }
 
         self.show_padding_stealth_card(ui, dark);
 
@@ -276,9 +396,115 @@ impl PqfileApp {
             show_status(ui, &OpStatus::Err(msg.to_owned()), dark);
         }
 
-        // ── Watchfolder section (native only) ────────────────────────────────
+        // ── Watchfolder section (native only, public-key mode only) ──────────
         #[cfg(not(target_arch = "wasm32"))]
-        self.show_watchfolder_section(ui, dark);
+        if self.encrypt_mode == EncryptMode::PublicKey {
+            self.show_watchfolder_section(ui, dark);
+        }
+    }
+
+    fn show_encrypt_passphrase_card(&mut self, ui: &mut egui::Ui, dark: bool, job_running: bool) {
+        section_label(ui, "PASSPHRASE", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            ui.add_enabled(
+                !job_running,
+                egui::TextEdit::singleline(&mut *self.encrypt_passphrase)
+                    .hint_text("Enter passphrase…")
+                    .password(!self.encrypt_passphrase_visible)
+                    .desired_width(f32::INFINITY),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_enabled(
+                    !job_running,
+                    egui::TextEdit::singleline(&mut *self.encrypt_passphrase_confirm)
+                        .hint_text("Confirm passphrase…")
+                        .password(!self.encrypt_passphrase_visible)
+                        .desired_width(ui.available_width() - 60.0),
+                );
+                if ui
+                    .checkbox(&mut self.encrypt_passphrase_visible, "show")
+                    .changed()
+                {}
+            });
+            if !self.encrypt_passphrase.is_empty()
+                && !self.encrypt_passphrase_confirm.is_empty()
+                && *self.encrypt_passphrase != *self.encrypt_passphrase_confirm
+            {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Passphrases do not match.")
+                        .size(12.0)
+                        .color(c_red(dark)),
+                );
+            }
+        });
+        ui.label(
+            RichText::new(
+                "No key pair needed: the file is encrypted directly with this passphrase \
+                 (v10 format). Anyone with the passphrase (and second factor, if set below) \
+                 can decrypt it.",
+            )
+            .size(11.5)
+            .color(c_subtext(dark)),
+        );
+    }
+
+    fn show_encrypt_second_factor_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        dark: bool,
+        job_running: bool,
+    ) {
+        section_label(ui, "SECOND FACTOR (OPTIONAL)", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            ui.add_enabled_ui(!job_running, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(
+                        &mut self.encrypt_second_factor,
+                        SecondFactorMode::None,
+                        "None",
+                    );
+                    ui.selectable_value(
+                        &mut self.encrypt_second_factor,
+                        SecondFactorMode::Keyfile,
+                        "Keyfile",
+                    );
+                    #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+                    ui.selectable_value(
+                        &mut self.encrypt_second_factor,
+                        SecondFactorMode::Fido2,
+                        "FIDO2 token",
+                    );
+                });
+                match self.encrypt_second_factor {
+                    SecondFactorMode::None => {}
+                    SecondFactorMode::Keyfile => {
+                        ui.add_space(6.0);
+                        crate::widgets::file_row(
+                            ui,
+                            "Keyfile (any non-empty file)",
+                            &mut self.encrypt_keyfile,
+                            "",
+                            &[],
+                            dark,
+                        );
+                        ui.label(
+                            RichText::new(
+                                "Decryption will require this exact file's bytes in addition \
+                                 to the passphrase.",
+                            )
+                            .size(11.5)
+                            .color(c_subtext(dark)),
+                        );
+                    }
+                    SecondFactorMode::Fido2 => {
+                        #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+                        self.show_encrypt_fido2_second_factor(ui, dark);
+                    }
+                }
+            });
+        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -407,26 +633,6 @@ impl PqfileApp {
     ) -> ListAction {
         let mut action = ListAction::None;
         section_label(ui, "RECIPIENTS", dark);
-        // Accept drag-drops from the Keys panel.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let (drop_resp, payload) =
-                ui.dnd_drop_zone::<std::sync::Arc<KeyDragPayload>, _>(egui::Frame::NONE, |_ui| {});
-            if drop_resp.response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
-            }
-            if let Some(payload) = payload {
-                let pem = payload.pub_pem.clone();
-                if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
-                    let variant_name = crate::types::pem_variant_name(&pem);
-                    self.encrypt_recipients.push(crate::types::RecipientEntry {
-                        name: payload.label.clone(),
-                        pem,
-                        variant_name,
-                    });
-                }
-            }
-        }
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             ui.horizontal(|ui| {
                 let n = self.encrypt_recipients.len();
@@ -923,9 +1129,67 @@ fn padded_reader(data: &[u8], original_size: u64, pad: bool) -> Box<dyn Read + '
     }
 }
 
+/// [`EncryptTarget`] with any hardware-derived second factor already resolved
+/// to bytes, ready to reuse across every file in the batch.
+pub(crate) enum ResolvedEncryptTarget {
+    PublicKeys(Vec<String>),
+    Passphrase {
+        passphrase: Zeroizing<String>,
+        keyfile: Option<Vec<u8>>,
+        fido2_secret: Option<Zeroizing<[u8; 32]>>,
+    },
+}
+
+/// Resolves an [`EncryptTarget`] into a [`ResolvedEncryptTarget`], deriving
+/// the FIDO2 secret (a blocking hardware touch) at most once regardless of
+/// how many files the batch contains.
+fn resolve_encrypt_target(target: EncryptTarget) -> Result<ResolvedEncryptTarget, String> {
+    match target {
+        EncryptTarget::PublicKeys(pems) => Ok(ResolvedEncryptTarget::PublicKeys(pems)),
+        EncryptTarget::Passphrase {
+            passphrase,
+            keyfile,
+            fido2,
+        } => {
+            let fido2_secret = match fido2 {
+                None => None,
+                Some((path, pin)) => Some(derive_fido2_secret(
+                    &path,
+                    pin.as_deref().map(String::as_str),
+                )?),
+            };
+            Ok(ResolvedEncryptTarget::Passphrase {
+                passphrase,
+                keyfile,
+                fido2_secret,
+            })
+        }
+    }
+}
+
+/// Derives a FIDO2 `hmac-secret` output for `enrollment_path`, or fails with a
+/// clear message when this build has no FIDO2 backend. `encrypt_second_factor`
+/// can only be set to `Fido2` when the UI actually offers that option (native,
+/// `fido2` feature), so the `unreachable!` below is provably dead in every
+/// other build, but still has to type-check without the dependency present.
+pub(crate) fn derive_fido2_secret(
+    path: &std::path::Path,
+    pin: Option<&str>,
+) -> Result<Zeroizing<[u8; 32]>, String> {
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
+    {
+        crate::fido2::derive_secret(path, pin).map_err(|e| e.to_string())
+    }
+    #[cfg(not(all(not(target_arch = "wasm32"), feature = "fido2")))]
+    {
+        let _ = (path, pin);
+        unreachable!("Fido2 second factor selected without the fido2 feature/target")
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn encrypt_entry(
-    pub_pems: &[String],
+    target: &ResolvedEncryptTarget,
     data: &[u8],
     original_size: u64,
     out_name: &str,
@@ -940,6 +1204,46 @@ fn encrypt_entry(
 ) -> OpStatus {
     let chunk_size = adaptive_chunk_size(original_size);
     let (effective_path, effective_confirm) = (out_path, confirm);
+
+    let pub_pems: &[String] = match target {
+        ResolvedEncryptTarget::PublicKeys(pems) => pems.as_slice(),
+        ResolvedEncryptTarget::Passphrase {
+            passphrase,
+            keyfile,
+            fido2_secret,
+        } => {
+            let mut reader = padded_reader(data, original_size, pad);
+            let mut out = Vec::new();
+            let result = if let Some(kf) = keyfile {
+                encrypt::encrypt_stream_passphrase_keyfile(
+                    passphrase,
+                    kf,
+                    original_size,
+                    &mut *reader,
+                    &mut out,
+                )
+            } else if let Some(hs) = fido2_secret {
+                encrypt::encrypt_stream_passphrase_fido2(
+                    passphrase,
+                    hs,
+                    original_size,
+                    &mut *reader,
+                    &mut out,
+                )
+            } else {
+                encrypt::encrypt_stream_passphrase(
+                    passphrase,
+                    original_size,
+                    &mut *reader,
+                    &mut out,
+                )
+            };
+            return match result {
+                Ok(()) => save_result(out_name, &out, effective_path, effective_confirm),
+                Err(e) => OpStatus::Err(e.to_string()),
+            };
+        }
+    };
 
     // Stealth mode is single-recipient only; a stale checkbox left checked after adding a
     // second recipient is silently ignored here rather than erroring, matching how `compress`

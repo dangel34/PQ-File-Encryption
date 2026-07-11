@@ -3,9 +3,9 @@ use std::io::{Read, Write};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
-use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
+use crate::secret::LockedSecret;
 
 /// File magic bytes: ASCII `PQFL`.
 pub const MAGIC: &[u8; 4] = b"PQFL";
@@ -544,10 +544,17 @@ impl PqfHeaderV8 {
 /// (its hash is mixed into Argon2id as the secret/pepper input).
 pub(crate) const V10_FLAG_KEYFILE: u8 = 0b0000_0001;
 
+/// v10 header flag bit: key derivation additionally requires a FIDO2 hardware
+/// token's `hmac-secret` extension output (domain-separated hash mixed into
+/// Argon2id as the secret/pepper input, the same slot [`V10_FLAG_KEYFILE`]
+/// occupies). Mutually exclusive with [`V10_FLAG_KEYFILE`]: pqfile never
+/// writes both bits together, and a header carrying both is rejected below.
+pub(crate) const V10_FLAG_FIDO2: u8 = 0b0000_0010;
+
 /// All v10 flag bits this build understands. Headers carrying unknown bits are
 /// rejected with [`PqfileError::UnsupportedHeaderFlags`] rather than silently
 /// decrypted under different assumptions than the sender's.
-pub(crate) const V10_KNOWN_FLAGS: u8 = V10_FLAG_KEYFILE;
+pub(crate) const V10_KNOWN_FLAGS: u8 = V10_FLAG_KEYFILE | V10_FLAG_FIDO2;
 
 /// Parsed header for v10 (passphrase-only) format.
 pub(crate) struct PqfHeaderV10 {
@@ -559,7 +566,8 @@ pub(crate) struct PqfHeaderV10 {
     pub t_cost: u32,
     /// Argon2id parallelism (lanes).
     pub p_cost: u32,
-    /// Feature flag bits ([`V10_FLAG_KEYFILE`]; remaining bits reserved).
+    /// Feature flag bits ([`V10_FLAG_KEYFILE`], [`V10_FLAG_FIDO2`]; remaining
+    /// bits reserved; the two are mutually exclusive).
     pub flags: u8,
     /// Per-file base nonce (12 bytes; only first 8 are random, last 4 are the chunk counter).
     pub nonce: [u8; NONCE_LEN],
@@ -593,7 +601,10 @@ impl PqfHeaderV10 {
         r.read_exact(&mut p)?;
         let mut flags = [0u8; 1];
         r.read_exact(&mut flags)?;
-        if flags[0] & !V10_KNOWN_FLAGS != 0 {
+        let known_and_exclusive = (flags[0] & !V10_KNOWN_FLAGS) == 0
+            && (flags[0] & (V10_FLAG_KEYFILE | V10_FLAG_FIDO2))
+                != (V10_FLAG_KEYFILE | V10_FLAG_FIDO2);
+        if !known_and_exclusive {
             return Err(PqfileError::UnsupportedHeaderFlags(flags[0]));
         }
         let (nonce, original_size) = read_nonce_and_size(r)?;
@@ -860,12 +871,16 @@ pub(crate) fn fill_chunk<R: Read + ?Sized>(
 pub(crate) fn hybrid_hkdf(
     x25519_ss: &[u8; 32],
     ml_ss: &[u8],
-) -> Result<Zeroizing<[u8; 32]>, PqfileError> {
-    let mut ikm = Zeroizing::new(Vec::with_capacity(64));
-    ikm.extend_from_slice(x25519_ss);
-    ikm.extend_from_slice(ml_ss);
-    let hk = Hkdf::<Sha256>::new(None, &ikm);
-    let mut okm = Zeroizing::new([0u8; 32]);
+) -> Result<LockedSecret<32>, PqfileError> {
+    // Both the X25519 DH output and the ML-KEM-768 shared secret are raw key
+    // material, so they're combined in mlocked storage rather than a plain
+    // `Zeroizing<Vec<u8>>` - the intermediate concatenation is exactly as
+    // sensitive as the HKDF output it feeds.
+    let mut ikm = LockedSecret::<64>::zeroed();
+    ikm[..32].copy_from_slice(x25519_ss);
+    ikm[32..].copy_from_slice(ml_ss);
+    let hk = Hkdf::<Sha256>::new(None, ikm.as_ref());
+    let mut okm = LockedSecret::<32>::zeroed();
     hk.expand(b"pqfile-hybrid-v1", okm.as_mut())
         .map_err(|_| PqfileError::EncryptionFailure)?;
     Ok(okm)

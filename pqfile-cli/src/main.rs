@@ -11,6 +11,9 @@ use pqfile::{
     archive, decrypt, encrypt, format, keygen, rekey, repassphrase, revoke, shamir, sign, signcrypt,
 };
 
+#[cfg(feature = "fido2")]
+mod fido2;
+
 #[derive(Parser)]
 #[command(
     name = "pqfile",
@@ -147,6 +150,18 @@ enum Command {
         /// like a private key.
         #[arg(long, value_name = "PATH", requires = "passphrase_only")]
         keyfile: Option<PathBuf>,
+        /// Mix a FIDO2 hardware token's hmac-secret output into the --passphrase
+        /// (v10) key derivation as a second factor, instead of --keyfile (the two
+        /// are mutually exclusive). Pass the enrollment file created by
+        /// `pqfile fido2-enroll`.
+        #[cfg(feature = "fido2")]
+        #[arg(
+            long,
+            value_name = "ENROLLMENT_FILE",
+            requires = "passphrase_only",
+            conflicts_with = "keyfile"
+        )]
+        fido2: Option<PathBuf>,
         /// Pad the plaintext length to a Padmé bucket before encrypting, so the
         /// ciphertext length no longer reveals the exact plaintext size (only a
         /// coarser range; overhead is at most ~12%). The true size still travels
@@ -190,6 +205,16 @@ enum Command {
         /// encrypted with `encrypt --keyfile`). Must be the identical file content.
         #[arg(long, value_name = "PATH", requires = "passphrase_v10")]
         keyfile: Option<PathBuf>,
+        /// Enrollment file (from `pqfile fido2-enroll`) for a v10 file encrypted
+        /// with `encrypt --fido2`. Mutually exclusive with --keyfile.
+        #[cfg(feature = "fido2")]
+        #[arg(
+            long,
+            value_name = "ENROLLMENT_FILE",
+            requires = "passphrase_v10",
+            conflicts_with = "keyfile"
+        )]
+        fido2: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         stealth: bool,
     },
@@ -219,6 +244,16 @@ enum Command {
         /// encrypted with `encrypt --keyfile`). Must be the identical file content.
         #[arg(long, value_name = "PATH", requires = "passphrase_v10")]
         keyfile: Option<PathBuf>,
+        /// Enrollment file (from `pqfile fido2-enroll`) for a v10 file encrypted
+        /// with `encrypt --fido2`. Mutually exclusive with --keyfile.
+        #[cfg(feature = "fido2")]
+        #[arg(
+            long,
+            value_name = "ENROLLMENT_FILE",
+            requires = "passphrase_v10",
+            conflicts_with = "keyfile"
+        )]
+        fido2: Option<PathBuf>,
         /// Check a file written with `encrypt --stealth`. Requires -k; mutually
         /// exclusive with --passphrase.
         #[arg(long, default_value_t = false, conflicts_with = "passphrase_v10")]
@@ -226,6 +261,29 @@ enum Command {
     },
     Inspect {
         input: PathBuf,
+    },
+    /// Enroll a FIDO2 hardware security key as a v10 second factor.
+    ///
+    /// Creates a non-resident CTAP2 credential on the attached authenticator
+    /// requesting the hmac-secret extension, and writes an enrollment file
+    /// recording the credential ID and a fresh random salt. Pass that file to
+    /// `encrypt --fido2` / `decrypt --fido2` / `check --fido2` in place of
+    /// `--keyfile`. The enrollment file is not sensitive on its own:
+    /// reproducing the derived secret requires physically touching the same
+    /// token, so it is fine to store or back up like ordinary configuration.
+    #[cfg(feature = "fido2")]
+    #[command(name = "fido2-enroll")]
+    Fido2Enroll {
+        /// Path to write the enrollment file.
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: PathBuf,
+        /// Overwrite an existing enrollment file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
+        /// This token requires a PIN; prompt for it now and record that
+        /// `--fido2` must prompt for one too when deriving the secret later.
+        #[arg(long, default_value_t = false)]
+        pin: bool,
     },
     /// Print a shell completion script to stdout.
     ///
@@ -581,6 +639,10 @@ struct EncryptOpts {
     kdf_mem: u32,
     kdf_time: u32,
     keyfile: Option<PathBuf>,
+    /// Always present regardless of the `fido2` feature so downstream logic
+    /// (`run_encrypt_passphrase`) stays uniform; without the feature the CLI
+    /// arg simply doesn't exist, so this is always `None` in that build.
+    fido2: Option<PathBuf>,
     pad: bool,
     stealth: bool,
 }
@@ -844,6 +906,7 @@ fn interactive_encrypt() -> Result<(), PqfileError> {
             kdf_mem: 65536,
             kdf_time: 3,
             keyfile: None,
+            fido2: None,
             pad: false,
             stealth: false,
         },
@@ -876,6 +939,7 @@ fn interactive_decrypt() -> Result<(), PqfileError> {
     run_decrypt(
         key,
         passphrase_v10,
+        None,
         None,
         false,
         65536,
@@ -965,6 +1029,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             kdf_mem,
             kdf_time,
             keyfile,
+            #[cfg(feature = "fido2")]
+            fido2,
             pad,
             stealth,
         } => run_encrypt(
@@ -988,6 +1054,10 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
                 kdf_mem,
                 kdf_time,
                 keyfile,
+                #[cfg(feature = "fido2")]
+                fido2,
+                #[cfg(not(feature = "fido2"))]
+                fido2: None,
                 pad,
                 stealth,
             },
@@ -1002,11 +1072,17 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             max_kdf_mem,
             max_kdf_time,
             keyfile,
+            #[cfg(feature = "fido2")]
+            fido2,
             stealth,
         } => run_decrypt(
             key,
             passphrase_v10,
             keyfile,
+            #[cfg(feature = "fido2")]
+            fido2,
+            #[cfg(not(feature = "fido2"))]
+            None,
             no_config,
             max_kdf_mem,
             max_kdf_time,
@@ -1024,11 +1100,17 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             max_kdf_mem,
             max_kdf_time,
             keyfile,
+            #[cfg(feature = "fido2")]
+            fido2,
             stealth,
         } => run_check(
             key,
             passphrase_v10,
             keyfile,
+            #[cfg(feature = "fido2")]
+            fido2,
+            #[cfg(not(feature = "fido2"))]
+            None,
             no_config,
             max_kdf_mem,
             max_kdf_time,
@@ -1037,6 +1119,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             json,
         ),
         Command::Inspect { input } => inspect(input.as_path(), json),
+        #[cfg(feature = "fido2")]
+        Command::Fido2Enroll { output, force, pin } => run_fido2_enroll(output, force, pin, json),
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "pqfile", &mut io::stdout());
             Ok(())
@@ -1489,6 +1573,18 @@ fn run_encrypt_passphrase(
             &mut reader,
             &mut writer,
         )?;
+    } else if let Some(ref fido2_path) = opts.fido2 {
+        let hmac_secret = derive_fido2_secret(fido2_path)?;
+        encrypt::encrypt_stream_passphrase_fido2_with_params(
+            passphrase,
+            &hmac_secret,
+            opts.kdf_mem,
+            opts.kdf_time,
+            4,
+            original_size,
+            &mut reader,
+            &mut writer,
+        )?;
     } else {
         encrypt::encrypt_stream_passphrase_with_params(
             passphrase,
@@ -1809,6 +1905,7 @@ fn run_decrypt(
     key: Option<PathBuf>,
     passphrase_v10: bool,
     keyfile: Option<PathBuf>,
+    fido2: Option<PathBuf>,
     no_config: bool,
     max_kdf_mem: u32,
     max_kdf_time: u32,
@@ -1869,6 +1966,16 @@ fn run_decrypt(
                 &mut *reader,
                 &mut writer,
             )?;
+        } else if let Some(ref fido2_path) = fido2 {
+            let hmac_secret = derive_fido2_secret(fido2_path)?;
+            decrypt::decrypt_stream_passphrase_fido2_with_limits(
+                pp.as_str(),
+                &hmac_secret,
+                max_kdf_mem,
+                max_kdf_time,
+                &mut *reader,
+                &mut writer,
+            )?;
         } else {
             decrypt::decrypt_stream_passphrase_with_limits(
                 pp.as_str(),
@@ -1900,6 +2007,26 @@ fn run_decrypt(
 
     emit_json_ok(json, to_stdout, &out_path)?;
     Ok(())
+}
+
+/// Derives the `--fido2` second-factor secret, uniformly regardless of
+/// whether this build has the `fido2` feature. `opts.fido2` /
+/// `run_decrypt`'s and `run_check`'s `fido2` parameter are always `None`
+/// without the feature (the CLI arg doesn't exist to set them), so the
+/// `not(feature = "fido2")` arm below is provably unreachable in that build,
+/// but still has to type-check.
+fn derive_fido2_secret(
+    enrollment_path: &Path,
+) -> Result<zeroize::Zeroizing<[u8; 32]>, PqfileError> {
+    #[cfg(feature = "fido2")]
+    {
+        fido2::derive_secret(enrollment_path)
+    }
+    #[cfg(not(feature = "fido2"))]
+    {
+        let _ = enrollment_path;
+        unreachable!("fido2 feature disabled; --fido2 CLI flag does not exist without it")
+    }
 }
 
 /// `Write` sink that discards everything but remembers how many bytes passed through.
@@ -1936,6 +2063,7 @@ fn run_check(
     key: Option<PathBuf>,
     passphrase_v10: bool,
     keyfile: Option<PathBuf>,
+    fido2: Option<PathBuf>,
     no_config: bool,
     max_kdf_mem: u32,
     max_kdf_time: u32,
@@ -1991,6 +2119,16 @@ fn run_check(
                 &mut *reader,
                 &mut sink,
             )?;
+        } else if let Some(ref fido2_path) = fido2 {
+            let hmac_secret = derive_fido2_secret(fido2_path)?;
+            decrypt::decrypt_stream_passphrase_fido2_with_limits(
+                pp.as_str(),
+                &hmac_secret,
+                max_kdf_mem,
+                max_kdf_time,
+                &mut *reader,
+                &mut sink,
+            )?;
         } else {
             decrypt::decrypt_stream_passphrase_with_limits(
                 pp.as_str(),
@@ -2022,6 +2160,42 @@ fn run_check(
         println!(
             "OK: {input} authenticated ({count} plaintext byte{})",
             if count == 1 { "" } else { "s" }
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "fido2")]
+fn run_fido2_enroll(
+    output: PathBuf,
+    force: bool,
+    pin: bool,
+    json: bool,
+) -> Result<(), PqfileError> {
+    ensure_overwrite_allowed(&output, false, force)?;
+    let pin_value = if pin {
+        Some(zeroize::Zeroizing::new(
+            rpassword::prompt_password("Enter FIDO2 PIN: ").map_err(PqfileError::Io)?,
+        ))
+    } else {
+        None
+    };
+    println!("Touch the security key to create the enrollment credential...");
+    fido2::enroll(&output, pin_value.as_deref().map(|z| z.as_str()))?;
+
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("output", &output.to_string_lossy()),
+            ])
+        );
+    } else {
+        println!("FIDO2 enrollment written to {}", output.display());
+        println!(
+            "Use --fido2 {} with encrypt/decrypt/check --passphrase.",
+            output.display()
         );
     }
     Ok(())
