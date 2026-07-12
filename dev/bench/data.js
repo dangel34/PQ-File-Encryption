@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783819177362,
+  "lastUpdate": 1783878960125,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -2039,6 +2039,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48916,
             "range": "± 6745",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "66f873e088759230f243ff633e8a0ff0198a93f4",
+          "message": "chore(deps): update Cargo.lock and CI workflows with new dependencies and benchmarks\n\n- Added new dependencies including `bincode`, `derive_more`, and `iai-callgrind` to `Cargo.lock`, enhancing serialization and benchmarking capabilities.\n- Introduced deterministic instruction-count benchmarks using `iai-callgrind` in `benches/iai.rs`, gated in CI to ensure performance regressions are tracked.\n- Updated CI workflows to include the new `iai-bench` job for running benchmarks and added a `kem-libcrux-check` job to verify the optional ML-KEM backend.\n- Enhanced documentation in `ROADMAP.md` to reflect the addition of the deterministic benchmark gate and optional backend features.",
+          "timestamp": "2026-07-12T13:52:19-04:00",
+          "tree_id": "6c5cbdf27fad6851cc135d1041fa6fb9828eb6b5",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/66f873e088759230f243ff633e8a0ff0198a93f4"
+        },
+        "date": 1783878959857,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66982,
+            "range": "± 491",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 961975,
+            "range": "± 13836",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 104533427,
+            "range": "± 278673",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 110365,
+            "range": "± 508",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 974708,
+            "range": "± 1990",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93079606,
+            "range": "± 379728",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68166,
+            "range": "± 307",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1017494,
+            "range": "± 7273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 98994045,
+            "range": "± 233277",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 109556,
+            "range": "± 637",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1015826,
+            "range": "± 15128",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 98534673,
+            "range": "± 352008",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48375,
+            "range": "± 93",
             "unit": "ns/iter"
           }
         ]
