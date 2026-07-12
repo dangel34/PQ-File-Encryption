@@ -240,11 +240,11 @@ version = "3.20.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.bytemuck]]
-version = "1.25.0"
+version = "1.25.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.bytemuck_derive]]
-version = "1.10.2"
+version = "1.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.byteorder-lite]]
@@ -276,7 +276,7 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.cc]]
-version = "1.2.66"
+version = "1.2.67"
 criteria = "safe-to-deploy"
 
 [[exemptions.cfg_aliases]]
@@ -428,7 +428,7 @@ version = "2.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.der]]
-version = "0.8.0"
+version = "0.8.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.der-parser]]
@@ -760,7 +760,7 @@ version = "2.14.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.inotify]]
-version = "0.11.3"
+version = "0.11.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.inotify-sys]]
@@ -1232,7 +1232,7 @@ version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.poly1305]]
-version = "0.9.0"
+version = "0.9.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.polycool]]
@@ -1240,7 +1240,7 @@ version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polyval]]
-version = "0.7.1"
+version = "0.7.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.portable-atomic]]
@@ -1300,7 +1300,7 @@ version = "6.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rand]]
-version = "0.9.4"
+version = "0.9.5"
 criteria = "safe-to-run"
 
 [[exemptions.rand]]
@@ -1340,11 +1340,11 @@ version = "0.9.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.regex]]
-version = "1.12.4"
+version = "1.13.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.regex-automata]]
-version = "0.4.14"
+version = "0.4.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.regex-syntax]]
@@ -2100,11 +2100,11 @@ version = "5.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy]]
-version = "0.8.53"
+version = "0.8.54"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy-derive]]
-version = "0.8.53"
+version = "0.8.54"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerofrom]]

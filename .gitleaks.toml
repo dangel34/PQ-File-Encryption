@@ -7,23 +7,23 @@ title = "pqfile gitleaks config"
 # Inherit the default ruleset and add project-specific allowances below.
 useDefault = true
 
-[[allowlists]]
-description = "Test passphrases and key fixtures in unit tests"
+# NOTE: gitleaks' top-level config supports exactly one `[allowlist]` table
+# (see the `ViperConfig` struct in gitleaks' own source, config/config.go -
+# `Allowlist Allowlist` is a single struct, not a slice). `[[allowlists]]`
+# (plural, array-of-tables) is only valid *inside* `[[rules]]` blocks; at the
+# top level it's an unrecognised key that TOML/viper silently drops rather
+# than erroring on. This file used to have three separate top-level
+# `[[allowlists]]` blocks, which meant none of them were ever actually
+# applied - confirmed by a real CI gitleaks failure (2026-07-11) on files
+# that should have been covered by the "test fixtures" rule below, including
+# the very first compat-vector commit that introduced this directory back in
+# June. All entries are merged into the single `[allowlist]` table gitleaks
+# actually reads. Paths and regexes are independent OR'd checks (gitleaks
+# default `MatchCondition`), so mixing path-based and line-regex-based rules
+# in one table does not require them to both match.
+[allowlist]
+description = "Test fixtures, cargo metadata, and known false positives - not real secrets"
 regexTarget = "line"
-# Suppress lines containing only test passphrases or synthetic key material.
-# These are not real secrets; they are hardcoded test inputs.
-regexes = [
-    # Passphrase strings used in unit tests
-    '''hunter2''',
-    '''correct horse''',
-    '''correct''',
-    '''secret''',
-    # Argon2id / AES-GCM test vectors (all-same-byte arrays, e.g. [0x42u8; 64])
-    '''\[0x[0-9a-fA-F]{2}u8; \d+\]''',
-]
-
-[[allowlists]]
-description = "Static test-vector PEM keys and ciphertexts are intentional test fixtures, not real secrets"
 paths = [
     '''tests/static_vectors\.rs''',
     '''tests/vectors\.rs''',
@@ -31,12 +31,25 @@ paths = [
     # Match both bare `tests/compat/` and workspace-prefixed `pqfile/tests/compat/`
     '''(pqfile/)?tests/compat/''',
 ]
-
-[[allowlists]]
-description = "Cargo package metadata"
-regexTarget = "line"
 regexes = [
+    # Passphrase strings used in unit tests. The quoted-literal forms (rather
+    # than the bare words) are deliberate: matching bare "secret" or "correct"
+    # would also suppress findings on unrelated lines that merely mention
+    # those words in prose or identifiers (e.g. a doc comment, or a real leaked
+    # value assigned to a variable named `secret`), not just the test literals.
+    '''hunter2''',
+    '''correct horse''',
+    '''b?"correct"''',
+    '''b?"secret"''',
+    # Argon2id / AES-GCM test vectors (all-same-byte arrays, e.g. [0x42u8; 64])
+    '''\[0x[0-9a-fA-F]{2}u8; \d+\]''',
     # Maintainer email in Cargo.toml / packaging files is not a credential.
     '''maintainer\s*=''',
     '''copyright\s*=''',
+    # Cargo.lock's `"libcrux-secrets",` dependency-name line trips the default
+    # `generic-api-key` rule on the word "secrets".
+    '''"libcrux-secrets"''',
+    # docs/ROADMAP.md prose describing the padme_768.pqf compat vector trips
+    # `generic-api-key` on "private key" next to the backtick-quoted filename.
+    '''private key, `padme_768\.pqf` \+ its own 37-byte''',
 ]
