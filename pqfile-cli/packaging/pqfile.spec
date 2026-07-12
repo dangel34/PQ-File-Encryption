@@ -1,5 +1,5 @@
 Name:           pqfile
-Version:        4.2.4
+Version:        4.3.0
 Release:        1%{?dist}
 Summary:        Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305
 
@@ -19,6 +19,9 @@ install -D -m 755 %{_builddir}/pqfile %{buildroot}%{_bindir}/pqfile
 %{_bindir}/pqfile
 
 %changelog
+* Sat Jul 11 2026 dangel34 <dma38091@protonmail.com> - 4.3.0-1
+- v10 passphrase encryption, FIDO2/keyfile second factor, stealth mode, Padme padding, authenticated headers, SLH-DSA-SHAKE-192f signatures
+
 * Fri Jun 26 2026 dangel34 <dma38091@protonmail.com> - 4.2.4-1
 - Dependency and GitHub Actions updates; fixed release version-consistency check; QR clipboard security fix
 

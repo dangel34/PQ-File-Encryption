@@ -4,7 +4,7 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
-## [Unreleased]
+## [4.3.0] - 2026-07-11
 
 ### New features
 
