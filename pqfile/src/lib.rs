@@ -94,6 +94,7 @@ pub mod format;
 pub mod keygen;
 
 pub(crate) mod fsutil;
+pub(crate) mod kem_backend;
 pub(crate) mod passphrase;
 pub(crate) mod progress;
 pub(crate) mod secret;

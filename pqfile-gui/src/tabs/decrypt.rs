@@ -16,6 +16,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
+use zeroize::Zeroize;
 use zeroize::Zeroizing;
 
 /// What to decrypt each file with, resolved once per batch: either a private
@@ -293,8 +294,8 @@ impl PqfileApp {
             {
                 self.decrypt_privkey.clear();
                 self.decrypt_files.clear();
-                self.decrypt_passphrase.clear();
-                self.decrypt_v10_passphrase.clear();
+                self.decrypt_passphrase.zeroize();
+                self.decrypt_v10_passphrase.zeroize();
             }
         }
     }
@@ -437,7 +438,7 @@ impl PqfileApp {
                     });
                     ui.add_space(14.0);
                 } else if self.decrypt_privkey.loaded() {
-                    self.decrypt_passphrase.clear();
+                    self.decrypt_passphrase.zeroize();
                 }
 
                 // ── Options ─────────────────────────────────────────────

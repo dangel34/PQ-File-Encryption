@@ -46,12 +46,6 @@ pub(crate) fn tab_btn(
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn tab_heading(ui: &mut egui::Ui, text: &str, dark: bool) {
-    ui.label(RichText::new(text).size(18.0).strong().color(c_text(dark)));
-    ui.add_space(4.0);
-}
-
 /// Renders a tab heading with a "Learn more..." button on the right.
 /// Returns `true` if the button was clicked this frame.
 pub(crate) fn tab_heading_help(ui: &mut egui::Ui, text: &str, dark: bool) -> bool {
@@ -567,6 +561,37 @@ pub(crate) fn reveal_in_explorer(path: &str) {
     }
 }
 
+/// Writes `data` to `path` atomically via a temp file in the same directory,
+/// synced and renamed into place, so a crash or full disk mid-write can never
+/// leave `path` truncated or corrupted (mirrors the CLI's `AtomicOutput`).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let pid = std::process::id();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let mut tmp_name = path.file_name().unwrap_or_default().to_owned();
+    tmp_name.push(format!(".{pid}-{ts}.tmp"));
+    let tmp = path.with_file_name(tmp_name);
+    let write_result = (|| {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()
+    })();
+    match write_result {
+        Ok(()) => std::fs::rename(&tmp, path),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 pub(crate) fn save_result(
     filename: &str,
     data: &[u8],
@@ -591,7 +616,7 @@ pub(crate) fn save_result(
                 }
             }
         }
-        match std::fs::write(&path, data) {
+        match atomic_write(&path, data) {
             Ok(()) => OpStatus::Ok(format!("Saved →  {}", path.display())),
             Err(e) => OpStatus::Err(e.to_string()),
         }

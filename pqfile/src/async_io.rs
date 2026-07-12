@@ -81,7 +81,9 @@ where
     // reader that produces more bytes than MAX_ORIGINAL_SIZE (e.g. a misbehaving
     // or malicious peer in a proxy/server use case) can never force an unbounded
     // allocation before the size check below runs.
-    let mut plaintext = Vec::with_capacity(original_size.min(64 * 1024 * 1024) as usize);
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(
+        original_size.min(64 * 1024 * 1024) as usize
+    ));
     reader
         .take(crate::format::MAX_ORIGINAL_SIZE + 1)
         .read_to_end(&mut plaintext)

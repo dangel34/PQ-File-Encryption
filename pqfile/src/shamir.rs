@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use ml_kem::{DecapsulationKey1024, DecapsulationKey512, DecapsulationKey768, KeyExport, Seed};
 use pem::Pem;
 use sha3::{Digest, Sha3_256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -11,6 +10,7 @@ use crate::format::{
     HYBRID_SEED_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
 };
 use crate::hardware;
+use crate::kem_backend::{ActiveKemBackend, KemBackend, KemSize};
 use crate::keygen::{
     PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_512, PRIV_ENC_TAG_HYBRID_768, PRIV_TAG,
     PRIV_TAG_1024, PRIV_TAG_512, PRIV_TAG_HYBRID_768, PUB_TAG, PUB_TAG_1024, PUB_TAG_512,
@@ -285,19 +285,16 @@ fn pubkey_fp(kem_variant: u16, seed: &[u8]) -> Result<[u8; 16], PqfileError> {
 fn pubkey_bytes(kem_variant: u16, seed: &[u8]) -> Result<Vec<u8>, PqfileError> {
     match kem_variant {
         KEM_VARIANT_512 => {
-            let s = Seed::try_from(seed).map_err(|_| bad_len(64, seed.len()))?;
-            let dk = DecapsulationKey512::from_seed(s);
-            Ok(dk.encapsulation_key().to_bytes().as_slice().to_vec())
+            let s: &[u8; 64] = seed.try_into().map_err(|_| bad_len(64, seed.len()))?;
+            Ok(ActiveKemBackend::ek_from_seed(KemSize::Kem512, s))
         }
         KEM_VARIANT_768 => {
-            let s = Seed::try_from(seed).map_err(|_| bad_len(64, seed.len()))?;
-            let dk = DecapsulationKey768::from_seed(s);
-            Ok(dk.encapsulation_key().to_bytes().as_slice().to_vec())
+            let s: &[u8; 64] = seed.try_into().map_err(|_| bad_len(64, seed.len()))?;
+            Ok(ActiveKemBackend::ek_from_seed(KemSize::Kem768, s))
         }
         KEM_VARIANT_1024 => {
-            let s = Seed::try_from(seed).map_err(|_| bad_len(64, seed.len()))?;
-            let dk = DecapsulationKey1024::from_seed(s);
-            Ok(dk.encapsulation_key().to_bytes().as_slice().to_vec())
+            let s: &[u8; 64] = seed.try_into().map_err(|_| bad_len(64, seed.len()))?;
+            Ok(ActiveKemBackend::ek_from_seed(KemSize::Kem1024, s))
         }
         KEM_VARIANT_HYBRID_768 => {
             if seed.len() != HYBRID_SEED_LEN_768 {
@@ -308,11 +305,13 @@ fn pubkey_bytes(kem_variant: u16, seed: &[u8]) -> Result<Vec<u8>, PqfileError> {
                     .expect("seed length validated above; 32 bytes always available"),
             );
             let x25519_pk = X25519PublicKey::from(&x25519_sk);
-            let ml_s = Seed::try_from(&seed[32..]).map_err(|_| bad_len(64, seed.len() - 32))?;
-            let ml_dk = DecapsulationKey768::from_seed(ml_s);
+            let ml_s: &[u8; 64] = seed[32..]
+                .try_into()
+                .map_err(|_| bad_len(64, seed.len() - 32))?;
+            let ml_ek = ActiveKemBackend::ek_from_seed(KemSize::Kem768, ml_s);
             let mut out = Vec::new();
             out.extend_from_slice(x25519_pk.as_bytes());
-            out.extend_from_slice(ml_dk.encapsulation_key().to_bytes().as_slice());
+            out.extend_from_slice(&ml_ek);
             Ok(out)
         }
         v => Err(PqfileError::UnsupportedKem(v)),

@@ -2,21 +2,18 @@ use std::fs;
 use std::path::Path;
 
 use hkdf::Hkdf;
-use ml_kem::{
-    DecapsulationKey1024, DecapsulationKey512, DecapsulationKey768, Kem, KeyExport, MlKem1024,
-    MlKem512, MlKem768, Seed,
-};
 use pem::Pem;
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::PqfileError;
 use crate::format::{
     HYBRID_EK_LEN_768, HYBRID_SEED_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768,
 };
 use crate::hardware;
+use crate::kem_backend::{ActiveKemBackend, KemBackend, KemSize};
 use crate::passphrase;
 
 pub(crate) const PUB_TAG_512: &str = "ML-KEM-512 PUBLIC KEY";
@@ -97,14 +94,13 @@ pub fn keygen_bytes(level: u16, passphrase: Option<&str>) -> Result<(String, Str
 /// to the source key; it is a one-way derivation.
 #[must_use = "keygen result must be used"]
 pub fn keygen_bytes_from_seed(
-    seed: [u8; 64],
+    mut seed: [u8; 64],
     passphrase: Option<&str>,
 ) -> Result<(String, String), PqfileError> {
-    let seed_arr = Seed::try_from(seed.as_ref()).map_err(|_| PqfileError::EncryptionFailure)?;
-    let dk = DecapsulationKey768::from_seed(seed_arr);
-    let ek = dk.encapsulation_key();
-    let pub_pem = pem::encode(&Pem::new(PUB_TAG, ek.to_bytes().as_slice().to_vec()));
-    let seed_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
+    let ek_bytes = ActiveKemBackend::ek_from_seed(KemSize::Kem768, &seed);
+    let pub_pem = pem::encode(&Pem::new(PUB_TAG, ek_bytes));
+    let seed_bytes = Zeroizing::new(seed.to_vec());
+    seed.zeroize();
     let priv_pem = encode_private_key(&seed_bytes, passphrase, PRIV_TAG, PRIV_ENC_TAG)?;
     Ok((pub_pem, priv_pem))
 }
@@ -226,26 +222,38 @@ fn ssh_read_string<'a>(data: &'a [u8], pos: &mut usize) -> Result<&'a [u8], Pqfi
     Ok(s)
 }
 
+/// Draws a fresh random 64-byte seed and derives the EK bytes for `size`.
+/// Equivalent to `ml-kem`'s own random keypair generation: `Kem::generate_keypair`'s
+/// RNG path draws `d` then `z` (32 bytes each) and derives the key the same way
+/// `from_seed` does via `seed.split()`, so a fresh random 64-byte seed here produces
+/// a uniformly random key pair exactly as before.
+fn random_seed_and_ek(size: KemSize) -> Result<(Zeroizing<[u8; 64]>, Vec<u8>), PqfileError> {
+    let mut seed = Zeroizing::new([0u8; 64]);
+    getrandom::fill(seed.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
+    let ek_bytes = ActiveKemBackend::ek_from_seed(size, &seed);
+    Ok((seed, ek_bytes))
+}
+
 fn keygen_bytes_512(passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
-    let (dk, ek) = MlKem512::generate_keypair();
-    let pub_pem = pem::encode(&Pem::new(PUB_TAG_512, ek.to_bytes().as_slice().to_vec()));
-    let seed_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
+    let (seed, ek_bytes) = random_seed_and_ek(KemSize::Kem512)?;
+    let pub_pem = pem::encode(&Pem::new(PUB_TAG_512, ek_bytes));
+    let seed_bytes = Zeroizing::new(seed.to_vec());
     let priv_pem = encode_private_key(&seed_bytes, passphrase, PRIV_TAG_512, PRIV_ENC_TAG_512)?;
     Ok((pub_pem, priv_pem))
 }
 
 fn keygen_bytes_768(passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
-    let (dk, ek) = MlKem768::generate_keypair();
-    let pub_pem = pem::encode(&Pem::new(PUB_TAG, ek.to_bytes().as_slice().to_vec()));
-    let seed_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
+    let (seed, ek_bytes) = random_seed_and_ek(KemSize::Kem768)?;
+    let pub_pem = pem::encode(&Pem::new(PUB_TAG, ek_bytes));
+    let seed_bytes = Zeroizing::new(seed.to_vec());
     let priv_pem = encode_private_key(&seed_bytes, passphrase, PRIV_TAG, PRIV_ENC_TAG)?;
     Ok((pub_pem, priv_pem))
 }
 
 fn keygen_bytes_1024(passphrase: Option<&str>) -> Result<(String, String), PqfileError> {
-    let (dk, ek) = MlKem1024::generate_keypair();
-    let pub_pem = pem::encode(&Pem::new(PUB_TAG_1024, ek.to_bytes().as_slice().to_vec()));
-    let seed_bytes = Zeroizing::new(dk.to_bytes().as_slice().to_vec());
+    let (seed, ek_bytes) = random_seed_and_ek(KemSize::Kem1024)?;
+    let pub_pem = pem::encode(&Pem::new(PUB_TAG_1024, ek_bytes));
+    let seed_bytes = Zeroizing::new(seed.to_vec());
     let priv_pem = encode_private_key(&seed_bytes, passphrase, PRIV_TAG_1024, PRIV_ENC_TAG_1024)?;
     Ok((pub_pem, priv_pem))
 }
@@ -262,14 +270,13 @@ pub fn keygen_bytes_hybrid_768(passphrase: Option<&str>) -> Result<(String, Stri
     let x25519_pk = X25519PublicKey::from(&x25519_sk);
 
     // Generate ML-KEM-768 key pair.
-    let (ml_dk, ml_ek) = MlKem768::generate_keypair();
-    let ml_seed_bytes = Zeroizing::new(ml_dk.to_bytes().as_slice().to_vec());
-    let ml_ek_bytes = ml_ek.to_bytes();
+    let (ml_seed, ml_ek_bytes) = random_seed_and_ek(KemSize::Kem768)?;
+    let ml_seed_bytes = Zeroizing::new(ml_seed.to_vec());
 
     // Build combined public key: X25519 pubkey || ML-KEM EK.
     let mut pub_bytes = Vec::with_capacity(HYBRID_EK_LEN_768);
     pub_bytes.extend_from_slice(x25519_pk.as_bytes());
-    pub_bytes.extend_from_slice(ml_ek_bytes.as_slice());
+    pub_bytes.extend_from_slice(&ml_ek_bytes);
     let pub_pem = pem::encode(&Pem::new(PUB_TAG_HYBRID_768, pub_bytes));
 
     // Build combined private key: X25519 scalar || ML-KEM seed.
@@ -390,29 +397,23 @@ pub fn keygen_hardware(
 pub fn keygen_bytes_hardware(level: u16, label: &str) -> Result<(String, String), PqfileError> {
     match level {
         KEM_VARIANT_512 => hw_keygen_inner(label, 64, hardware::HW_TAG_512, PUB_TAG_512, |seed| {
-            let arr = Seed::try_from(seed).map_err(|_| PqfileError::EncryptionFailure)?;
-            Ok(DecapsulationKey512::from_seed(arr)
-                .encapsulation_key()
-                .to_bytes()
-                .as_slice()
-                .to_vec())
+            let arr: &[u8; 64] = seed
+                .try_into()
+                .map_err(|_| PqfileError::EncryptionFailure)?;
+            Ok(ActiveKemBackend::ek_from_seed(KemSize::Kem512, arr))
         }),
         KEM_VARIANT_768 => hw_keygen_inner(label, 64, hardware::HW_TAG_768, PUB_TAG, |seed| {
-            let arr = Seed::try_from(seed).map_err(|_| PqfileError::EncryptionFailure)?;
-            Ok(DecapsulationKey768::from_seed(arr)
-                .encapsulation_key()
-                .to_bytes()
-                .as_slice()
-                .to_vec())
+            let arr: &[u8; 64] = seed
+                .try_into()
+                .map_err(|_| PqfileError::EncryptionFailure)?;
+            Ok(ActiveKemBackend::ek_from_seed(KemSize::Kem768, arr))
         }),
         KEM_VARIANT_1024 => {
             hw_keygen_inner(label, 64, hardware::HW_TAG_1024, PUB_TAG_1024, |seed| {
-                let arr = Seed::try_from(seed).map_err(|_| PqfileError::EncryptionFailure)?;
-                Ok(DecapsulationKey1024::from_seed(arr)
-                    .encapsulation_key()
-                    .to_bytes()
-                    .as_slice()
-                    .to_vec())
+                let arr: &[u8; 64] = seed
+                    .try_into()
+                    .map_err(|_| PqfileError::EncryptionFailure)?;
+                Ok(ActiveKemBackend::ek_from_seed(KemSize::Kem1024, arr))
             })
         }
         _ => Err(PqfileError::UnsupportedKem(level)),
@@ -434,13 +435,13 @@ pub fn keygen_bytes_hardware_hybrid(label: &str) -> Result<(String, String), Pqf
             }
             let x25519_sk = X25519StaticSecret::from(<[u8; 32]>::try_from(&seed[..32]).unwrap());
             let x25519_pk = X25519PublicKey::from(&x25519_sk);
-            let ml_arr = Seed::try_from(&seed[32..]).map_err(|_| PqfileError::EncryptionFailure)?;
-            let ml_ek = DecapsulationKey768::from_seed(ml_arr)
-                .encapsulation_key()
-                .to_bytes();
+            let ml_seed: &[u8; 64] = seed[32..]
+                .try_into()
+                .map_err(|_| PqfileError::EncryptionFailure)?;
+            let ml_ek = ActiveKemBackend::ek_from_seed(KemSize::Kem768, ml_seed);
             let mut out = Vec::with_capacity(HYBRID_EK_LEN_768);
             out.extend_from_slice(x25519_pk.as_bytes());
-            out.extend_from_slice(ml_ek.as_slice());
+            out.extend_from_slice(&ml_ek);
             Ok(out)
         },
     )

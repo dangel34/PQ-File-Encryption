@@ -7,10 +7,6 @@ use chacha20poly1305::{
     aead::{Aead, AeadInOut, KeyInit, Payload, Tag},
     ChaCha20Poly1305, Key, Nonce,
 };
-use ml_kem::{
-    kem::Decapsulate, Ciphertext, DecapsulationKey1024, DecapsulationKey512, DecapsulationKey768,
-    MlKem1024, MlKem512, MlKem768, Seed,
-};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroizing;
 
@@ -25,6 +21,7 @@ use crate::format::{
     VERSION_V8, VERSION_V9, WRAPPED_KEY_LEN,
 };
 use crate::hardware;
+use crate::kem_backend::{ActiveKemBackend, KemBackend, KemSize};
 use crate::keygen::{
     PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_512, PRIV_ENC_TAG_HYBRID_768, PRIV_TAG,
     PRIV_TAG_1024, PRIV_TAG_512, PRIV_TAG_HYBRID_768,
@@ -33,12 +30,12 @@ use crate::passphrase;
 use crate::secret::LockedSecret;
 
 enum DkVariant {
-    Kem512(DecapsulationKey512),
-    Kem768(DecapsulationKey768),
-    Kem1024(DecapsulationKey1024),
+    Kem512(LockedSecret<64>),
+    Kem768(LockedSecret<64>),
+    Kem1024(LockedSecret<64>),
     HybridKem768 {
         x25519_sk: X25519StaticSecret,
-        ml_dk: DecapsulationKey768,
+        ml_seed: LockedSecret<64>,
     },
 }
 
@@ -1035,6 +1032,20 @@ fn decrypt_v3_chunks(
     Ok(())
 }
 
+/// Copies a variable-length seed slice into fixed-size locked storage,
+/// rejecting anything but exactly 64 bytes.
+fn locked_seed(seed: &[u8]) -> Result<LockedSecret<64>, PqfileError> {
+    if seed.len() != 64 {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: 64,
+            got: seed.len(),
+        });
+    }
+    let mut out = LockedSecret::<64>::zeroed();
+    out.copy_from_slice(seed);
+    Ok(out)
+}
+
 fn derive_dk(privkey_pem: &str, passphrase: Option<&str>) -> Result<DkVariant, PqfileError> {
     let pem = pem::parse(privkey_pem).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
     let raw = pem.contents();
@@ -1043,30 +1054,15 @@ fn derive_dk(privkey_pem: &str, passphrase: Option<&str>) -> Result<DkVariant, P
         // ── Hardware key stubs: load seed from OS credential store ────────────
         t if t == hardware::HW_TAG_512 => {
             let seed = hardware::load_seed(raw)?;
-            let arr =
-                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
-                    expected: 64,
-                    got: seed.len(),
-                })?;
-            Ok(DkVariant::Kem512(DecapsulationKey512::from_seed(arr)))
+            Ok(DkVariant::Kem512(locked_seed(seed.as_slice())?))
         }
         t if t == hardware::HW_TAG_768 => {
             let seed = hardware::load_seed(raw)?;
-            let arr =
-                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
-                    expected: 64,
-                    got: seed.len(),
-                })?;
-            Ok(DkVariant::Kem768(DecapsulationKey768::from_seed(arr)))
+            Ok(DkVariant::Kem768(locked_seed(seed.as_slice())?))
         }
         t if t == hardware::HW_TAG_1024 => {
             let seed = hardware::load_seed(raw)?;
-            let arr =
-                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
-                    expected: 64,
-                    got: seed.len(),
-                })?;
-            Ok(DkVariant::Kem1024(DecapsulationKey1024::from_seed(arr)))
+            Ok(DkVariant::Kem1024(locked_seed(seed.as_slice())?))
         }
         t if t == hardware::HW_TAG_HYBRID_768 => {
             let seed = hardware::load_seed(raw)?;
@@ -1084,56 +1080,21 @@ fn derive_dk(privkey_pem: &str, passphrase: Option<&str>) -> Result<DkVariant, P
         t if t == PRIV_ENC_TAG_512 => {
             let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
             let seed = passphrase::decrypt_seed(raw, pp)?;
-            let seed_arr =
-                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
-                    expected: 64,
-                    got: seed.len(),
-                })?;
-            Ok(DkVariant::Kem512(DecapsulationKey512::from_seed(seed_arr)))
+            Ok(DkVariant::Kem512(locked_seed(seed.as_slice())?))
         }
         t if t == PRIV_ENC_TAG => {
             let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
             let seed = passphrase::decrypt_seed(raw, pp)?;
-            let seed_arr =
-                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
-                    expected: 64,
-                    got: seed.len(),
-                })?;
-            Ok(DkVariant::Kem768(DecapsulationKey768::from_seed(seed_arr)))
+            Ok(DkVariant::Kem768(locked_seed(seed.as_slice())?))
         }
         t if t == PRIV_ENC_TAG_1024 => {
             let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
             let seed = passphrase::decrypt_seed(raw, pp)?;
-            let seed_arr =
-                Seed::try_from(seed.as_slice()).map_err(|_| PqfileError::InvalidKeyLength {
-                    expected: 64,
-                    got: seed.len(),
-                })?;
-            Ok(DkVariant::Kem1024(DecapsulationKey1024::from_seed(
-                seed_arr,
-            )))
+            Ok(DkVariant::Kem1024(locked_seed(seed.as_slice())?))
         }
-        t if t == PRIV_TAG_512 => {
-            let seed = Seed::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
-                expected: 64,
-                got: raw.len(),
-            })?;
-            Ok(DkVariant::Kem512(DecapsulationKey512::from_seed(seed)))
-        }
-        t if t == PRIV_TAG => {
-            let seed = Seed::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
-                expected: 64,
-                got: raw.len(),
-            })?;
-            Ok(DkVariant::Kem768(DecapsulationKey768::from_seed(seed)))
-        }
-        t if t == PRIV_TAG_1024 => {
-            let seed = Seed::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
-                expected: 64,
-                got: raw.len(),
-            })?;
-            Ok(DkVariant::Kem1024(DecapsulationKey1024::from_seed(seed)))
-        }
+        t if t == PRIV_TAG_512 => Ok(DkVariant::Kem512(locked_seed(raw)?)),
+        t if t == PRIV_TAG => Ok(DkVariant::Kem768(locked_seed(raw)?)),
+        t if t == PRIV_TAG_1024 => Ok(DkVariant::Kem1024(locked_seed(raw)?)),
         t if t == PRIV_ENC_TAG_HYBRID_768 => {
             let pp = passphrase.ok_or(PqfileError::PassphraseRequired)?;
             let seed = passphrase::decrypt_hybrid_seed(raw, pp)?;
@@ -1160,16 +1121,10 @@ fn derive_hybrid_dk_from_seed(seed: &[u8; HYBRID_SEED_LEN_768]) -> Result<DkVari
     let x25519_scalar: [u8; 32] = seed[..32]
         .try_into()
         .expect("HYBRID_SEED_LEN_768 = X25519_SCALAR_LEN + 64 > 32; parameter type guarantees sufficient length");
-    let ml_seed_bytes = &seed[32..];
-
     let x25519_sk = X25519StaticSecret::from(x25519_scalar);
-    let ml_seed = Seed::try_from(ml_seed_bytes).map_err(|_| PqfileError::InvalidKeyLength {
-        expected: 64,
-        got: ml_seed_bytes.len(),
-    })?;
-    let ml_dk = DecapsulationKey768::from_seed(ml_seed);
+    let ml_seed = locked_seed(&seed[32..])?;
 
-    Ok(DkVariant::HybridKem768 { x25519_sk, ml_dk })
+    Ok(DkVariant::HybridKem768 { x25519_sk, ml_seed })
 }
 
 fn decapsulate_shared_secret(
@@ -1177,43 +1132,43 @@ fn decapsulate_shared_secret(
     kem_ct_bytes: &[u8],
 ) -> Result<LockedSecret<32>, PqfileError> {
     match dk {
-        DkVariant::Kem512(dk) => {
-            let ct = Ciphertext::<MlKem512>::try_from(kem_ct_bytes).map_err(|_| {
-                PqfileError::InvalidKeyLength {
+        DkVariant::Kem512(seed) => {
+            if kem_ct_bytes.len() != KEM_CT_LEN_512 {
+                return Err(PqfileError::InvalidKeyLength {
                     expected: KEM_CT_LEN_512,
                     got: kem_ct_bytes.len(),
-                }
-            })?;
-            let ss = dk.decapsulate(&ct);
+                });
+            }
+            let ss = ActiveKemBackend::decapsulate(KemSize::Kem512, seed, kem_ct_bytes);
             let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok(ss_bytes)
         }
-        DkVariant::Kem768(dk) => {
-            let ct = Ciphertext::<MlKem768>::try_from(kem_ct_bytes).map_err(|_| {
-                PqfileError::InvalidKeyLength {
+        DkVariant::Kem768(seed) => {
+            if kem_ct_bytes.len() != KEM_CT_LEN_768 {
+                return Err(PqfileError::InvalidKeyLength {
                     expected: KEM_CT_LEN_768,
                     got: kem_ct_bytes.len(),
-                }
-            })?;
-            let ss = dk.decapsulate(&ct);
+                });
+            }
+            let ss = ActiveKemBackend::decapsulate(KemSize::Kem768, seed, kem_ct_bytes);
             let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok(ss_bytes)
         }
-        DkVariant::Kem1024(dk) => {
-            let ct = Ciphertext::<MlKem1024>::try_from(kem_ct_bytes).map_err(|_| {
-                PqfileError::InvalidKeyLength {
+        DkVariant::Kem1024(seed) => {
+            if kem_ct_bytes.len() != KEM_CT_LEN_1024 {
+                return Err(PqfileError::InvalidKeyLength {
                     expected: KEM_CT_LEN_1024,
                     got: kem_ct_bytes.len(),
-                }
-            })?;
-            let ss = dk.decapsulate(&ct);
+                });
+            }
+            let ss = ActiveKemBackend::decapsulate(KemSize::Kem1024, seed, kem_ct_bytes);
             let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
             Ok(ss_bytes)
         }
-        DkVariant::HybridKem768 { x25519_sk, ml_dk } => {
+        DkVariant::HybridKem768 { x25519_sk, ml_seed } => {
             if kem_ct_bytes.len() != HYBRID_CT_LEN_768 {
                 return Err(PqfileError::InvalidKeyLength {
                     expected: HYBRID_CT_LEN_768,
@@ -1228,13 +1183,13 @@ fn decapsulate_shared_secret(
             let x25519_ss = x25519_sk.diffie_hellman(&eph_pk);
 
             let ml_ct_bytes = &kem_ct_bytes[32..];
-            let ml_ct = Ciphertext::<MlKem768>::try_from(ml_ct_bytes).map_err(|_| {
-                PqfileError::InvalidKeyLength {
+            if ml_ct_bytes.len() != KEM_CT_LEN_768 {
+                return Err(PqfileError::InvalidKeyLength {
                     expected: KEM_CT_LEN_768,
                     got: ml_ct_bytes.len(),
-                }
-            })?;
-            let ml_ss = ml_dk.decapsulate(&ml_ct);
+                });
+            }
+            let ml_ss = ActiveKemBackend::decapsulate(KemSize::Kem768, ml_seed, ml_ct_bytes);
 
             hybrid_hkdf(x25519_ss.as_bytes(), ml_ss.as_slice())
         }

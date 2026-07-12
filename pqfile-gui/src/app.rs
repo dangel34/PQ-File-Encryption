@@ -13,7 +13,7 @@ use crate::widgets::{bullet, card, kv_row, section_label, tab_btn};
 use crate::APP_VERSION;
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
 use std::sync::{Arc, Mutex};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Handle to a running watchfolder thread.
 #[cfg(not(target_arch = "wasm32"))]
@@ -541,8 +541,8 @@ impl eframe::App for PqfileApp {
                 let elapsed = t.elapsed().as_secs();
                 let timeout = self.settings.clipboard_clear_secs as u64;
                 if elapsed >= timeout {
-                    *self.clipboard_plain = String::new();
-                    self.clipboard_cipher.clear();
+                    self.clipboard_plain.zeroize();
+                    self.clipboard_cipher.zeroize();
                     self.clipboard_last_used = None;
                     ctx.request_repaint();
                 } else {
@@ -951,10 +951,10 @@ impl PqfileApp {
             if all_ok {
                 self.encrypt_recipients.clear();
                 self.encrypt_files.clear();
-                self.encrypt_passphrase.clear();
-                self.encrypt_passphrase_confirm.clear();
+                self.encrypt_passphrase.zeroize();
+                self.encrypt_passphrase_confirm.zeroize();
                 self.encrypt_keyfile.clear();
-                self.encrypt_fido2_pin.clear();
+                self.encrypt_fido2_pin.zeroize();
                 self.encrypt_batch_summary = None;
             }
             self.encrypt_job = None;
@@ -1014,10 +1014,10 @@ impl PqfileApp {
             if all_ok {
                 self.decrypt_privkey.clear();
                 self.decrypt_files.clear();
-                self.decrypt_passphrase.clear();
-                self.decrypt_v10_passphrase.clear();
+                self.decrypt_passphrase.zeroize();
+                self.decrypt_v10_passphrase.zeroize();
                 self.decrypt_keyfile.clear();
-                self.decrypt_fido2_pin.clear();
+                self.decrypt_fido2_pin.zeroize();
                 self.decrypt_batch_summary = None;
             }
             self.decrypt_batch_job = None;
@@ -2108,7 +2108,7 @@ impl PqfileApp {
                                     let msg = match result {
                                         Ok(ct) => {
                                             if !confirm || !out_path.exists() {
-                                                match std::fs::write(&out_path, &ct) {
+                                                match crate::widgets::atomic_write(&out_path, &ct) {
                                                     Ok(()) => format!("✔ {out_name}"),
                                                     Err(e) => format!("✖ {name}: {e}"),
                                                 }

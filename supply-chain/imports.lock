@@ -100,15 +100,15 @@ user-login = "epage"
 user-name = "Ed Page"
 
 [[publisher.pqfile]]
-version = "4.2.4"
-when = "2026-06-26"
+version = "4.3.0"
+when = "2026-07-12"
 user-id = 419333
 user-login = "dangel34"
 user-name = "Derek"
 
 [[publisher.pqfile-cli]]
-version = "4.2.4"
-when = "2026-06-26"
+version = "4.3.0"
+when = "2026-07-12"
 user-id = 419333
 user-login = "dangel34"
 user-name = "Derek"

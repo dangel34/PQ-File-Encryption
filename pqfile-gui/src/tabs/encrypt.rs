@@ -17,6 +17,8 @@ use std::io::{Cursor, Read};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use zeroize::Zeroize;
 use zeroize::Zeroizing;
 
 enum ListAction {
@@ -301,8 +303,8 @@ impl PqfileApp {
                 self.encrypt_files.clear();
                 self.encrypt_wasm_total = 0;
                 self.encrypt_wasm_done = 0;
-                self.encrypt_passphrase.clear();
-                self.encrypt_passphrase_confirm.clear();
+                self.encrypt_passphrase.zeroize();
+                self.encrypt_passphrase_confirm.zeroize();
             }
             self.encrypt_wasm_target = None;
         }

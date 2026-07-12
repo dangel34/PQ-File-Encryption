@@ -88,17 +88,19 @@ impl PqfileApp {
         else {
             return;
         };
-        let pin = if self.fido2_enroll_use_pin && !self.fido2_enroll_pin.is_empty() {
-            Some((*self.fido2_enroll_pin).clone())
-        } else {
-            None
-        };
+        let pin: Option<Zeroizing<String>> =
+            if self.fido2_enroll_use_pin && !self.fido2_enroll_pin.is_empty() {
+                Some(Zeroizing::new((*self.fido2_enroll_pin).clone()))
+            } else {
+                None
+            };
         let pending: Fido2Pending<()> = Arc::new(Mutex::new(None));
         self.fido2_enroll_pending = Some(Arc::clone(&pending));
         self.fido2_enroll_status = OpStatus::None;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = crate::fido2::enroll(&path, pin.as_deref()).map_err(|e| e.to_string());
+            let result = crate::fido2::enroll(&path, pin.as_deref().map(String::as_str))
+                .map_err(|e| e.to_string());
             *pending.lock().unwrap() = Some(result);
             ctx.request_repaint();
         });

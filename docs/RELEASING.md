@@ -73,7 +73,7 @@ Monitor progress in the **Actions** tab on GitHub. Once complete, open the draft
 
 ## Publishing to crates.io
 
-Publishing `pqfile` and `pqfile-cli` is **automated** via `.github/workflows/publish.yml`, which triggers when the Release workflow completes successfully on this repository's own commits (forks cannot trigger it).
+Publishing `pqfile` and `pqfile-cli` is **automated** via `.github/workflows/publish.yml`, which triggers when a draft release is published on this repository's own commits (forks cannot trigger it).
 
 The workflow:
 1. Checks out the exact commit SHA from the Release workflow run.

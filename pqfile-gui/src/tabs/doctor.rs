@@ -7,6 +7,8 @@ use crate::widgets::{card, file_row, kv_row, section_label, show_status, tab_hea
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::{inspect, keygen};
 use std::io::Cursor;
+#[cfg(not(target_arch = "wasm32"))]
+use zeroize::Zeroize;
 
 pub(crate) enum CheckKind {
     Pass,
@@ -80,7 +82,7 @@ impl PqfileApp {
                 });
                 ui.add_space(14.0);
             } else if self.doctor_file.loaded() {
-                self.doctor_passphrase.clear();
+                self.doctor_passphrase.zeroize();
             }
         }
 

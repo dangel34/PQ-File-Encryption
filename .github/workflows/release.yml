@@ -93,8 +93,56 @@ jobs:
       # `cargo auditable` embeds the full dependency tree in a compressed
       # .dep-v0 section of each binary, so shipped artifacts can be scanned
       # for vulnerable dependencies with `cargo audit bin` after the fact.
-      - name: Build CLI
-        run: cargo auditable build --release --locked -p pqfile-cli --target ${{ matrix.target }}
+      #
+      # CLI only: PGO needs a headless-scriptable workload to collect profile
+      # data, which the GUI (pqfile-desktop) has no way to provide in CI.
+      # Non-fatal by design: `pgo_build` below runs entirely inside a
+      # `set +e` block, so a failure anywhere in the instrument / workload /
+      # merge / optimize sequence (llvm-profdata missing, the workload
+      # erroring, a cross-compiled target's instrumented binary not being
+      # runnable on the host, ...) falls back to the plain build that shipped
+      # before this existed, rather than failing the release - see the
+      # release-pipeline breakage on 2026-06-26 for why that bar matters here.
+      - name: Add llvm-tools-preview (for PGO)
+        run: rustup component add llvm-tools-preview
+
+      - name: Build CLI (PGO-optimized, falls back to a normal build on failure)
+        shell: bash
+        run: |
+          set +e
+          PROFILE_DIR="$PWD/target/pgo-profiles"
+          rm -rf "$PROFILE_DIR"
+          mkdir -p "$PROFILE_DIR"
+
+          SYSROOT="$(rustc --print sysroot)"
+          HOST="$(rustc -vV | sed -n 's/^host: //p')"
+          PROFDATA_TOOL="$SYSROOT/lib/rustlib/$HOST/bin/llvm-profdata"
+          [ -x "$PROFDATA_TOOL" ] || PROFDATA_TOOL="$PROFDATA_TOOL.exe"
+          BIN="target/${{ matrix.target }}/release/pqfile${{ matrix.ext }}"
+
+          pgo_build() {
+            echo "== PGO: instrumented build =="
+            RUSTFLAGS="-Cprofile-generate=$PROFILE_DIR" \
+              cargo auditable build --release --locked -p pqfile-cli --target ${{ matrix.target }} || return 1
+
+            echo "== PGO: training workload =="
+            LLVM_PROFILE_FILE="$PROFILE_DIR/pqfile_%m_%p.profraw" \
+              bash scripts/pgo_workload.sh "$BIN" || return 1
+
+            echo "== PGO: merging profiles =="
+            "$PROFDATA_TOOL" merge -o "$PROFILE_DIR/merged.profdata" "$PROFILE_DIR"/pqfile_*.profraw || return 1
+
+            echo "== PGO: optimized build =="
+            RUSTFLAGS="-Cprofile-use=$PROFILE_DIR/merged.profdata -Cllvm-args=-pgo-warn-missing-function" \
+              cargo auditable build --release --locked -p pqfile-cli --target ${{ matrix.target }} || return 1
+          }
+
+          if pgo_build; then
+            echo "PGO build succeeded."
+          else
+            echo "::warning::PGO build failed for ${{ matrix.target }}; falling back to a normal (non-PGO) build for pqfile-cli"
+            cargo auditable build --release --locked -p pqfile-cli --target ${{ matrix.target }}
+          fi
 
       - name: Build desktop GUI
         run: cargo auditable build --release --locked -p pqfile-desktop --target ${{ matrix.target }}

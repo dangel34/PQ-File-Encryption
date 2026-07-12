@@ -49,6 +49,10 @@ keyring-core = "1"
 memmap2 = "0.9"
 # mlock/VirtualLock for in-flight secrets (secret.rs); no allocator features.
 memsec = { version = "0.7", default-features = false, features = ["use_os"] }
+# Optional F*-verified ML-KEM backend (`kem-libcrux` feature). Also listed
+# unconditionally below as a dev-dependency so tests/kem_oracle.rs runs on
+# every `cargo test` regardless of feature flags; Cargo unions the two.
+libcrux-ml-kem = { version = "0.0.9", optional = true }
 
 # Platform-specific credential store backends (no sqlite/tantivy bloat).
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -65,6 +69,11 @@ linux-keyutils-keyring-store = "1"
 async = ["tokio"]
 # Enable statistical constant-time tests (requires a quiet machine; not for CI).
 timing-tests = []
+# Opt into Cryspen's F*-verified libcrux-ml-kem as the ML-KEM backend instead
+# of the default RustCrypto ml-kem. No wire-format change: pqfile/tests/kem_oracle.rs
+# proves the two agree byte-for-byte on FIPS 203. See docs/ROADMAP.md, "Optional
+# formally verified ML-KEM backend".
+kem-libcrux = ["dep:libcrux-ml-kem"]
 
 [dependencies.tokio]
 version = "1"
@@ -79,12 +88,18 @@ tokio = { version = "1", features = ["rt", "macros"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 proptest = "1"
-# Cross-implementation oracle test only (tests/kem_oracle.rs); not a production
-# dependency of pqfile. See docs/ROADMAP.md "Optional formally verified ML-KEM
-# backend" for why this specific crate.
+# Unconditional dev-dependency so the cross-implementation oracle test
+# (tests/kem_oracle.rs) runs on every `cargo test`, independent of whether the
+# `kem-libcrux` feature (which also depends on this crate, see [dependencies]
+# above) is enabled.
 libcrux-ml-kem = "0.0.9"
+iai-callgrind = "0.16.1"
 
 [[bench]]
 name = "crypto"
+harness = false
+
+[[bench]]
+name = "iai"
 harness = false
 

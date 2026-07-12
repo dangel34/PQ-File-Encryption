@@ -9,7 +9,7 @@ use pqfile::repassphrase;
 #[cfg(not(target_arch = "wasm32"))]
 use pqfile::revoke;
 use std::io::Cursor;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 impl PqfileApp {
     pub(crate) fn show_clipboard_tab(&mut self, ui: &mut egui::Ui, dark: bool) {
@@ -141,7 +141,7 @@ impl PqfileApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     if let Some(path) = self.repassphrase_key.path.as_ref() {
-                        match std::fs::write(path, result.privkey_pem.as_bytes()) {
+                        match crate::widgets::atomic_write(path, result.privkey_pem.as_bytes()) {
                             Ok(()) => {
                                 let note = if from_legacy {
                                     " (upgraded to Argon2id p=4)"
@@ -439,14 +439,14 @@ impl PqfileApp {
                 return;
             }
         };
-        let data = self.clipboard_plain.as_bytes().to_vec();
+        let data = Zeroizing::new(self.clipboard_plain.as_bytes().to_vec());
         let original_size = data.len() as u64;
         let mut output = Vec::new();
         match pqfile::encrypt::encrypt_stream(
             &pub_pem,
             original_size,
             pqfile::format::CHUNK_SIZE,
-            &mut Cursor::new(data),
+            &mut Cursor::new(data.as_slice()),
             &mut output,
         ) {
             Ok(()) => {
@@ -488,27 +488,24 @@ impl PqfileApp {
             }
         };
 
-        let mut out = Vec::new();
+        let mut out: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
         match pqfile::decrypt::decrypt_stream(
             &priv_pem,
             &mut Cursor::new(&cipher_bytes),
-            &mut out,
+            &mut *out,
             passphrase.as_deref().map(String::as_str),
         ) {
-            Ok(()) => {
-                match String::from_utf8(out) {
-                    Ok(plain) => {
-                        *self.clipboard_plain = plain.clone();
-                        self.clipboard_dec_status =
-                            OpStatus::Ok("Decrypted successfully.".to_owned());
-                        let _ = plain; // plaintext is shown in the encrypt text area
-                    }
-                    Err(e) => {
-                        self.clipboard_dec_status =
-                            OpStatus::Err(format!("Decrypted but content is not valid UTF-8: {e}"));
-                    }
+            Ok(()) => match std::str::from_utf8(&out) {
+                Ok(plain) => {
+                    self.clipboard_plain.zeroize();
+                    self.clipboard_plain.push_str(plain);
+                    self.clipboard_dec_status = OpStatus::Ok("Decrypted successfully.".to_owned());
                 }
-            }
+                Err(e) => {
+                    self.clipboard_dec_status =
+                        OpStatus::Err(format!("Decrypted but content is not valid UTF-8: {e}"));
+                }
+            },
             Err(e) => {
                 self.clipboard_dec_status = OpStatus::Err(e.to_string());
             }

@@ -326,8 +326,8 @@ fn derive_public_pem_from_private(
     passphrase: Option<&str>,
 ) -> Result<String, PqfileError> {
     use crate::format::HYBRID_SEED_LEN_768;
+    use crate::kem_backend::{ActiveKemBackend, KemBackend, KemSize};
     use crate::passphrase;
-    use ml_kem::{DecapsulationKey1024, DecapsulationKey512, DecapsulationKey768, KeyExport, Seed};
     use pem::Pem;
     use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
     use zeroize::Zeroizing;
@@ -337,33 +337,30 @@ fn derive_public_pem_from_private(
     match parsed.tag() {
         t if t == PRIV_TAG_512 || t == PRIV_ENC_TAG_512 => {
             let seed = load_seed_64(t, parsed.contents(), passphrase)?;
-            let s = Seed::try_from(seed.as_slice()).map_err(|_| bad_len(64, seed.len()))?;
-            let dk = DecapsulationKey512::from_seed(s);
-            let ek_bytes = dk.encapsulation_key().to_bytes();
-            Ok(pem::encode(&Pem::new(
-                PUB_TAG_512,
-                ek_bytes.as_slice().to_vec(),
-            )))
+            let s: &[u8; 64] = seed
+                .as_slice()
+                .try_into()
+                .map_err(|_| bad_len(64, seed.len()))?;
+            let ek_bytes = ActiveKemBackend::ek_from_seed(KemSize::Kem512, s);
+            Ok(pem::encode(&Pem::new(PUB_TAG_512, ek_bytes)))
         }
         t if t == PRIV_TAG || t == PRIV_ENC_TAG => {
             let seed = load_seed_64(t, parsed.contents(), passphrase)?;
-            let s = Seed::try_from(seed.as_slice()).map_err(|_| bad_len(64, seed.len()))?;
-            let dk = DecapsulationKey768::from_seed(s);
-            let ek_bytes = dk.encapsulation_key().to_bytes();
-            Ok(pem::encode(&Pem::new(
-                PUB_TAG,
-                ek_bytes.as_slice().to_vec(),
-            )))
+            let s: &[u8; 64] = seed
+                .as_slice()
+                .try_into()
+                .map_err(|_| bad_len(64, seed.len()))?;
+            let ek_bytes = ActiveKemBackend::ek_from_seed(KemSize::Kem768, s);
+            Ok(pem::encode(&Pem::new(PUB_TAG, ek_bytes)))
         }
         t if t == PRIV_TAG_1024 || t == PRIV_ENC_TAG_1024 => {
             let seed = load_seed_64(t, parsed.contents(), passphrase)?;
-            let s = Seed::try_from(seed.as_slice()).map_err(|_| bad_len(64, seed.len()))?;
-            let dk = DecapsulationKey1024::from_seed(s);
-            let ek_bytes = dk.encapsulation_key().to_bytes();
-            Ok(pem::encode(&Pem::new(
-                PUB_TAG_1024,
-                ek_bytes.as_slice().to_vec(),
-            )))
+            let s: &[u8; 64] = seed
+                .as_slice()
+                .try_into()
+                .map_err(|_| bad_len(64, seed.len()))?;
+            let ek_bytes = ActiveKemBackend::ek_from_seed(KemSize::Kem1024, s);
+            Ok(pem::encode(&Pem::new(PUB_TAG_1024, ek_bytes)))
         }
         t if t == PRIV_TAG_HYBRID_768 || t == PRIV_ENC_TAG_HYBRID_768 => {
             let seed: Zeroizing<Vec<u8>> = if t == PRIV_ENC_TAG_HYBRID_768 {
@@ -377,11 +374,13 @@ fn derive_public_pem_from_private(
             };
             let x25519_sk = X25519StaticSecret::from(<[u8; 32]>::try_from(&seed[..32]).unwrap());
             let x25519_pk = X25519PublicKey::from(&x25519_sk);
-            let ml_s = Seed::try_from(&seed[32..]).map_err(|_| bad_len(64, seed.len() - 32))?;
-            let ml_dk = DecapsulationKey768::from_seed(ml_s);
+            let ml_s: &[u8; 64] = seed[32..]
+                .try_into()
+                .map_err(|_| bad_len(64, seed.len() - 32))?;
+            let ml_ek = ActiveKemBackend::ek_from_seed(KemSize::Kem768, ml_s);
             let mut pub_bytes = Vec::new();
             pub_bytes.extend_from_slice(x25519_pk.as_bytes());
-            pub_bytes.extend_from_slice(ml_dk.encapsulation_key().to_bytes().as_slice());
+            pub_bytes.extend_from_slice(&ml_ek);
             Ok(pem::encode(&Pem::new(PUB_TAG_HYBRID_768, pub_bytes)))
         }
         tag => Err(PqfileError::InvalidPem(format!(

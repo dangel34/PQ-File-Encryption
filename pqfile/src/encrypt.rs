@@ -5,14 +5,13 @@ use chacha20poly1305::{
     aead::{Aead, AeadInOut, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
 };
-use ml_kem::{
-    array::Array, kem::Encapsulate, EncapsulationKey1024, EncapsulationKey512, EncapsulationKey768,
-};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
+
+use crate::kem_backend::{ActiveKemBackend, KemBackend, KemSize};
 
 use crate::format::{
     chunk_nonce, commitment_for_stream, commitment_for_v10, fill_chunk, hybrid_hkdf,
@@ -29,13 +28,10 @@ use crate::keygen::{PUB_TAG, PUB_TAG_1024, PUB_TAG_512, PUB_TAG_HYBRID_768};
 use crate::secret::LockedSecret;
 
 pub(crate) enum EkVariant {
-    Kem512(EncapsulationKey512),
-    Kem768(EncapsulationKey768),
-    Kem1024(EncapsulationKey1024),
-    HybridKem768 {
-        x25519_pk: [u8; 32],
-        ml_ek: EncapsulationKey768,
-    },
+    Kem512(Vec<u8>),
+    Kem768(Vec<u8>),
+    Kem1024(Vec<u8>),
+    HybridKem768 { x25519_pk: [u8; 32], ml_ek: Vec<u8> },
 }
 
 /// Encrypts `plaintext` in a single pass (v2 format). Kept for library consumers
@@ -326,32 +322,31 @@ pub(crate) fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u1
     let raw = pem.contents();
     match pem.tag() {
         t if t == PUB_TAG_512 => {
-            let raw_arr = Array::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
-                expected: EK_LEN_512,
-                got: raw.len(),
-            })?;
-            let ek = EncapsulationKey512::new(&raw_arr)
-                .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-512 public key".to_owned()))?;
-            Ok((EkVariant::Kem512(ek), KEM_VARIANT_512))
+            if raw.len() != EK_LEN_512 {
+                return Err(PqfileError::InvalidKeyLength {
+                    expected: EK_LEN_512,
+                    got: raw.len(),
+                });
+            }
+            Ok((EkVariant::Kem512(raw.to_vec()), KEM_VARIANT_512))
         }
         t if t == PUB_TAG => {
-            let raw_arr = Array::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
-                expected: EK_LEN_768,
-                got: raw.len(),
-            })?;
-            let ek = EncapsulationKey768::new(&raw_arr)
-                .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-768 public key".to_owned()))?;
-            Ok((EkVariant::Kem768(ek), KEM_VARIANT_768))
+            if raw.len() != EK_LEN_768 {
+                return Err(PqfileError::InvalidKeyLength {
+                    expected: EK_LEN_768,
+                    got: raw.len(),
+                });
+            }
+            Ok((EkVariant::Kem768(raw.to_vec()), KEM_VARIANT_768))
         }
         t if t == PUB_TAG_1024 => {
-            let raw_arr = Array::try_from(raw).map_err(|_| PqfileError::InvalidKeyLength {
-                expected: EK_LEN_1024,
-                got: raw.len(),
-            })?;
-            let ek = EncapsulationKey1024::new(&raw_arr).map_err(|_| {
-                PqfileError::InvalidPem("invalid ML-KEM-1024 public key".to_owned())
-            })?;
-            Ok((EkVariant::Kem1024(ek), KEM_VARIANT_1024))
+            if raw.len() != EK_LEN_1024 {
+                return Err(PqfileError::InvalidKeyLength {
+                    expected: EK_LEN_1024,
+                    got: raw.len(),
+                });
+            }
+            Ok((EkVariant::Kem1024(raw.to_vec()), KEM_VARIANT_1024))
         }
         t if t == PUB_TAG_HYBRID_768 => {
             if raw.len() != HYBRID_EK_LEN_768 {
@@ -363,14 +358,7 @@ pub(crate) fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u1
             let x25519_pk_bytes: [u8; 32] = raw[..32]
                 .try_into()
                 .expect("HYBRID_EK_LEN_768 > 32; length checked above");
-            let ml_raw = &raw[32..];
-            let ml_arr = Array::try_from(ml_raw).map_err(|_| PqfileError::InvalidKeyLength {
-                expected: EK_LEN_768,
-                got: ml_raw.len(),
-            })?;
-            let ml_ek = EncapsulationKey768::new(&ml_arr).map_err(|_| {
-                PqfileError::InvalidPem("invalid ML-KEM-768 public key in hybrid".to_owned())
-            })?;
+            let ml_ek = raw[32..].to_vec();
             Ok((
                 EkVariant::HybridKem768 {
                     x25519_pk: x25519_pk_bytes,
@@ -388,22 +376,26 @@ pub(crate) fn parse_encapsulation_key(pubkey_pem: &str) -> Result<(EkVariant, u1
 pub(crate) fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, LockedSecret<32>), PqfileError> {
     match ek {
         EkVariant::Kem512(ek) => {
-            let (ct, ss) = ek.encapsulate();
+            let (ct, ss) = ActiveKemBackend::encapsulate(KemSize::Kem512, &ek)
+                .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-512 public key".to_owned()))?;
             let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
-            Ok((ct.as_slice().to_vec(), ss_bytes))
+            Ok((ct, ss_bytes))
         }
         EkVariant::Kem768(ek) => {
-            let (ct, ss) = ek.encapsulate();
+            let (ct, ss) = ActiveKemBackend::encapsulate(KemSize::Kem768, &ek)
+                .map_err(|_| PqfileError::InvalidPem("invalid ML-KEM-768 public key".to_owned()))?;
             let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
-            Ok((ct.as_slice().to_vec(), ss_bytes))
+            Ok((ct, ss_bytes))
         }
         EkVariant::Kem1024(ek) => {
-            let (ct, ss) = ek.encapsulate();
+            let (ct, ss) = ActiveKemBackend::encapsulate(KemSize::Kem1024, &ek).map_err(|_| {
+                PqfileError::InvalidPem("invalid ML-KEM-1024 public key".to_owned())
+            })?;
             let mut ss_bytes = LockedSecret::<32>::zeroed();
             ss_bytes.copy_from_slice(ss.as_slice());
-            Ok((ct.as_slice().to_vec(), ss_bytes))
+            Ok((ct, ss_bytes))
         }
         EkVariant::HybridKem768 { x25519_pk, ml_ek } => {
             let mut eph_scalar = Zeroizing::new([0u8; 32]);
@@ -417,11 +409,14 @@ pub(crate) fn encapsulate(ek: EkVariant) -> Result<(Vec<u8>, LockedSecret<32>), 
             // overwritten on drop.
             let x25519_ss = eph_sk.diffie_hellman(&recipient_pk);
 
-            let (ml_ct, ml_ss) = ml_ek.encapsulate();
+            let (ml_ct, ml_ss) =
+                ActiveKemBackend::encapsulate(KemSize::Kem768, &ml_ek).map_err(|_| {
+                    PqfileError::InvalidPem("invalid ML-KEM-768 public key in hybrid".to_owned())
+                })?;
 
             let mut kem_ct = Vec::with_capacity(HYBRID_CT_LEN_768);
             kem_ct.extend_from_slice(eph_pk.as_bytes());
-            kem_ct.extend_from_slice(ml_ct.as_slice());
+            kem_ct.extend_from_slice(&ml_ct);
 
             let ss = hybrid_hkdf(x25519_ss.as_bytes(), ml_ss.as_slice())?;
             Ok((kem_ct, ss))

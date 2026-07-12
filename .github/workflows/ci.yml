@@ -198,6 +198,47 @@ jobs:
           fail-on-alert: true
           alert-comment-cc-users: '@dangel34'
 
+  # ── Deterministic benchmark gate (instruction counts, main and PRs) ───────
+  # Complements the wall-clock `bench` job above: criterion's timings are noisy
+  # on shared runners, so the regression threshold there is loose (125%).
+  # iai-callgrind counts instructions under Valgrind, which is deterministic
+  # on the same binary, so the gate here can be tight (5%, set per-benchmark
+  # in pqfile/benches/iai.rs via Callgrind::soft_limits). The comparison
+  # baseline is target/iai/ from the previous run, restored by the cache
+  # below; a cold cache (first run, or after a Cargo.lock change evicts the
+  # exact-match key) just skips the regression check for that one run.
+  iai-bench:
+    name: iai-bench
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Install iai-callgrind-runner
+        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        with:
+          # Must exactly match the iai-callgrind version in pqfile/Cargo.toml
+          # (dev-dependency) - a mismatch is a hard error at bench-run time.
+          tool: iai-callgrind-runner@0.16.1
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: iai
+          cache-target: "true"
+
+      - name: Run iai-callgrind benchmarks
+        run: cargo bench -p pqfile --bench iai
+
   # ── Secret scanning ────────────────────────────────────────────────────────
   gitleaks:
     name: gitleaks
@@ -304,6 +345,40 @@ jobs:
 
       - name: Test (pqfile-gui, fido2 feature)
         run: cargo test -p pqfile-gui --features fido2
+
+  # ── Optional-feature compile check (kem-libcrux) ──────────────────────────
+  # The `kem-libcrux` feature swaps the ML-KEM backend from `ml-kem` to
+  # Cryspen's F*-verified `libcrux-ml-kem`; off by default so a normal build
+  # never pays for the extra dependency tree. This job exists purely so the
+  # feature-gated code doesn't silently bit-rot between uses - library crate
+  # only, since the feature is a pqfile implementation detail with no CLI/GUI
+  # surface. pqfile/tests/kem_oracle.rs (a plain dev-dependency, unaffected by
+  # this feature) already proves the two backends agree byte-for-byte.
+  kem-libcrux-check:
+    name: kem-libcrux feature check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: kem-libcrux
+          cache-target: "true"
+
+      - name: Clippy (pqfile, kem-libcrux feature)
+        run: cargo clippy -p pqfile --all-targets --features kem-libcrux -- --deny warnings
+
+      - name: Test (pqfile, kem-libcrux feature)
+        run: cargo test -p pqfile --features kem-libcrux
 
   # ── WASM smoke test ────────────────────────────────────────────────────────
   wasm-test:

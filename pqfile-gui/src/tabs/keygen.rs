@@ -3,6 +3,8 @@ use crate::colors::{c_accent, c_card, c_chrome, c_green, c_red, c_subtext, c_sur
 #[cfg(not(target_arch = "wasm32"))]
 use crate::colors::{c_overlay, c_text};
 use crate::types::{KeygenAlgorithm, OpStatus, Tab};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::widgets::atomic_write;
 use crate::widgets::{card, section_label, show_status, tab_heading_help};
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::keygen;
@@ -11,6 +13,7 @@ use pqfile::keygen::keygen_hardware;
 use pqfile::sign;
 #[cfg(not(target_arch = "wasm32"))]
 use pqfile::sign::sign_keygen_hardware_with_algorithm;
+use zeroize::Zeroize;
 
 impl PqfileApp {
     pub(crate) fn show_keygen(&mut self, ui: &mut egui::Ui, dark: bool) {
@@ -420,8 +423,8 @@ impl PqfileApp {
                 }
 
                 let fp = pqfile::keygen::fingerprint_pem(&pub_pem);
-                if let Err(e) = std::fs::write(&pub_path, pub_pem.as_bytes())
-                    .and_then(|_| std::fs::write(&priv_path, priv_pem.as_bytes()))
+                if let Err(e) = atomic_write(&pub_path, pub_pem.as_bytes())
+                    .and_then(|_| atomic_write(&priv_path, priv_pem.as_bytes()))
                 {
                     self.keygen_status = OpStatus::Err(e.to_string());
                 } else {
@@ -503,7 +506,7 @@ impl PqfileApp {
                             for name in &["pubkey.pem", "privkey.pem"] {
                                 let p = dir.join(name);
                                 if let Ok(pem_str) = std::fs::read_to_string(&p) {
-                                    let _ = std::fs::write(
+                                    let _ = atomic_write(
                                         &p,
                                         format!("# Expires: {date}\n{pem_str}").as_bytes(),
                                     );
@@ -616,8 +619,8 @@ impl PqfileApp {
                     sig_alg,
                 ) {
                     Ok(r) => {
-                        self.keygen_passphrase.clear();
-                        self.keygen_passphrase_confirm.clear();
+                        self.keygen_passphrase.zeroize();
+                        self.keygen_passphrase_confirm.zeroize();
                         OpStatus::Ok(format!(
                             "Signing keys saved to {}\nFingerprint: {}",
                             dir.display(),
@@ -639,8 +642,8 @@ impl PqfileApp {
                 Ok(r) => {
                     download_bytes("sign_pubkey.pem", r.vk_pem.as_bytes());
                     download_bytes("sign_privkey.pem", r.sk_pem.as_bytes());
-                    self.keygen_passphrase.clear();
-                    self.keygen_passphrase_confirm.clear();
+                    self.keygen_passphrase.zeroize();
+                    self.keygen_passphrase_confirm.zeroize();
                     self.keygen_status = OpStatus::Ok(format!(
                         "sign_pubkey.pem and sign_privkey.pem downloaded.\nFingerprint: {}",
                         r.vk_fingerprint,
