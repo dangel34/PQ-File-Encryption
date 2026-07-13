@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783878960125,
+  "lastUpdate": 1783947425893,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -2141,6 +2141,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48375,
             "range": "± 93",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "ea1e6e8bf5e9c35765a4ef53f2fc06c877b9a97f",
+          "message": "test: add validation tests for key lengths in encryption and decryption\n\n- Introduced new tests to ensure that the encryption and decryption functions reject malformed or incorrectly sized keys for various key lengths (512, 768, and 1024).\n- Added tests for validating the key derived from a seed and checking for out-of-range coefficients in the KEM backend.\n- Enhanced the `split_key` and `reconstruct_key` functionality with tests for hybrid key reconstruction.\n- Updated `deny.toml` to clarify the status of unmaintained dependencies related to the testing framework.",
+          "timestamp": "2026-07-13T08:52:51-04:00",
+          "tree_id": "2984fca5b0736b9ff884ad8d107d383d444c705a",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/ea1e6e8bf5e9c35765a4ef53f2fc06c877b9a97f"
+        },
+        "date": 1783947425453,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 74122,
+            "range": "± 1972",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1055752,
+            "range": "± 24861",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 113685468,
+            "range": "± 597813",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 118182,
+            "range": "± 1457",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1076697,
+            "range": "± 16146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 103055018,
+            "range": "± 1717759",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 74494,
+            "range": "± 478",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1100321,
+            "range": "± 3377",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 111103751,
+            "range": "± 1953282",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 120293,
+            "range": "± 848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1152860,
+            "range": "± 36284",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 110928419,
+            "range": "± 315291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 53768,
+            "range": "± 1267",
             "unit": "ns/iter"
           }
         ]
