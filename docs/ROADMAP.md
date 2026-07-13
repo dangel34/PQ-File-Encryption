@@ -79,6 +79,7 @@ All features from v2.x through v4.3.0 are complete. A full history is available 
 - **Deterministic benchmark gate (`iai-callgrind`)**: `pqfile/benches/iai.rs` benches the KEM (`keygen_bytes`), AEAD (`encrypt_bytes`/`decrypt_bytes` on a 64 KiB payload), header parsing (`inspect_stream`), and Shamir (`split_key`/`reconstruct_key`) paths under Valgrind/Callgrind via `#[library_benchmark]`, with setup functions keeping key generation and ciphertext prep outside the measured region. Gated at +/-5% instruction-count regression via `Callgrind::soft_limits([(EventKind::Ir, 5.0)])`, checked against the previous run's `target/iai/` baseline (restored by the existing `cargo-cache` action, Cargo.lock-keyed with a prefix fallback so it survives most dependency bumps). New `iai-bench` CI job installs `valgrind` from apt and `iai-callgrind-runner` pinned to the exact same version as the `iai-callgrind` dev-dependency (0.16.1 - a mismatch between the two is a hard error). Argon2id stays out of scope, as planned, since a memory-hard KDF under Valgrind's ~20x slowdown would dominate CI time for no signal. The existing criterion `crypto` bench and its wall-clock `bench` job in ci.yml are unchanged and still the source for human-readable local numbers.
 - **Optional formally verified ML-KEM backend (`libcrux-ml-kem`, opt-in `kem-libcrux` feature)**: new `pqfile/src/kem_backend.rs` defines a `KemBackend` trait (`ek_from_seed`/`encapsulate`/`decapsulate`, all raw-byte in and out) with two implementors - `MlKemBackend` (RustCrypto `ml-kem`, always compiled, default) and `LibcruxBackend` (Cryspen's F*-verified `libcrux-ml-kem`, behind `kem-libcrux`). Every KEM call site across `encrypt.rs`, `decrypt.rs`, `keygen.rs`, `keys.rs`, and `shamir.rs` (two more files than the original scoping note anticipated) now goes through the trait instead of constructing `ml-kem` typed keys directly; `EkVariant`/`DkVariant` hold raw EK bytes and the 64-byte private seed respectively rather than backend-specific types. Plain random keygen (previously `Kem::generate_keypair()`) was unified onto the same seed-based path as import/hardware/reconstruction after confirming byte-for-byte equivalence: `generate_keypair`'s RNG draws `d` then `z` (32 bytes each) and reaches the same `generate_deterministic(d, z)` that `from_seed` reaches via `seed.split()`. No wire-format change - `pqfile/tests/kem_oracle.rs` already proved interchangeability, and the full compat-matrix vectors in `pqfile/tests/compat/` (golden ciphertexts from the default backend) pass unmodified under `--features kem-libcrux`. One real behavioral gap found and closed along the way: libcrux's raw `TryFrom<&[u8]>` public-key constructor is a length-only check, unlike `ml-kem`'s `EncapsulationKey::new()`, which also performs the FIPS 203 §7.2 "Encapsulation Key Check" (rejects out-of-range decoded coefficients); `LibcruxBackend::encapsulate` now calls a shared `validate_ek` helper that reuses `ml-kem`'s own constructor purely for this check (still always a dependency regardless of the feature) rather than re-implementing the coefficient bit-unpacking, so both backends reject the same malformed keys. New `kem-libcrux-check` CI job (mirrors the existing `fido2-check` pattern) runs clippy and the full `pqfile` test suite with the feature on; a normal build never pulls in the extra dependency tree. Caveat carried over honestly from the original scoping: independent analysis ([eprint 2026/192](https://eprint.iacr.org/2026/192.pdf)) found only ~58% of the Rust proof surface is actually SMT-checked and the NEON backend is admitted without proofs, so this is defense in depth, not a silver bullet.
 - **Profile-guided optimization for the CLI release binary**: `release.yml`'s `build` job now does an instrument / train / merge / optimize cycle around `pqfile-cli` specifically, on all four native targets, using raw `-Cprofile-generate`/`-Cprofile-use` `RUSTFLAGS` rather than the `cargo-pgo` tool the original note suggested - `cargo-pgo` always shells out to plain `cargo build` internally (confirmed by reading its source), which is incompatible with the `cargo auditable build` this pipeline already uses to embed SBOM-scannable dependency metadata in shipped binaries; the manual RUSTFLAGS approach is the same official rustc PGO workflow cargo-pgo itself wraps, verified locally to compose cleanly with `cargo auditable` (`cargo audit bin` still finds the embedded dependency data on the optimized binary). New `scripts/pgo_workload.sh` trains on ML-KEM 512/768/1024/hybrid single-recipient roundtrips at two sizes, a multi-recipient roundtrip (exercises the AES-256-GCM session-key-wrap path), and a compressed roundtrip. **Scoped to the CLI only**, not `pqfile-desktop`: a GUI binary has no headless way to be driven in CI to collect profile data. **Does not cover v10 `--passphrase` mode**: `rpassword` reads the controlling terminal device directly rather than stdin, so its prompt can't be scripted headlessly; the KDF that mode alone exercises (Argon2id) is already out of scope for instruction-level tuning per the iai-callgrind bench notes, since it's deliberately memory-hard, so the gap has low practical cost. The whole sequence runs inside a non-fatal wrapper: any failure (missing `llvm-profdata`, a workload error, a cross-compiled target's instrumented binary not being runnable on the build host, ...) falls back to the plain `cargo auditable build` that shipped before this existed, so a PGO-specific break can never fail a release - see the 2026-06-26 release-pipeline breakage for why that bar matters here. No PGO path for `pqfile-desktop` or the WASM bundle.
+- **Signable public key certificates**: new `pqfile::cert` module (`issue_cert`/`verify_cert`/`Certificate`/`cert_use`) is a minimal PKI layer over the existing `sign` module - no new cryptographic primitive, just a signed, self-describing wrapper. A CA signing key (ML-DSA-65 or SLH-DSA-SHAKE-192f) signs a subject public key (any pqfile PEM: KEM/hybrid public key or a verifying key) together with a label, a validity window (`not_before`/`not_after`, Unix seconds, both inclusive), and an `allowed_use` bitmask (`ENCRYPT`/`SIGN`, combinable). The subject key's own PEM tag travels inside the signed body, so `verify_cert` hands back a ready-to-use PEM without the caller needing to know the key type in advance; the wire body is fully self-delimiting (no outer length prefix) so parsing and signing operate over the identical byte range. `pqfile issue-cert --ca-key <SK> --subject <PUBKEY|pqf1…> --label <TEXT> --allow-encrypt/--allow-sign [--not-before YYYY-MM-DD] --valid-days <N> -o <FILE>` creates one; `pqfile verify-cert --ca-key <VK> <FILE>` checks the signature and window and prints the label, validity, and allowed use. `pqfile encrypt -r <CERT> --ca-key <VK>` accepts a certificate directly in place of a raw recipient key: it verifies the cert, rejects it if `ENCRYPT` is not in `allowed_use` (new `PqfileError::CertUseNotPermitted`, code 29) or if the check time falls outside the window (new `PqfileError::CertNotValid`, code 28), and otherwise substitutes the embedded subject key transparently. Certificates do not chain and there is no revocation beyond the validity window (re-issue with a shorter window instead); a certified recipient key also skips the `.revoked`-sidecar check that a direct pubkey path gets, since there is no on-disk path to a sidecar for an embedded key. CLI-only for now: `sign`/`verify`/`signcrypt` do not yet accept a certificate in place of a verifying key, and neither GUI has cert support - both are natural follow-ups if this sees use.
 
 
 
@@ -135,55 +136,51 @@ age v1.3.0 ships native post-quantum hybrid ML-KEM-768+X25519 recipients, and th
 
 FIPS 206 went to draft approval in August 2025 with the final standard expected late 2026 or early 2027. FN-DSA signatures are ~666 bytes versus ~3.3 KB for ML-DSA-65, a major win for signcrypt overhead and QR-code-sized artifacts. Thomas Pornin's `[rust-fn-dsa](https://github.com/pornin/rust-fn-dsa)` is high quality and tracks the draft. The PEM-tag-based algorithm auto-detection added for SLH-DSA means a third signature algorithm slots into every sign/verify/signcrypt path the same way. Blocked on: the standard finalizing, and the crate stabilizing against the final test vectors. Revisit each quarter.
 
-### 4. Signable public key certificates
-
-A lightweight certificate format where a CA signing key (ML-DSA-65) signs a public key (ML-KEM) along with metadata: a label, a validity window, and an allowed-use bitmask (encrypt-only, sign-only, or both). `pqfile issue-cert` creates the certificate; `pqfile verify-cert` checks the chain. `pqfile encrypt` optionally accepts a certificate instead of a raw public key and validates expiry and allowed-use before encapsulating. This is a minimal PKI layer built entirely from the existing primitives with no external dependencies.
-
-### 5. Sealed sender
+### 4. Sealed sender
 
 Encrypt without revealing the sender's identity in the ciphertext. The sender derives a one-time signing key pair via HKDF from their long-term signing key and the KEM ciphertext, signs the payload with the ephemeral key, and discards it. The recipient can verify authenticity using the sender's long-term verifying key, but no third party observing the ciphertext can link it to the sender. Useful when the existence of a communication relationship is itself sensitive.
 
-### 6. Python and Node.js bindings
+### 5. Python and Node.js bindings
 
 Expose core `pqfile::encrypt` and `pqfile::decrypt` as a Python wheel and an npm package. The modern pairing is PyO3 with `[maturin](https://github.com/PyO3/maturin)` for wheel builds across the manylinux/macOS/Windows matrix, and `[napi-rs](https://napi.rs)` for prebuilt native Node addons (faster than the WASM path for server-side use; the existing wasm-bindgen build remains the browser fallback). Allows Python and Node.js scripts to encrypt and decrypt without shelling out to the CLI.
 
-### 7. Shell integration
+### 6. Shell integration
 
 Right-click "Encrypt with pqfile" on Windows (Explorer context menu via registry entry), macOS (Quick Action via Automator bundle), and Linux (`.desktop` file). The integration invokes the CLI with the last-used recipient key and writes the output alongside the original.
 
-### 8. Native OS installer packaging
+### 7. Native OS installer packaging
 
 Automate production of signed OS-native installers from the release workflow: MSI via WiX (Windows), DMG via create-dmg (macOS), .deb/.rpm via cargo-deb/rpmbuild (already documented manually in the README), and AppImage via appimagetool (Linux, requires `squashfs-tools`). Evaluate `[cargo-dist](https://opensource.axo.dev/cargo-dist/)` first: it generates the entire release matrix (MSI, shell/PowerShell installers, Homebrew tap, checksums) from one config and would replace most of the hand-rolled release.yml artifact logic. Code-signing and macOS notarization are the long pole here, which is why this stays unscheduled rather than in v4.x Planned.
 
-### 9. Encrypted audit log
+### 8. Encrypted audit log
 
 An append-only log of encryption and decryption events stored as a chain of signed and encrypted records. Each record contains the timestamp, command, file fingerprint, and key fingerprint, signed with the operator's ML-DSA key and encrypted for an auditor public key. The chaining structure makes silent deletion detectable. A natural first user of the BLAKE3 guideline above, since none of the log's hashing touches the wire format.
 
-### 10. Split ciphertext storage
+### 9. Split ciphertext storage
 
 A mode where the raw ciphertext bytes are split across N output files using a secret sharing scheme (or simpler XOR splitting for K=N), requiring any K files to reconstruct. Different from key splitting: the key stays intact and the payload itself is distributed. Useful for backup scenarios where the ciphertext is spread across cloud providers that are mutually untrusted; no single provider has a usable ciphertext.
 
-### 11. Key ceremony tooling
+### 10. Key ceremony tooling
 
 An interactive guided ceremony mode for high-assurance key generation. Multiple participants each contribute entropy combined via SHA3-256 before seeding key generation so no single participant can bias the result. The ceremony log records each participant's entropy hash, the combined seed hash, and the resulting public key fingerprint.
 
-### 12. Attribute-based access control policies
+### 11. Attribute-based access control policies
 
 Go beyond M-of-N threshold decryption to support Boolean access policies: "decrypt if holder of key A AND key B, OR key C." Each policy node is an encrypted share of the session key. Evaluation is a tree walk using Shamir recombination at AND nodes and branch selection at OR nodes.
 
-### 13. Web extension / browser integration
+### 12. Web extension / browser integration
 
 A browser extension (Chrome / Firefox) that embeds the existing WASM core and adds an "Encrypt" action to file-attachment dialogs and an "Encrypt text" context menu item. Encryption runs entirely in the browser process; no data is sent to a server.
 
-### 14. Deniable encryption
+### 13. Deniable encryption
 
 Produce a `.pqf` file that yields two valid, indistinguishable plaintexts: a real one under the primary key and a decoy under a duress key. Both decrypt without error and leave no detectable marker distinguishing which is real. VeraCrypt offers this for full-disk volumes but no post-quantum file encryptor provides it. The design challenge is two independently valid ML-KEM shared secrets each mapping to a distinct AEAD layer, with a header that reveals nothing about which layer is authoritative.
 
-### 15. Forward-secret file exchange protocol
+### 14. Forward-secret file exchange protocol
 
 A stateful protocol built on pqfile that provides forward secrecy for an ongoing file exchange session between two parties. Each exchange ratchets a shared root secret forward using a new ML-KEM encapsulation, so compromise of the current session key does not expose previously exchanged files. State lives in a small JSON ratchet file alongside the key pair.
 
-### 16. Proxy re-encryption
+### 15. Proxy re-encryption
 
 Generate a re-encryption key `rk(A -> B)` from private key A and public key B. A proxy holding only `rk` can transform a ciphertext encrypted for A into one encrypted for B, without ever seeing the plaintext or either private key. Useful for delegated access: a file server can re-encrypt stored files on behalf of a new recipient without the sender needing to re-encrypt manually. Ranked last among the cryptographic items because no practical post-quantum PRE construction with a mature implementation exists; the known lattice-based schemes are research-grade, and falling back to a classical ECC-based PRE would break the project's post-quantum story.
 

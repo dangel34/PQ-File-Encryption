@@ -24,6 +24,10 @@ jobs:
   mutants:
     name: cargo-mutants (crypto-critical paths)
     runs-on: ubuntu-latest
+    # Explicit ceiling so a slow tail of mutants fails the job cleanly
+    # instead of running into GitHub's 6h default and getting silently
+    # reaped by next week's scheduled run via the concurrency group above.
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:
@@ -49,11 +53,20 @@ jobs:
 
       # Run mutations on the four crypto-critical modules only.
       # --jobs 4: run 4 mutations concurrently.
-      # --timeout 180: kill any mutant test run that exceeds 180 seconds.
-      #   The full pqfile test suite (~365 tests) takes 90-120s on ubuntu-latest
-      #   because Argon2id runs at m=64MiB t=3 p=4 in production params. 180s
-      #   gives a 1.5-2x buffer over the observed baseline time; most mutants
-      #   still fail within the first few tests (<10s).
+      # --timeout-multiplier 5 (cargo-mutants default, spelled out for
+      #   clarity): each mutant gets 5x the *measured* baseline test time,
+      #   rather than a fixed --timeout. A fixed --timeout also bounds the
+      #   baseline run itself, so as the suite grows (e.g. SLH-DSA-192f
+      #   landing pushed a from-scratch full-suite run past 180s on
+      #   ubuntu-latest) it silently kills the baseline before any mutant
+      #   is even tested, failing the whole job in ~4 minutes instead of
+      #   running mutation testing. Scaling off the real baseline avoids
+      #   needing to hand-tune this constant every time the suite changes.
+      # --minimum-test-timeout 60: floor under the multiplier so a noisy
+      #   runner doesn't produce a too-tight per-mutant timeout.
+      # timeout-minutes on the job (above) is the actual ceiling against a
+      #   runaway/hung mutant tail; most mutants still fail within the
+      #   first few tests (<10s).
       # --no-shuffle: stable ordering for reproducible logs.
       # extra_flags goes through an env var rather than ${{ }} interpolation
       # into the script (shell-injection vector, zizmor template-injection).
@@ -67,7 +80,8 @@ jobs:
             --file pqfile/src/shamir.rs \
             --file pqfile/src/passphrase.rs \
             --jobs 4 \
-            --timeout 180 \
+            --timeout-multiplier 5 \
+            --minimum-test-timeout 60 \
             --no-shuffle \
             $EXTRA_FLAGS
         env:

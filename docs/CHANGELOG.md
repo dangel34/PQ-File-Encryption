@@ -4,6 +4,14 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [Unreleased]
+
+### New features
+
+- **Signable public key certificates**: new `pqfile::cert` module (`issue_cert`/`verify_cert`/`Certificate`, plus the `cert_use` bitmask) is a minimal PKI layer over the existing `sign` module. A CA signing key (ML-DSA-65 or SLH-DSA-SHAKE-192f) signs a subject public key (any pqfile PEM - KEM/hybrid public key or a verifying key) together with a label, a validity window (`not_before`/`not_after`, inclusive Unix seconds), and an `allowed_use` bitmask (`cert_use::ENCRYPT` / `cert_use::SIGN`, combinable). The subject key's own PEM tag travels inside the signed body, so a verified certificate hands back a ready-to-use PEM without the caller needing to know the key type in advance. New CLI subcommands: `pqfile issue-cert --ca-key <SK> --subject <PUBKEY|pqf1…> --label <TEXT> --allow-encrypt/--allow-sign [--not-before YYYY-MM-DD] [--valid-days N] -o <FILE>` and `pqfile verify-cert --ca-key <VK> <FILE>`. `pqfile encrypt -r <CERT> --ca-key <VK>` accepts a certificate directly in place of a raw recipient key, verifying it and checking `allowed_use` before encapsulating. New errors `PqfileError::CertNotValid` (code 28, signature verified but outside the validity window) and `PqfileError::CertUseNotPermitted` (code 29, certificate does not authorize the requested use). Certificates do not chain and have no revocation mechanism beyond the validity window. CLI-only for now: `sign`/`verify`/`signcrypt` do not yet accept a certificate in place of a verifying key, and neither GUI has certificate support.
+
+---
+
 ## [4.3.0] - 2026-07-11
 
 ### New features

@@ -42,3 +42,5 @@ Code `0` is a catch-all for errors that do not map to a known variant (should no
 | 25 | `UnsupportedHeaderFlags` | v10 header carries flag bits this build does not understand; upgrade pqfile |
 | 26 | `Fido2Required` | v10 file was encrypted with a FIDO2 hardware token second factor; pass `--fido2 <ENROLLMENT_FILE>` |
 | 27 | `Fido2NotRequired` | `--fido2` was passed but the file was not encrypted with one (or uses `--keyfile` instead); remove the flag |
+| 28 | `CertNotValid` | Certificate signature verified, but the check time falls outside its validity window |
+| 29 | `CertUseNotPermitted` | Certificate does not authorize the requested use (encrypt or sign) |

@@ -169,6 +169,28 @@ pub enum PqfileError {
     /// [`KeyfileNotRequired`]: PqfileError::KeyfileNotRequired
     #[error("file was not encrypted with a FIDO2 second factor; remove --fido2 and retry")]
     Fido2NotRequired,
+
+    /// A certificate's signature verified, but `now` fell outside its validity window.
+    #[error(
+        "certificate is not valid at this time: window is {not_before}..={not_after}, now is {now}"
+    )]
+    CertNotValid {
+        /// Validity window start, Unix seconds (inclusive).
+        not_before: u64,
+        /// Validity window end, Unix seconds (inclusive).
+        not_after: u64,
+        /// The time the certificate was checked against, Unix seconds.
+        now: u64,
+    },
+
+    /// A certificate was presented for a use its `allowed_use` bitmask does not permit.
+    #[error("certificate does not permit the requested use: required {required:#04x}, allowed {allowed:#04x}")]
+    CertUseNotPermitted {
+        /// Bitmask of [`crate::cert::cert_use`] flags the caller required.
+        required: u8,
+        /// Bitmask of [`crate::cert::cert_use`] flags the certificate allows.
+        allowed: u8,
+    },
 }
 
 impl PqfileError {
@@ -209,6 +231,8 @@ impl PqfileError {
             PqfileError::UnsupportedHeaderFlags(_) => 25,
             PqfileError::Fido2Required => 26,
             PqfileError::Fido2NotRequired => 27,
+            PqfileError::CertNotValid { .. } => 28,
+            PqfileError::CertUseNotPermitted { .. } => 29,
         }
     }
 }

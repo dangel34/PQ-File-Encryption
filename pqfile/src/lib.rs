@@ -123,6 +123,9 @@ pub mod signcrypt;
 /// Add a recipient to an existing multi-recipient file without re-encrypting.
 pub mod add_recipient;
 
+/// Signable public key certificates: a minimal PKI layer over `sign`.
+pub mod cert;
+
 /// File header inspection without decryption.
 pub mod inspect;
 

@@ -78,6 +78,11 @@ enum Command {
         /// Repeat -r for multiple recipients (v4 format). Mutually exclusive with --passphrase.
         #[arg(short = 'r', value_name = "PUBKEY", action = clap::ArgAction::Append, conflicts_with = "passphrase_only")]
         recipients: Vec<String>,
+        /// CA verifying key to check any certificate passed via -r against.
+        /// Required only when one or more -r arguments is a certificate PEM
+        /// (produced by `issue-cert`) rather than a raw public key.
+        #[arg(long, value_name = "CA_VERIFYING_KEY")]
+        ca_key: Option<PathBuf>,
         /// Encrypt without a key pair: derive the session key directly from a passphrase (v10 format).
         /// The passphrase is prompted interactively. Mutually exclusive with -r.
         #[arg(
@@ -579,6 +584,55 @@ enum Command {
         #[arg(long, default_value_t = false)]
         passphrase: bool,
     },
+
+    /// Issue a certificate: a CA signing key attests to a subject public key's
+    /// label, validity window, and permitted uses.
+    ///
+    /// The subject key can be an ML-KEM/hybrid public key (--allow-encrypt), a
+    /// signature verifying key (--allow-sign), or both flags together for a key
+    /// that serves both roles. `encrypt -r` accepts the resulting certificate
+    /// directly in place of a raw public key when given the matching `--ca-key`.
+    #[command(name = "issue-cert")]
+    IssueCert {
+        /// CA signing key: the certificate is signed with this key.
+        #[arg(long, value_name = "CA_SIGNING_KEY")]
+        ca_key: PathBuf,
+        /// Subject public key to certify: a path to a public/verifying key PEM,
+        /// or a `pqf1…` recipient string.
+        #[arg(long, value_name = "SUBJECT_KEY")]
+        subject: String,
+        /// Human-readable label for the subject (free text).
+        #[arg(long)]
+        label: String,
+        /// Validity window start (YYYY-MM-DD, UTC). Defaults to today.
+        #[arg(long, value_name = "DATE")]
+        not_before: Option<String>,
+        /// Validity window length in days, starting at --not-before.
+        #[arg(long, value_name = "DAYS", default_value_t = 365u32)]
+        valid_days: u32,
+        /// Permit the certified key to be used as an encryption recipient.
+        #[arg(long, default_value_t = false)]
+        allow_encrypt: bool,
+        /// Permit the certified key to be used to verify signatures.
+        #[arg(long, default_value_t = false)]
+        allow_sign: bool,
+        /// Output path for the certificate PEM.
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: PathBuf,
+        /// Overwrite an existing output file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+
+    /// Verify a certificate against a CA verifying key and print its contents.
+    #[command(name = "verify-cert")]
+    VerifyCert {
+        /// CA verifying key (issuer's public key).
+        #[arg(long, value_name = "CA_VERIFYING_KEY")]
+        ca_key: PathBuf,
+        /// Certificate file to verify.
+        cert: PathBuf,
+    },
 }
 
 const PARALLEL_BATCH_SIZE: usize = 8;
@@ -756,6 +810,76 @@ fn ensure_overwrite_allowed(path: &Path, to_stdout: bool, force: bool) -> Result
     Ok(())
 }
 
+/// Current wall-clock time as Unix seconds, for certificate validity checks.
+fn current_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Parses a `YYYY-MM-DD` date (UTC, midnight) into Unix seconds.
+fn parse_ymd_to_unix(date: &str) -> Result<u64, PqfileError> {
+    let bad = || {
+        PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("date must be in YYYY-MM-DD format, got {date:?}"),
+        ))
+    };
+    let parts: Vec<&str> = date.splitn(4, '-').collect();
+    if parts.len() != 3
+        || parts[0].len() != 4
+        || parts[1].len() != 2
+        || parts[2].len() != 2
+        || !parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()))
+    {
+        return Err(bad());
+    }
+    let y: i64 = parts[0].parse().map_err(|_| bad())?;
+    let m: i64 = parts[1].parse().map_err(|_| bad())?;
+    let d: i64 = parts[2].parse().map_err(|_| bad())?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return Err(bad());
+    }
+    let days = days_from_civil(y, m, d);
+    let epoch_days = days_from_civil(1970, 1, 1);
+    let secs = (days - epoch_days) * 86_400;
+    u64::try_from(secs).map_err(|_| bad())
+}
+
+/// Formats Unix seconds as a `YYYY-MM-DD` date (UTC).
+fn format_unix_date(secs: u64) -> String {
+    let days = (secs / 86_400) as i64 + days_from_civil(1970, 1, 1);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Howard Hinnant's `days_from_civil`: proleptic Gregorian calendar date to
+/// days since 1970-01-01 (correct for any year, including leap years).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Inverse of [`days_from_civil`]: days since 1970-01-01 to a civil date.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 fn main() {
     // clap's derive-generated argument-parser construction for this many
     // subcommands/flags is a deep (but finite) call chain once inlining is
@@ -887,6 +1011,7 @@ fn interactive_encrypt() -> Result<(), PqfileError> {
 
     run_encrypt(
         recipients,
+        None,
         passphrase_only,
         false,
         input,
@@ -1013,6 +1138,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
         ),
         Command::Encrypt {
             recipients,
+            ca_key,
             input,
             output,
             force,
@@ -1035,6 +1161,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             stealth,
         } => run_encrypt(
             recipients,
+            ca_key,
             passphrase_only,
             no_config,
             input,
@@ -1206,6 +1333,29 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             passphrase,
         } => run_import_key(from, out, force, passphrase, json),
         Command::Fingerprint { key, qr } => run_fingerprint(&key, qr, json),
+        Command::IssueCert {
+            ca_key,
+            subject,
+            label,
+            not_before,
+            valid_days,
+            allow_encrypt,
+            allow_sign,
+            output,
+            force,
+        } => run_issue_cert(
+            ca_key,
+            &subject,
+            &label,
+            not_before,
+            valid_days,
+            allow_encrypt,
+            allow_sign,
+            output,
+            force,
+            json,
+        ),
+        Command::VerifyCert { ca_key, cert } => run_verify_cert(ca_key, cert, json),
     }
 }
 
@@ -1353,8 +1503,10 @@ fn print_recipient_qr(recipient_str: &str, json: bool) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_encrypt(
     mut recipients: Vec<String>,
+    ca_key: Option<PathBuf>,
     passphrase_only: bool,
     no_config: bool,
     input: String,
@@ -1405,7 +1557,9 @@ fn run_encrypt(
         )));
     }
     // Load and validate recipient public keys. Each recipient can be a path to a
-    // pubkey.pem file, or a `pqf1…` Bech32 recipient string.
+    // pubkey.pem file, a certificate PEM (produced by `issue-cert`), or a
+    // `pqf1…` Bech32 recipient string.
+    let now = current_unix_secs();
     let pubkey_pems: Vec<String> = recipients
         .iter()
         .map(|r| {
@@ -1416,8 +1570,28 @@ fn run_encrypt(
                 // File path: read PEM and check for revocation.
                 let p = std::path::Path::new(r);
                 let pem = std::fs::read_to_string(p)?;
-                revoke::check_not_revoked(p, &pem)?;
-                Ok(pem)
+                if pqfile::cert::is_certificate(&pem) {
+                    let ca_key = ca_key.as_ref().ok_or_else(|| {
+                        PqfileError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "-r {r} is a certificate; pass --ca-key <CA_VERIFYING_KEY> to verify it"
+                            ),
+                        ))
+                    })?;
+                    let ca_vk_pem = std::fs::read_to_string(ca_key)?;
+                    let cert = pqfile::cert::verify_cert(&ca_vk_pem, &pem, now)?;
+                    if !cert.permits(pqfile::cert::cert_use::ENCRYPT) {
+                        return Err(PqfileError::CertUseNotPermitted {
+                            required: pqfile::cert::cert_use::ENCRYPT,
+                            allowed: cert.allowed_use,
+                        });
+                    }
+                    Ok(cert.subject_pem)
+                } else {
+                    revoke::check_not_revoked(p, &pem)?;
+                    Ok(pem)
+                }
             }
         })
         .collect::<Result<_, _>>()?;
@@ -3680,6 +3854,144 @@ fn run_fingerprint(key: &str, qr: bool, json: bool) -> Result<(), PqfileError> {
     Ok(())
 }
 
+// ── certificates ────────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn run_issue_cert(
+    ca_key: PathBuf,
+    subject: &str,
+    label: &str,
+    not_before: Option<String>,
+    valid_days: u32,
+    allow_encrypt: bool,
+    allow_sign: bool,
+    output: PathBuf,
+    force: bool,
+    json: bool,
+) -> Result<(), PqfileError> {
+    if !allow_encrypt && !allow_sign {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "issue-cert requires at least one of --allow-encrypt or --allow-sign",
+        )));
+    }
+    ensure_overwrite_allowed(&output, false, force)?;
+
+    let ca_sk_pem = std::fs::read_to_string(&ca_key)?;
+    let pp = maybe_prompt_passphrase(&ca_sk_pem, "Enter passphrase for CA signing key: ")?;
+    let pp_str = pp.as_deref().map(|z| z.as_str());
+
+    let subject_pem = if pqfile::recipient_string::is_recipient_string(subject) {
+        pqfile::recipient_string::decode_pubkey(subject)?
+    } else {
+        std::fs::read_to_string(subject)?
+    };
+
+    let not_before_secs = match not_before {
+        Some(ref date) => parse_ymd_to_unix(date)?,
+        None => current_unix_secs(),
+    };
+    let not_after_secs = not_before_secs + u64::from(valid_days) * 86_400;
+
+    let mut allowed_use = 0u8;
+    if allow_encrypt {
+        allowed_use |= pqfile::cert::cert_use::ENCRYPT;
+    }
+    if allow_sign {
+        allowed_use |= pqfile::cert::cert_use::SIGN;
+    }
+
+    let cert_pem = pqfile::cert::issue_cert(
+        &ca_sk_pem,
+        pp_str,
+        &subject_pem,
+        label,
+        not_before_secs,
+        not_after_secs,
+        allowed_use,
+    )?;
+    std::fs::write(&output, &cert_pem)?;
+
+    let subject_fp = keygen::fingerprint_pem(&subject_pem);
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("output", &output.to_string_lossy()),
+                kv_str("label", label),
+                kv_str("subject_fingerprint", &subject_fp),
+                kv_str("not_before", &format_unix_date(not_before_secs)),
+                kv_str("not_after", &format_unix_date(not_after_secs)),
+                kv_str(
+                    "allow_encrypt",
+                    if allow_encrypt { "true" } else { "false" }
+                ),
+                kv_str("allow_sign", if allow_sign { "true" } else { "false" }),
+            ])
+        );
+    } else {
+        println!("Certificate written to {}", output.display());
+        println!("Label:               {label}");
+        println!("Subject fingerprint: {subject_fp}");
+        println!(
+            "Validity:            {} .. {}",
+            format_unix_date(not_before_secs),
+            format_unix_date(not_after_secs)
+        );
+        println!(
+            "Allowed use:         {}{}",
+            if allow_encrypt { "encrypt " } else { "" },
+            if allow_sign { "sign" } else { "" }
+        );
+    }
+    Ok(())
+}
+
+fn run_verify_cert(ca_key: PathBuf, cert: PathBuf, json: bool) -> Result<(), PqfileError> {
+    let ca_vk_pem = std::fs::read_to_string(&ca_key)?;
+    let cert_pem = std::fs::read_to_string(&cert)?;
+    let now = current_unix_secs();
+    let parsed = pqfile::cert::verify_cert(&ca_vk_pem, &cert_pem, now)?;
+    let subject_fp = keygen::fingerprint_pem(&parsed.subject_pem);
+    let allow_encrypt = parsed.permits(pqfile::cert::cert_use::ENCRYPT);
+    let allow_sign = parsed.permits(pqfile::cert::cert_use::SIGN);
+
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("result", "valid"),
+                kv_str("label", &parsed.label),
+                kv_str("subject_fingerprint", &subject_fp),
+                kv_str("not_before", &format_unix_date(parsed.not_before)),
+                kv_str("not_after", &format_unix_date(parsed.not_after)),
+                kv_str(
+                    "allow_encrypt",
+                    if allow_encrypt { "true" } else { "false" }
+                ),
+                kv_str("allow_sign", if allow_sign { "true" } else { "false" }),
+            ])
+        );
+    } else {
+        println!("Certificate is valid.");
+        println!("Label:               {}", parsed.label);
+        println!("Subject fingerprint: {subject_fp}");
+        println!(
+            "Validity:            {} .. {}",
+            format_unix_date(parsed.not_before),
+            format_unix_date(parsed.not_after)
+        );
+        println!(
+            "Allowed use:         {}{}",
+            if allow_encrypt { "encrypt " } else { "" },
+            if allow_sign { "sign" } else { "" }
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3720,6 +4032,49 @@ mod tests {
     fn json_escape_printable_passthrough() {
         let s = "hello/world-OK_123";
         assert_eq!(json_escape(s), s);
+    }
+
+    // ── date helpers (issue-cert / verify-cert) ────────────────────────────
+
+    #[test]
+    fn parse_ymd_known_epoch_values() {
+        assert_eq!(parse_ymd_to_unix("1970-01-01").unwrap(), 0);
+        assert_eq!(parse_ymd_to_unix("1970-01-02").unwrap(), 86_400);
+        // 2024-01-01 00:00:00 UTC.
+        assert_eq!(parse_ymd_to_unix("2024-01-01").unwrap(), 1_704_067_200);
+    }
+
+    #[test]
+    fn format_unix_date_roundtrips_parse() {
+        for date in ["1970-01-01", "2000-02-29", "2024-01-01", "2099-12-31"] {
+            let secs = parse_ymd_to_unix(date).unwrap();
+            assert_eq!(format_unix_date(secs), date);
+        }
+    }
+
+    #[test]
+    fn parse_ymd_rejects_malformed_input() {
+        assert!(parse_ymd_to_unix("2024-1-1").is_err());
+        assert!(parse_ymd_to_unix("not-a-date").is_err());
+        assert!(parse_ymd_to_unix("2024-13-01").is_err());
+        assert!(parse_ymd_to_unix("2024-01-32").is_err());
+    }
+
+    #[test]
+    fn days_from_civil_handles_leap_years() {
+        // 2020 and 2000 are leap years; 1900 and 2100 (proleptic) are not.
+        assert_eq!(
+            days_from_civil(2020, 2, 29) + 1,
+            days_from_civil(2020, 3, 1)
+        );
+        assert_eq!(
+            days_from_civil(2000, 2, 29) + 1,
+            days_from_civil(2000, 3, 1)
+        );
+        assert_eq!(
+            days_from_civil(1900, 2, 28) + 1,
+            days_from_civil(1900, 3, 1)
+        );
     }
 
     #[test]
