@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783949247826,
+  "lastUpdate": 1783963882999,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -2345,6 +2345,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 53739,
             "range": "± 218",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "fc49cb32676751910ed039ed4eb2fa1e9c8b0624",
+          "message": "feat(cert): introduce signable public key certificates for enhanced PKI support\n\n- Added a new `pqfile::cert` module that implements a minimal PKI layer, allowing for the issuance and verification of signable public key certificates.\n- Certificates include a human-readable label, validity window, and an allowed-use bitmask for encryption and signing.\n- Implemented CLI commands `issue-cert` for creating certificates and `verify-cert` for validating them against a CA verifying key.\n- Updated error handling to include new certificate-related errors for invalidity and unauthorized use.\n- Enhanced documentation in `CHANGELOG.md` and `ROADMAP.md` to reflect these new features.",
+          "timestamp": "2026-07-13T13:27:37-04:00",
+          "tree_id": "7c64294323124add389a640d0f8969a47477f813",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/fc49cb32676751910ed039ed4eb2fa1e9c8b0624"
+        },
+        "date": 1783963882088,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67191,
+            "range": "± 294",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 972718,
+            "range": "± 3493",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 108670139,
+            "range": "± 1687315",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 109997,
+            "range": "± 716",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 981503,
+            "range": "± 19236",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 94968802,
+            "range": "± 421974",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68584,
+            "range": "± 325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 971652,
+            "range": "± 16779",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 101286441,
+            "range": "± 716853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 109289,
+            "range": "± 474",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1018030,
+            "range": "± 14267",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 100115170,
+            "range": "± 506508",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48165,
+            "range": "± 134",
             "unit": "ns/iter"
           }
         ]
