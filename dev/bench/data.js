@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783947425893,
+  "lastUpdate": 1783949247826,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -2243,6 +2243,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 53768,
             "range": "± 1267",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "b5bb82e9a92a2fbd38838b09645dd2b3bead410b",
+          "message": "chore(deps): update dependency versions in Cargo.lock and config.toml\n\n- Bumped versions of `apple-native-keyring-store`, `uuid`, and `zmij` in `Cargo.lock` to their latest releases for improved functionality and security.\n- Updated corresponding versions in `supply-chain/config.toml` to maintain consistency across the project.\n- Adjusted CI workflows to streamline the testing process by removing redundant coverage reporting steps.",
+          "timestamp": "2026-07-13T09:23:52-04:00",
+          "tree_id": "908f0f3339366bd2994b7ada74d257f5709bc582",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/b5bb82e9a92a2fbd38838b09645dd2b3bead410b"
+        },
+        "date": 1783949247367,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 71671,
+            "range": "± 1180",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1057880,
+            "range": "± 6154",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 114770543,
+            "range": "± 3729383",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 124125,
+            "range": "± 427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1082258,
+            "range": "± 5133",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 103766953,
+            "range": "± 163530",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 73791,
+            "range": "± 902",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1100172,
+            "range": "± 4527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 111119789,
+            "range": "± 1816051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 124666,
+            "range": "± 678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1155242,
+            "range": "± 5711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 110979517,
+            "range": "± 399241",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 53739,
+            "range": "± 218",
             "unit": "ns/iter"
           }
         ]
