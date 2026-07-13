@@ -1350,6 +1350,40 @@ mod tests {
     use crate::keygen::keygen_bytes;
 
     #[test]
+    fn decrypt_rejects_wrong_length_private_key() {
+        let bad_key = pem::encode(&pem::Pem::new("ML-KEM-768 PRIVATE KEY", vec![0u8; 10]));
+        let result = decrypt_bytes(&bad_key, b"irrelevant", None);
+        assert!(matches!(
+            result,
+            Err(PqfileError::InvalidKeyLength { expected: 64, .. })
+        ));
+    }
+
+    #[test]
+    fn decapsulate_shared_secret_rejects_wrong_length_ciphertext_512() {
+        let (_, priv_pem) = keygen_bytes(512, None).unwrap();
+        let dk = derive_dk(&priv_pem, None).unwrap();
+        let result = decapsulate_shared_secret(&dk, &[0u8; 10]);
+        assert!(matches!(result, Err(PqfileError::InvalidKeyLength { .. })));
+    }
+
+    #[test]
+    fn decapsulate_shared_secret_rejects_wrong_length_ciphertext_768() {
+        let (_, priv_pem) = keygen_bytes(768, None).unwrap();
+        let dk = derive_dk(&priv_pem, None).unwrap();
+        let result = decapsulate_shared_secret(&dk, &[0u8; 10]);
+        assert!(matches!(result, Err(PqfileError::InvalidKeyLength { .. })));
+    }
+
+    #[test]
+    fn decapsulate_shared_secret_rejects_wrong_length_ciphertext_1024() {
+        let (_, priv_pem) = keygen_bytes(1024, None).unwrap();
+        let dk = derive_dk(&priv_pem, None).unwrap();
+        let result = decapsulate_shared_secret(&dk, &[0u8; 10]);
+        assert!(matches!(result, Err(PqfileError::InvalidKeyLength { .. })));
+    }
+
+    #[test]
     fn decrypt_rejects_truncated_payload() {
         let (_, priv_pem) = keygen_bytes(768, None).unwrap();
 

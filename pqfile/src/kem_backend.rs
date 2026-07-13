@@ -246,3 +246,39 @@ pub(crate) mod libcrux_backend {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::format::{EK_LEN_1024, EK_LEN_512, EK_LEN_768};
+
+    #[test]
+    fn validate_ek_accepts_key_derived_from_seed() {
+        let seed = [0x11u8; 64];
+        for size in [KemSize::Kem512, KemSize::Kem768, KemSize::Kem1024] {
+            let ek = ActiveKemBackend::ek_from_seed(size, &seed);
+            assert!(validate_ek(size, &ek).is_ok());
+        }
+    }
+
+    #[test]
+    fn validate_ek_rejects_wrong_length() {
+        for size in [KemSize::Kem512, KemSize::Kem768, KemSize::Kem1024] {
+            assert!(validate_ek(size, &[0u8; 10]).is_err());
+        }
+    }
+
+    #[test]
+    fn validate_ek_rejects_out_of_range_coefficients() {
+        // Correct length but all-0xFF bytes decode to out-of-range polynomial
+        // coefficients (FIPS 203 modulus check) for every parameter set.
+        for (size, len) in [
+            (KemSize::Kem512, EK_LEN_512),
+            (KemSize::Kem768, EK_LEN_768),
+            (KemSize::Kem1024, EK_LEN_1024),
+        ] {
+            let bad = vec![0xFFu8; len];
+            assert!(validate_ek(size, &bad).is_err());
+        }
+    }
+}

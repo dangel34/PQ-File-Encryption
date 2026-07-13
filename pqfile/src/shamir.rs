@@ -674,6 +674,17 @@ mod tests {
     }
 
     #[test]
+    fn split_key_and_reconstruct_hybrid() {
+        let (_, priv_pem) = crate::keygen::keygen_bytes_hybrid_768(None).unwrap();
+        let result = split_key(&priv_pem, 2, 3, None).unwrap();
+        assert_eq!(result.share_pems.len(), 3);
+        let refs: Vec<&str> = result.share_pems.iter().map(|s| s.as_str()).collect();
+        let (_, recovered_priv) = reconstruct_key(&refs[..2]).unwrap();
+        let result2 = split_key(&recovered_priv, 2, 2, None).unwrap();
+        assert_eq!(result2.pubkey_fingerprint, result.pubkey_fingerprint);
+    }
+
+    #[test]
     fn reconstruct_detects_insufficient_shares() {
         let (_, priv_pem) = keygen_bytes(768, None).unwrap();
         let result = split_key(&priv_pem, 3, 5, None).unwrap();

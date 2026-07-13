@@ -34,10 +34,16 @@ ignore = [
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
     # proc-macro-error2 is unmaintained (RUSTSEC-2026-0173); pulled in transitively
-    # by hax-lib-macros -> hax-lib -> the libcrux-ml-kem tree, which is a
-    # non-wasm32 dev-dependency only (pqfile/tests/kem_oracle.rs). Never compiled
-    # into a shipped binary or the WASM bundle. The advisory itself states no
-    # safe upgrade exists, so there is nothing to update from this repo.
+    # via two independent paths, both non-wasm32 dev-dependencies only, never
+    # compiled into a shipped binary or the WASM bundle: hax-lib-macros ->
+    # hax-lib -> the libcrux-ml-kem tree (pqfile/tests/kem_oracle.rs), and
+    # iai-callgrind-macros -> iai-callgrind (pqfile/benches/iai.rs). 2.0.1 is
+    # also the actual latest version on crates.io, so there is nothing to
+    # update from this repo either way (matches the advisory's own note that
+    # no safe upgrade exists). cargo may print a "will be rejected by a future
+    # version of Rust" future-incompatibility notice for this crate during a
+    # build that includes dev-dependencies (e.g. the iai-bench CI job) - that
+    # notice is informational only and does not fail the build.
     "RUSTSEC-2026-0173",
     # bincode 1.3.3 is unmaintained (RUSTSEC-2025-0141); pulled in transitively by
     # iai-callgrind-runner for IPC between the benchmark binary and the runner

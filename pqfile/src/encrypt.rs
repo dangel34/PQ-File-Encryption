@@ -1524,6 +1524,55 @@ mod tests {
     }
 
     #[test]
+    fn encrypt_rejects_malformed_public_key_bytes_1024() {
+        let bad_key = pem::encode(&pem::Pem::new(
+            "ML-KEM-1024 PUBLIC KEY",
+            vec![0xFFu8; EK_LEN_1024],
+        ));
+        let result = encrypt_bytes(&bad_key, b"hello");
+        assert!(matches!(result, Err(PqfileError::InvalidPem(_))));
+    }
+
+    #[test]
+    fn encrypt_rejects_malformed_hybrid_public_key_bytes() {
+        let mut bad = vec![0x11u8; 32]; // X25519 accepts any 32 bytes as a public key
+        bad.extend_from_slice(&vec![0xFFu8; EK_LEN_768]); // out-of-range ML-KEM-768 coefficients
+        let bad_key = pem::encode(&pem::Pem::new("X25519+ML-KEM-768 PUBLIC KEY", bad));
+        let result = encrypt_bytes(&bad_key, b"hello");
+        assert!(matches!(result, Err(PqfileError::InvalidPem(_))));
+    }
+
+    #[test]
+    fn encrypt_rejects_wrong_length_public_key_512() {
+        let bad_key = pem::encode(&pem::Pem::new("ML-KEM-512 PUBLIC KEY", vec![0u8; 10]));
+        let result = encrypt_bytes(&bad_key, b"hello");
+        assert!(matches!(
+            result,
+            Err(PqfileError::InvalidKeyLength { expected, .. }) if expected == EK_LEN_512
+        ));
+    }
+
+    #[test]
+    fn encrypt_rejects_wrong_length_public_key_768() {
+        let bad_key = pem::encode(&pem::Pem::new("ML-KEM-768 PUBLIC KEY", vec![0u8; 10]));
+        let result = encrypt_bytes(&bad_key, b"hello");
+        assert!(matches!(
+            result,
+            Err(PqfileError::InvalidKeyLength { expected, .. }) if expected == EK_LEN_768
+        ));
+    }
+
+    #[test]
+    fn encrypt_rejects_wrong_length_public_key_1024() {
+        let bad_key = pem::encode(&pem::Pem::new("ML-KEM-1024 PUBLIC KEY", vec![0u8; 10]));
+        let result = encrypt_bytes(&bad_key, b"hello");
+        assert!(matches!(
+            result,
+            Err(PqfileError::InvalidKeyLength { expected, .. }) if expected == EK_LEN_1024
+        ));
+    }
+
+    #[test]
     fn encrypt_rejects_unrecognised_key_tag() {
         let bad_key = pem::encode(&pem::Pem::new("UNKNOWN KEY", vec![0u8; 1184]));
         let result = encrypt_bytes(&bad_key, b"hello");
