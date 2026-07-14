@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783992585410,
+  "lastUpdate": 1784033080852,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -2651,6 +2651,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 47992,
             "range": "± 129",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "638dc6023e37e9d7f7364faa7fa1f0846defcd4e",
+          "message": "fix(ci): drop --jobs 4 and --test-threads, run mutants serially\n\n--test-threads=1 fixed the arg-forwarding error but not the actual\nproblem: forcing each cargo test run to be single-threaded just\ntraded oversubscription-when-concurrent for slow-when-serial, netting\nabout the same throughput as running one mutant at a time and letting\nit use the whole machine. Do that directly instead - cargo-mutants\nalready defaults to --jobs 1.",
+          "timestamp": "2026-07-14T08:41:15-04:00",
+          "tree_id": "1b84c3204d720c405f69da6f1464f2d286390b79",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/638dc6023e37e9d7f7364faa7fa1f0846defcd4e"
+        },
+        "date": 1784033080376,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 56387,
+            "range": "± 720",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 825081,
+            "range": "± 8582",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 92303133,
+            "range": "± 3963363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 91618,
+            "range": "± 1484",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 841774,
+            "range": "± 1382",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 82199161,
+            "range": "± 2586344",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 58375,
+            "range": "± 979",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 845652,
+            "range": "± 14302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 87438871,
+            "range": "± 1902556",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 93101,
+            "range": "± 609",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 885046,
+            "range": "± 21082",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 86312773,
+            "range": "± 2384988",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 41816,
+            "range": "± 553",
             "unit": "ns/iter"
           }
         ]
