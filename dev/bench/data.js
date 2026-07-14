@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783963882999,
+  "lastUpdate": 1783992209921,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -2447,6 +2447,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48165,
             "range": "± 134",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "247b9ceea09f1b3f8e020107190a7b1269c2f80a",
+          "message": "fix(ci): shard mutants workflow and stop CPU oversubscription\n\nBaseline-timeout fix alone wasn't enough: without --test-threads=1,\n4 concurrent cargo-mutants jobs each parallelize internally across\nall CPUs, oversubscribing the runner and inflating mutant test runs\nto ~800s against a 204s baseline. At ~700 mutants that's 40+ hours,\nwhich is why prior scheduled runs were getting cancelled at the 6h\ndefault. Shard across 8 weekly runs (by ISO week) so each job only\ncovers a bounded slice, with manual dispatch able to target a\nspecific shard or run the full set deliberately.",
+          "timestamp": "2026-07-13T21:19:44-04:00",
+          "tree_id": "0e216a0b2a2044ded9377df65cccfd2ab158c884",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/247b9ceea09f1b3f8e020107190a7b1269c2f80a"
+        },
+        "date": 1783992209066,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66250,
+            "range": "± 427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 965227,
+            "range": "± 6843",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 107759208,
+            "range": "± 1114044",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 108549,
+            "range": "± 616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 984497,
+            "range": "± 4377",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 95061834,
+            "range": "± 484389",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 69290,
+            "range": "± 604",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 982101,
+            "range": "± 4036",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 100687850,
+            "range": "± 576914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 111356,
+            "range": "± 686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1025406,
+            "range": "± 13724",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 100566694,
+            "range": "± 670036",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48244,
+            "range": "± 141",
             "unit": "ns/iter"
           }
         ]
