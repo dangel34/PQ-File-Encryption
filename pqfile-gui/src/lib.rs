@@ -596,4 +596,168 @@ mod tests {
             "uppercase .PEM should route to pubkey slot"
         );
     }
+
+    // ── Certificates (Keys tab panel + Encrypt tab cert-as-recipient) ───────
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cert_issue_and_verify_roundtrip_via_gui() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+
+        let mut app = PqfileApp::default();
+        app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
+        app.cert_issue_ca_key = loaded_input("ca_sk.pem", ca.sk_pem.into_bytes(), None);
+        app.cert_issue_subject_key =
+            loaded_input("pubkey.pem", subject_pub.clone().into_bytes(), None);
+        app.cert_issue_label = "alice's laptop".to_owned();
+        app.cert_issue_valid_days = 365;
+        app.cert_issue_allow_encrypt = true;
+        app.do_issue_cert();
+        let OpStatus::Ok(_) = &app.cert_issue_status else {
+            panic!("issue_cert failed: {:?}", app.cert_issue_status);
+        };
+
+        let cert_path = app.cert_issue_output_path.clone().expect("output path set");
+        let cert_pem = std::fs::read_to_string(&cert_path).unwrap();
+
+        let cert =
+            pqfile::cert::verify_cert(&ca.vk_pem, &cert_pem, crate::types::current_unix_secs())
+                .unwrap();
+        assert_eq!(cert.label, "alice's laptop");
+        assert!(cert.permits(pqfile::cert::cert_use::ENCRYPT));
+        assert!(!cert.permits(pqfile::cert::cert_use::SIGN));
+        assert_eq!(cert.subject_pem, subject_pub);
+    }
+
+    #[test]
+    fn cert_verify_via_gui_accepts_valid_certificate() {
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let now = crate::types::current_unix_secs();
+        let cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &subject_pub,
+            "alice's laptop",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::ENCRYPT,
+        )
+        .unwrap();
+
+        let mut app = PqfileApp::default();
+        app.cert_verify_ca_vk = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
+        app.cert_verify_cert = loaded_input("subject.cert", cert_pem.into_bytes(), None);
+        app.do_verify_cert();
+
+        assert!(matches!(app.cert_verify_status, OpStatus::Ok(_)));
+        let result = app.cert_verify_result.expect("verify result populated");
+        assert_eq!(result.label, "alice's laptop");
+        assert!(result.permits(pqfile::cert::cert_use::ENCRYPT));
+    }
+
+    #[test]
+    fn cert_verify_via_gui_rejects_wrong_ca_key() {
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let other_ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let now = crate::types::current_unix_secs();
+        let cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &subject_pub,
+            "x",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::ENCRYPT,
+        )
+        .unwrap();
+
+        let mut app = PqfileApp::default();
+        app.cert_verify_ca_vk = loaded_input("ca_vk.pem", other_ca.vk_pem.into_bytes(), None);
+        app.cert_verify_cert = loaded_input("subject.cert", cert_pem.into_bytes(), None);
+        app.do_verify_cert();
+
+        assert!(matches!(app.cert_verify_status, OpStatus::Err(_)));
+        assert!(app.cert_verify_result.is_none());
+    }
+
+    #[test]
+    fn encrypt_promotes_certificate_recipient_when_ca_key_loaded() {
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let now = crate::types::current_unix_secs();
+        let cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &subject_pub,
+            "test recipient",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::ENCRYPT,
+        )
+        .unwrap();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_ca_key = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
+        app.encrypt_pubkey = loaded_input("recipient.cert", cert_pem.into_bytes(), None);
+        app.poll_files();
+
+        assert!(matches!(app.encrypt_recipient_error, OpStatus::None));
+        assert_eq!(app.encrypt_recipients.len(), 1);
+        assert_eq!(app.encrypt_recipients[0].pem, subject_pub);
+        assert!(app.encrypt_recipients[0].name.contains("test recipient"));
+    }
+
+    #[test]
+    fn encrypt_certificate_recipient_without_ca_key_sets_error() {
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let now = crate::types::current_unix_secs();
+        let cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &subject_pub,
+            "test recipient",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::ENCRYPT,
+        )
+        .unwrap();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_pubkey = loaded_input("recipient.cert", cert_pem.into_bytes(), None);
+        app.poll_files();
+
+        assert!(matches!(app.encrypt_recipient_error, OpStatus::Err(_)));
+        assert!(app.encrypt_recipients.is_empty());
+    }
+
+    #[test]
+    fn encrypt_certificate_recipient_wrong_use_sets_error() {
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let subject_signer = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let now = crate::types::current_unix_secs();
+        // Certified for SIGN only, then presented as an Encrypt recipient.
+        let cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &subject_signer.vk_pem,
+            "sign-only cert",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::SIGN,
+        )
+        .unwrap();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_ca_key = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
+        app.encrypt_pubkey = loaded_input("recipient.cert", cert_pem.into_bytes(), None);
+        app.poll_files();
+
+        assert!(matches!(app.encrypt_recipient_error, OpStatus::Err(_)));
+        assert!(app.encrypt_recipients.is_empty());
+    }
 }

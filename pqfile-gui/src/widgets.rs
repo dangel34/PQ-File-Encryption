@@ -16,8 +16,12 @@ pub(crate) fn tab_btn(
     dark: bool,
 ) {
     let active = *current == target;
+    // Active-state text is `c_text`, not `c_accent`: accent-on-surface1 only
+    // reaches ~2.7:1 contrast in light mode (well under WCAG AA's 4.5:1),
+    // making the *selected* tab label harder to read than the unselected
+    // ones. The accent color still marks "active" via the underline below.
     let text_color = if active {
-        c_accent(dark)
+        c_text(dark)
     } else {
         c_subtext(dark)
     };
@@ -43,6 +47,50 @@ pub(crate) fn tab_btn(
     }
     if resp.clicked() {
         *current = target;
+    }
+}
+
+/// Renders the "More Tools" overflow button: a dropdown menu holding the
+/// specialized/advanced tabs (Sign, Sign & Encrypt, Archive, Shamir, Health
+/// Check, Clipboard) so the primary nav row stays short for new users while
+/// every feature remains one click away.
+pub(crate) fn advanced_tabs_menu(ui: &mut egui::Ui, current: &mut crate::types::Tab, dark: bool) {
+    use crate::types::{tab_label, ADVANCED_TABS};
+
+    let active = ADVANCED_TABS.contains(current);
+    // See the matching comment in `tab_btn`: accent-on-surface1 fails contrast
+    // in light mode, so the active state uses `c_text` with the accent
+    // underline as the "you are here" marker instead.
+    let text_color = if active {
+        c_text(dark)
+    } else {
+        c_subtext(dark)
+    };
+    let fill = if active {
+        c_surface1(dark)
+    } else {
+        Color32::TRANSPARENT
+    };
+    let btn = egui::Button::new(RichText::new("☰ More Tools").size(13.0).color(text_color))
+        .fill(fill)
+        .stroke(Stroke::NONE);
+    let (response, _) = egui::containers::menu::MenuButton::from_button(btn).ui(ui, |ui| {
+        for tab in ADVANCED_TABS {
+            if ui.selectable_label(*current == tab, tab_label(tab)).clicked() {
+                *current = tab;
+                ui.close();
+            }
+        }
+    });
+    if active {
+        let r = response.rect;
+        ui.painter().line_segment(
+            [
+                egui::pos2(r.left() + 4.0, r.bottom()),
+                egui::pos2(r.right() - 4.0, r.bottom()),
+            ],
+            Stroke::new(2.0, c_accent(dark)),
+        );
     }
 }
 
@@ -719,7 +767,7 @@ pub(crate) fn seg_tabs<T: PartialEq + Clone>(
     options: &[(&str, T)],
     dark: bool,
 ) {
-    use crate::colors::{c_accent, c_surface0, c_surface1};
+    use crate::colors::{c_surface0, c_surface1};
     egui::Frame::NONE
         .fill(c_surface0(dark))
         .corner_radius(egui::CornerRadius::same(7))
@@ -729,8 +777,11 @@ pub(crate) fn seg_tabs<T: PartialEq + Clone>(
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (label, value) in options {
                     let active = current == value;
+                    // `c_text`, not `c_accent`: accent-on-surface1 only reaches
+                    // ~2.7:1 contrast in light mode. The pill's surface1 fill
+                    // is itself a sufficient "selected" indicator.
                     let text_col = if active {
-                        c_accent(dark)
+                        c_text(dark)
                     } else {
                         c_subtext(dark)
                     };

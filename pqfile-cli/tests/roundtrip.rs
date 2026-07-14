@@ -1450,6 +1450,200 @@ fn verify_fails_on_tampered_file() {
 }
 
 #[test]
+fn verify_accepts_certificate_as_verifying_key() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let data_path = dir.join("doc.txt");
+    fs::write(&data_path, b"sign me").unwrap();
+
+    // CA key pair (also doubles as the subject's own signing key here).
+    std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    let ca_sk = dir.join("sign_privkey.pem");
+    let ca_vk = dir.join("sign_pubkey.pem");
+
+    let sig_path = dir.join("doc.txt.sig");
+    let status = std::process::Command::new(bin())
+        .args([
+            "sign",
+            "-k",
+            ca_sk.to_str().unwrap(),
+            data_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "sign failed");
+
+    let cert_path = dir.join("subject.cert");
+    let status = std::process::Command::new(bin())
+        .args([
+            "issue-cert",
+            "--ca-key",
+            ca_sk.to_str().unwrap(),
+            "--subject",
+            ca_vk.to_str().unwrap(),
+            "--label",
+            "test signer",
+            "--allow-sign",
+            "-o",
+            cert_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "issue-cert failed");
+
+    // verify -k <cert> --ca-key <ca_vk> should resolve the cert's embedded
+    // subject key and verify against it.
+    let status = std::process::Command::new(bin())
+        .args([
+            "verify",
+            "-k",
+            cert_path.to_str().unwrap(),
+            "--ca-key",
+            ca_vk.to_str().unwrap(),
+            "-s",
+            sig_path.to_str().unwrap(),
+            data_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "verify with certificate failed");
+
+    // Same certificate without --ca-key must fail fast rather than being
+    // treated as a raw (unparseable) verifying key.
+    let status = std::process::Command::new(bin())
+        .args([
+            "verify",
+            "-k",
+            cert_path.to_str().unwrap(),
+            "-s",
+            sig_path.to_str().unwrap(),
+            data_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        !status.success(),
+        "verify with certificate but no --ca-key should fail"
+    );
+}
+
+#[test]
+fn signcrypt_signdecrypt_roundtrip_with_certificate_recipient() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let data_path = dir.join("doc.txt");
+    fs::write(&data_path, b"signcrypt me").unwrap();
+
+    // Sender's signing key pair.
+    let sender_dir = dir.join("sender");
+    fs::create_dir(&sender_dir).unwrap();
+    std::process::Command::new(bin())
+        .args(["sign-keygen", "--out", sender_dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    let sender_sk = sender_dir.join("sign_privkey.pem");
+    let sender_vk = sender_dir.join("sign_pubkey.pem");
+
+    // Recipient's KEM key pair, certified for ENCRYPT use by the same CA key
+    // (reusing the sender's signing key as the CA for simplicity).
+    let recipient_dir = dir.join("recipient");
+    fs::create_dir(&recipient_dir).unwrap();
+    std::process::Command::new(bin())
+        .args(["keygen", "--out", recipient_dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    let recipient_sk = recipient_dir.join("privkey.pem");
+    let recipient_pk = recipient_dir.join("pubkey.pem");
+
+    let cert_path = dir.join("recipient.cert");
+    let status = std::process::Command::new(bin())
+        .args([
+            "issue-cert",
+            "--ca-key",
+            sender_sk.to_str().unwrap(),
+            "--subject",
+            recipient_pk.to_str().unwrap(),
+            "--label",
+            "test recipient",
+            "--allow-encrypt",
+            "-o",
+            cert_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "issue-cert failed");
+
+    let out_path = dir.join("doc.txt.pqf");
+    let status = std::process::Command::new(bin())
+        .args([
+            "signcrypt",
+            "-k",
+            sender_sk.to_str().unwrap(),
+            "-r",
+            cert_path.to_str().unwrap(),
+            "--ca-key",
+            sender_vk.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+            data_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "signcrypt with certificate recipient failed"
+    );
+
+    // signdecrypt -v also accepts a certificate for the sender's verifying key.
+    let decrypted_path = dir.join("doc.txt.out");
+    let status = std::process::Command::new(bin())
+        .args([
+            "signdecrypt",
+            "-k",
+            recipient_sk.to_str().unwrap(),
+            "-v",
+            cert_path.to_str().unwrap(),
+            "--ca-key",
+            sender_vk.to_str().unwrap(),
+            "-o",
+            decrypted_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    // The recipient cert only permits ENCRYPT, not SIGN, so using it as the
+    // verifying key must be rejected rather than silently accepted.
+    assert!(
+        !status.success(),
+        "signdecrypt should reject a certificate without SIGN use"
+    );
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "signdecrypt",
+            "-k",
+            recipient_sk.to_str().unwrap(),
+            "-v",
+            sender_vk.to_str().unwrap(),
+            "-o",
+            decrypted_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "signdecrypt with raw verifying key failed"
+    );
+    assert_eq!(fs::read(&decrypted_path).unwrap(), b"signcrypt me");
+}
+
+#[test]
 fn sign_keygen_refuses_overwrite_without_force() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();

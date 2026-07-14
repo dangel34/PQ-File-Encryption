@@ -25,7 +25,7 @@ pub(crate) enum DoctorRow {
 
 impl PqfileApp {
     pub(crate) fn show_inspect(&mut self, ui: &mut egui::Ui, dark: bool) {
-        if tab_heading_help(ui, "Inspect File or Key", dark) {
+        if tab_heading_help(ui, "Health Check  (File or Key)", dark) {
             self.help_modal_open = Some(Tab::Inspect);
         }
         ui.label(
@@ -181,7 +181,12 @@ fn run_inspect(
         let info = inspect::inspect_stream(&mut cursor).map_err(|e| e.to_string())?;
         Ok(doctor_pqf(&info))
     } else {
-        Err("File is neither a PEM key (-----BEGIN) nor a PQFL ciphertext.".to_owned())
+        Err("No .pqf header found (missing the PQFL magic bytes) and this isn't a PEM key \
+             either. If this file was encrypted with Stealth mode on the Encrypt tab, that's \
+             expected: Stealth files have no header by design, so there is nothing for Health \
+             Check to read without decrypting the file. Decrypt it directly instead — enable \
+             \"Stealth mode\" on the Decrypt tab first."
+            .to_owned())
     }
 }
 

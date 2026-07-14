@@ -364,20 +364,7 @@ impl PqfileApp {
 
 /// Returns "YYYY-MM-DD" for today + `days` days, or None on overflow.
 pub(crate) fn days_from_now(days: u32) -> Option<String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now_days = (SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() / 86400) as i64;
-    let target = now_days + days as i64;
-    // Convert days-since-epoch back to Gregorian (reverse JDN).
-    // JDN = target + 2440588; then use the standard algorithm.
-    let jdn = target + 2_440_588;
-    let a = jdn + 32044;
-    let b = (4 * a + 3) / 146097;
-    let c = a - (146097 * b) / 4;
-    let d = (4 * c + 3) / 1461;
-    let e = c - (1461 * d) / 4;
-    let m = (5 * e + 2) / 153;
-    let day = e - (153 * m + 2) / 5 + 1;
-    let month = m + 3 - 12 * (m / 10);
-    let year = 100 * b + d - 4800 + m / 10;
-    Some(format!("{year:04}-{month:02}-{day:02}"))
+    use crate::types::{current_unix_secs, days_since_epoch_to_ymd};
+    let now_days = (current_unix_secs() / 86400) as i64;
+    Some(days_since_epoch_to_ymd(now_days + days as i64))
 }

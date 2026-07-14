@@ -41,6 +41,14 @@ impl PqfileApp {
 
         #[cfg(target_arch = "wasm32")]
         self.show_keys_wasm(ui, dark);
+
+        ui.add_space(20.0);
+        egui::CollapsingHeader::new("📜  Issue / Verify Certificate")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.add_space(8.0);
+                self.show_cert_section(ui, dark);
+            });
     }
 
     #[cfg(target_arch = "wasm32")]

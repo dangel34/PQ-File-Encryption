@@ -17,6 +17,74 @@ pub(crate) enum Tab {
     Settings,
 }
 
+/// The tabs shown in the primary nav row (the everyday encrypt/decrypt/key-management
+/// path). Settings is rendered separately, pinned at the end of the row.
+pub(crate) const PRIMARY_TABS: [Tab; 4] = [Tab::Keys, Tab::Keygen, Tab::Encrypt, Tab::Decrypt];
+
+/// The specialized/PKI/multi-party tools tucked under the "More Tools" overflow menu.
+pub(crate) const ADVANCED_TABS: [Tab; 6] = [
+    Tab::Sign,
+    Tab::Signcrypt,
+    Tab::Archive,
+    Tab::Shamir,
+    Tab::Inspect,
+    Tab::Clipboard,
+];
+
+/// Stable string key for a tab, used for both URL-hash deep-linking (WASM) and
+/// persisting the last-visited tab across sessions (native).
+pub(crate) fn tab_key(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Keys => "keys",
+        Tab::Keygen => "keygen",
+        Tab::Encrypt => "encrypt",
+        Tab::Decrypt => "decrypt",
+        Tab::Sign => "sign",
+        Tab::Signcrypt => "signcrypt",
+        Tab::Archive => "archive",
+        Tab::Shamir => "shamir",
+        Tab::Inspect => "inspect",
+        Tab::Clipboard => "clipboard",
+        Tab::Settings => "settings",
+    }
+}
+
+/// Display label (icon + text) for a tab, shared by the primary nav row and
+/// the "More Tools" overflow menu.
+pub(crate) fn tab_label(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Keys => "🗝 Keys",
+        Tab::Keygen => "🔑 Keygen",
+        Tab::Encrypt => "🔒 Encrypt",
+        Tab::Decrypt => "🔓 Decrypt",
+        Tab::Sign => "✏ Sign",
+        Tab::Signcrypt => "🔏 Sign & Encrypt",
+        Tab::Archive => "📦 Archive",
+        Tab::Shamir => "🔀 Split Key (Shamir)",
+        Tab::Inspect => "🔍 Health Check",
+        Tab::Clipboard => "📋 Clipboard",
+        Tab::Settings => "⚙ Settings",
+    }
+}
+
+/// Inverse of [`tab_key`], plus a couple of legacy/alias spellings.
+pub(crate) fn tab_from_key(key: &str) -> Option<Tab> {
+    match key {
+        "keys" => Some(Tab::Keys),
+        "keygen" | "generate" => Some(Tab::Keygen),
+        "encrypt" => Some(Tab::Encrypt),
+        "decrypt" => Some(Tab::Decrypt),
+        "sign" => Some(Tab::Sign),
+        "signcrypt" => Some(Tab::Signcrypt),
+        "archive" => Some(Tab::Archive),
+        "shamir" => Some(Tab::Shamir),
+        "inspect" | "doctor" => Some(Tab::Inspect),
+        "clipboard" | "tools" => Some(Tab::Clipboard),
+        "settings" => Some(Tab::Settings),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Default, Debug)]
 pub(crate) enum OpStatus {
     #[default]
@@ -182,6 +250,51 @@ fn gregorian_days_since_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
     Some(jdn - 2_440_588)
 }
 
+/// Days since Unix epoch (1970-01-01) → "YYYY-MM-DD" (reverse JDN), the
+/// inverse of [`gregorian_days_since_epoch`].
+pub(crate) fn days_since_epoch_to_ymd(days: i64) -> String {
+    let jdn = days + 2_440_588;
+    let a = jdn + 32044;
+    let b = (4 * a + 3) / 146097;
+    let c = a - (146097 * b) / 4;
+    let d = (4 * c + 3) / 1461;
+    let e = c - (1461 * d) / 4;
+    let m = (5 * e + 2) / 153;
+    let day = e - (153 * m + 2) / 5 + 1;
+    let month = m + 3 - 12 * (m / 10);
+    let year = 100 * b + d - 4800 + m / 10;
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Unix seconds → "YYYY-MM-DD" (UTC, truncated to the day).
+pub(crate) fn unix_secs_to_ymd(secs: u64) -> String {
+    days_since_epoch_to_ymd((secs / 86_400) as i64)
+}
+
+/// Current time as Unix seconds. Returns 0 if system time is unavailable
+/// (e.g. before the epoch), which is not a realistic case in practice.
+pub(crate) fn current_unix_secs() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Returns today's date for the expiry date picker widget.
+pub(crate) fn today_date() -> jiff::civil::Date {
+    let now_days = (current_unix_secs() / 86400) as i64;
+    days_since_epoch_to_ymd(now_days)
+        .parse()
+        .expect("days_since_epoch_to_ymd always produces a valid YYYY-MM-DD string")
+}
+
+/// Parses a "YYYY-MM-DD" string for the expiry date picker widget, falling back to
+/// today's date if the string is empty or malformed.
+pub(crate) fn parse_expiry_date(date_str: &str) -> jiff::civil::Date {
+    date_str.parse().unwrap_or_else(|_| today_date())
+}
+
 /// Detect the KEM variant display name from a public key PEM string.
 pub(crate) fn pem_variant_name(pem_str: &str) -> String {
     if pem_str.contains("ML-KEM-1024") {
@@ -244,6 +357,7 @@ pub(crate) enum DecryptSubTab {
     #[default]
     Decrypt,
     Rekey,
+    AddRecipient,
 }
 
 /// Which mode is active in the Encrypt tab: public-key recipients (v2/v3/v4/v8/v9),
@@ -297,6 +411,14 @@ pub(crate) enum SignSubTab {
     Verify,
 }
 
+/// Which sub-section is active in the Keys tab's certificate panel.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum CertSubTab {
+    #[default]
+    Issue,
+    Verify,
+}
+
 /// Which mode is active in the Signcrypt tab.
 #[derive(PartialEq, Default, Clone, Copy)]
 pub(crate) enum SigncryptSubTab {
@@ -336,6 +458,9 @@ pub(crate) struct Settings {
     /// Empty string means "same folder as the source file / chosen at keygen time".
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) output_dir: String,
+    /// The tab the user was on when the app last closed, restored on the next
+    /// launch so frequent users don't re-land on Keygen every time.
+    pub(crate) last_tab: Tab,
 }
 
 impl Default for Settings {
@@ -350,6 +475,7 @@ impl Default for Settings {
             clipboard_clear_secs: 60,
             #[cfg(not(target_arch = "wasm32"))]
             output_dir: String::new(),
+            last_tab: Tab::Keygen,
         }
     }
 }
@@ -394,6 +520,10 @@ impl Settings {
             .unwrap_or(60u32);
         #[cfg(not(target_arch = "wasm32"))]
         let output_dir = storage.get_string("output_dir").unwrap_or_default();
+        let last_tab = storage
+            .get_string("last_tab")
+            .and_then(|s| tab_from_key(&s))
+            .unwrap_or(Tab::Keygen);
         Self {
             dark_mode,
             auto_clear,
@@ -404,6 +534,7 @@ impl Settings {
             clipboard_clear_secs,
             #[cfg(not(target_arch = "wasm32"))]
             output_dir,
+            last_tab,
         }
     }
 
@@ -431,5 +562,6 @@ impl Settings {
         );
         #[cfg(not(target_arch = "wasm32"))]
         storage.set_string("output_dir", self.output_dir.clone());
+        storage.set_string("last_tab", tab_key(self.last_tab).to_owned());
     }
 }

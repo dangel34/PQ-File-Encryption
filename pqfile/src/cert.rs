@@ -106,6 +106,16 @@ pub fn issue_cert(
             "certificate subject PEM tag exceeds maximum length".into(),
         ));
     }
+    // The `pem` crate's tag scanner doesn't reject embedded control characters
+    // (e.g. newlines), and this tag round-trips verbatim through the signed
+    // body into `verify_cert`'s output PEM. Nothing downstream currently does
+    // anything riskier than an exact-string match against it, but reject the
+    // class here defensively rather than relying on every future consumer to.
+    if subject.tag().chars().any(|c| c.is_control()) {
+        return Err(PqfileError::InvalidPem(
+            "certificate subject PEM tag contains control characters".into(),
+        ));
+    }
     if subject.contents().len() > MAX_SUBJECT_KEY_LEN {
         return Err(PqfileError::InvalidPem(
             "certificate subject key exceeds maximum size".into(),
@@ -459,6 +469,23 @@ mod tests {
             None,
             &subject_pub,
             &label,
+            1_000,
+            2_000,
+            cert_use::ENCRYPT,
+        )
+        .unwrap_err();
+        assert!(matches!(err, PqfileError::InvalidPem(_)));
+    }
+
+    #[test]
+    fn issue_rejects_subject_tag_with_control_characters() {
+        let (_, ca_sk) = ca();
+        let subject_pub = pem::encode(&Pem::new("ML-KEM-768 PUBLIC\nKEY", vec![0u8; 1184]));
+        let err = issue_cert(
+            &ca_sk,
+            None,
+            &subject_pub,
+            "x",
             1_000,
             2_000,
             cert_use::ENCRYPT,

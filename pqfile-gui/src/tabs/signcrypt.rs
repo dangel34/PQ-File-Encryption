@@ -16,7 +16,7 @@ use std::io::Cursor;
 
 impl PqfileApp {
     pub(crate) fn show_signcrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
-        if tab_heading_help(ui, "Signcrypt  (Signature + Encryption)", dark) {
+        if tab_heading_help(ui, "Sign & Encrypt  (Signcrypt)", dark) {
             self.help_modal_open = Some(Tab::Signcrypt);
         }
         ui.label(

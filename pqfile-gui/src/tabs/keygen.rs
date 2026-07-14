@@ -179,13 +179,15 @@ impl PqfileApp {
                 );
             });
             // When toggle is first switched on, pre-fill from settings default.
-            if self.keygen_use_expiry && !prev_expiry && self.keygen_expiry_date.is_empty() {
+            if self.keygen_use_expiry
+                && !prev_expiry
+                && self.keygen_expiry_date.is_empty()
+                && self.settings.default_expiry_days > 0
+            {
                 if let Some(date) =
                     crate::tabs::settings::days_from_now(self.settings.default_expiry_days)
                 {
-                    if self.settings.default_expiry_days > 0 {
-                        self.keygen_expiry_date = date;
-                    }
+                    self.keygen_expiry_picker = crate::types::parse_expiry_date(&date);
                 }
             }
             if self.keygen_use_expiry {
@@ -193,9 +195,8 @@ impl PqfileApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Expires:").size(13.0).color(c_subtext(dark)));
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.keygen_expiry_date)
-                            .hint_text("YYYY-MM-DD")
-                            .desired_width(110.0),
+                        egui_extras::DatePickerButton::new(&mut self.keygen_expiry_picker)
+                            .id_salt("keygen_expiry"),
                     );
                     ui.label(
                         RichText::new("Written as a comment in the PEM file.")
@@ -203,6 +204,7 @@ impl PqfileApp {
                             .color(c_subtext(dark)),
                     );
                 });
+                self.keygen_expiry_date = self.keygen_expiry_picker.to_string();
             }
         });
         ui.add_space(14.0);

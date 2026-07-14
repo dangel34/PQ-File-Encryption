@@ -3,9 +3,9 @@ use crate::colors::{
 };
 use crate::theme::apply_theme;
 use crate::types::{
-    pem_variant_name, ArchiveSubTab, BatchPending, DecryptMode, DecryptSubTab, EncryptMode,
-    FileInput, KeygenAlgorithm, MultiFileEntry, OpStatus, PickedFile, RecipientEntry,
-    SecondFactorMode, Settings, ShamirSubTab, SignSubTab, SigncryptSubTab, Tab,
+    pem_variant_name, tab_label, ArchiveSubTab, BatchPending, CertSubTab, DecryptMode,
+    DecryptSubTab, EncryptMode, FileInput, KeygenAlgorithm, MultiFileEntry, OpStatus, PickedFile,
+    RecipientEntry, SecondFactorMode, Settings, ShamirSubTab, SignSubTab, SigncryptSubTab, Tab,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry};
@@ -49,6 +49,14 @@ pub struct PqfileApp {
     /// Staging slot: files/drops land here, then poll_files promotes to encrypt_recipients.
     pub(crate) encrypt_pubkey: FileInput,
     pub(crate) encrypt_recipients: Vec<RecipientEntry>,
+    /// CA verifying key, consulted only when a staged recipient PEM turns out to be a
+    /// certificate (produced by the Keys tab's Issue Certificate panel or the CLI's
+    /// `issue-cert`). Unused otherwise.
+    pub(crate) encrypt_ca_key: FileInput,
+    /// Surfaces certificate resolution failures (missing/wrong CA key, expired
+    /// certificate, wrong allowed-use) from `promote_staged_pubkey`, distinct from any
+    /// per-file encrypt status.
+    pub(crate) encrypt_recipient_error: OpStatus,
     pub(crate) encrypt_files: Vec<MultiFileEntry>,
     pub(crate) encrypt_batch_pending: BatchPending,
     /// Public-key recipients, or a v10 passphrase-only file with no key pair.
@@ -192,12 +200,38 @@ pub struct PqfileApp {
     pub(crate) revoke_pubkey: FileInput,
     pub(crate) revoke_reason: String,
     pub(crate) revoke_status: OpStatus,
+
+    // ── Keys tab: Issue / Verify Certificate panel ─────────────────────────
+    pub(crate) cert_sub_tab: CertSubTab,
+    pub(crate) cert_issue_ca_key: FileInput,
+    pub(crate) cert_issue_ca_passphrase: Zeroizing<String>,
+    pub(crate) cert_issue_ca_passphrase_visible: bool,
+    pub(crate) cert_issue_subject_key: FileInput,
+    pub(crate) cert_issue_label: String,
+    pub(crate) cert_issue_valid_days: u32,
+    pub(crate) cert_issue_allow_encrypt: bool,
+    pub(crate) cert_issue_allow_sign: bool,
+    pub(crate) cert_issue_status: OpStatus,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) cert_issue_output_path: Option<String>,
+    pub(crate) cert_verify_ca_vk: FileInput,
+    pub(crate) cert_verify_cert: FileInput,
+    pub(crate) cert_verify_status: OpStatus,
+    pub(crate) cert_verify_result: Option<pqfile::cert::Certificate>,
+
     pub(crate) rekey_privkey: FileInput,
     pub(crate) rekey_privkey_passphrase: Zeroizing<String>,
     pub(crate) rekey_privkey_passphrase_visible: bool,
     pub(crate) rekey_new_pubkey: FileInput,
     pub(crate) rekey_input: FileInput,
     pub(crate) rekey_status: OpStatus,
+
+    pub(crate) add_recipient_privkey: FileInput,
+    pub(crate) add_recipient_privkey_passphrase: Zeroizing<String>,
+    pub(crate) add_recipient_privkey_passphrase_visible: bool,
+    pub(crate) add_recipient_new_pubkey: FileInput,
+    pub(crate) add_recipient_input: FileInput,
+    pub(crate) add_recipient_status: OpStatus,
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keys: Vec<KeyEntry>,
@@ -220,6 +254,7 @@ pub struct PqfileApp {
     // ── Key expiry fields (keygen tab) ────────────────────────────────────
     pub(crate) keygen_use_expiry: bool,
     pub(crate) keygen_expiry_date: String,
+    pub(crate) keygen_expiry_picker: jiff::civil::Date,
 
     // ── Recent file paths per operation (native only, last 5) ─────────────
     #[cfg(not(target_arch = "wasm32"))]
@@ -275,6 +310,8 @@ impl Default for PqfileApp {
             keygen_status: OpStatus::None,
             encrypt_pubkey: FileInput::default(),
             encrypt_recipients: Vec::new(),
+            encrypt_ca_key: FileInput::default(),
+            encrypt_recipient_error: OpStatus::None,
             encrypt_files: Vec::new(),
             encrypt_batch_pending: Arc::new(Mutex::new(None)),
             encrypt_mode: EncryptMode::default(),
@@ -379,12 +416,33 @@ impl Default for PqfileApp {
             revoke_pubkey: FileInput::default(),
             revoke_reason: String::new(),
             revoke_status: OpStatus::None,
+            cert_sub_tab: CertSubTab::default(),
+            cert_issue_ca_key: FileInput::default(),
+            cert_issue_ca_passphrase: Zeroizing::new(String::new()),
+            cert_issue_ca_passphrase_visible: false,
+            cert_issue_subject_key: FileInput::default(),
+            cert_issue_label: String::new(),
+            cert_issue_valid_days: 365,
+            cert_issue_allow_encrypt: false,
+            cert_issue_allow_sign: false,
+            cert_issue_status: OpStatus::None,
+            cert_issue_output_path: None,
+            cert_verify_ca_vk: FileInput::default(),
+            cert_verify_cert: FileInput::default(),
+            cert_verify_status: OpStatus::None,
+            cert_verify_result: None,
             rekey_privkey: FileInput::default(),
             rekey_privkey_passphrase: Zeroizing::new(String::new()),
             rekey_privkey_passphrase_visible: false,
             rekey_new_pubkey: FileInput::default(),
             rekey_input: FileInput::default(),
             rekey_status: OpStatus::None,
+            add_recipient_privkey: FileInput::default(),
+            add_recipient_privkey_passphrase: Zeroizing::new(String::new()),
+            add_recipient_privkey_passphrase_visible: false,
+            add_recipient_new_pubkey: FileInput::default(),
+            add_recipient_input: FileInput::default(),
+            add_recipient_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
             keys: Vec::new(),
             decrypt_sub_tab: DecryptSubTab::default(),
@@ -396,6 +454,7 @@ impl Default for PqfileApp {
             decrypt_batch_summary: None,
             keygen_use_expiry: false,
             keygen_expiry_date: String::new(),
+            keygen_expiry_picker: crate::types::today_date(),
             #[cfg(not(target_arch = "wasm32"))]
             watch_dir: String::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -477,10 +536,21 @@ impl PqfileApp {
                 )
             });
         let default_algorithm = settings.default_algorithm;
+        // Returning users land back where they left off; a brand-new install
+        // (no saved keys yet) always starts on Keygen since there's nothing
+        // to encrypt/decrypt with until a key pair exists.
         #[cfg(target_arch = "wasm32")]
-        let initial_tab = initial_tab_from_hash.unwrap_or(Tab::Keygen);
+        let initial_tab = initial_tab_from_hash.unwrap_or(if wasm_saved_pubkeys.is_empty() {
+            Tab::Keygen
+        } else {
+            settings.last_tab
+        });
         #[cfg(not(target_arch = "wasm32"))]
-        let initial_tab = Tab::Keygen;
+        let initial_tab = if keys.is_empty() {
+            Tab::Keygen
+        } else {
+            settings.last_tab
+        };
         Self {
             tab: initial_tab,
             settings,
@@ -701,17 +771,15 @@ impl eframe::App for PqfileApp {
                     .inner_margin(Margin::symmetric(14, 7))
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            tab_btn(ui, &mut self.tab, Tab::Keys, "🗝 Keys", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Keygen, "🔑 Keygen", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Encrypt, "🔒 Encrypt", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Decrypt, "🔓 Decrypt", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Sign, "✏ Sign", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Signcrypt, "🔏 Signcrypt", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Archive, "📦 Archive", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Shamir, "🔀 Shamir", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Inspect, "🔍 Inspect", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Clipboard, "📋 Clipboard", dark);
-                            tab_btn(ui, &mut self.tab, Tab::Settings, "⚙ Settings", dark);
+                            // Primary row: the everyday encrypt/decrypt/key-management path.
+                            // Everything else (Sign, Sign & Encrypt, Archive, Shamir, Health
+                            // Check, Clipboard) lives one click away under "More Tools" so a
+                            // new user isn't faced with 11 equally-weighted tabs on first launch.
+                            for tab in crate::types::PRIMARY_TABS {
+                                tab_btn(ui, &mut self.tab, tab, tab_label(tab), dark);
+                            }
+                            crate::widgets::advanced_tabs_menu(ui, &mut self.tab, dark);
+                            tab_btn(ui, &mut self.tab, Tab::Settings, tab_label(Tab::Settings), dark);
                         });
                     });
 
@@ -735,6 +803,10 @@ impl eframe::App for PqfileApp {
                             });
                     });
             });
+
+        // Kept in sync every frame; only actually persisted when eframe next
+        // calls `save()`, so this has no per-frame I/O cost.
+        self.settings.last_tab = self.tab;
     }
 }
 
@@ -890,7 +962,9 @@ impl PqfileApp {
             return;
         }
         if let Some(pem) = self.encrypt_pubkey.as_str().map(str::to_owned) {
-            if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
+            if pqfile::cert::is_certificate(&pem) {
+                self.add_cert_recipient(&pem);
+            } else if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
                 let name = std::mem::take(&mut self.encrypt_pubkey.name);
                 let variant_name = pem_variant_name(&pem);
                 self.encrypt_recipients.push(RecipientEntry {
@@ -901,6 +975,42 @@ impl PqfileApp {
             }
         }
         self.encrypt_pubkey.clear();
+    }
+
+    /// Resolves a staged certificate PEM against `encrypt_ca_key` and, if it
+    /// verifies and permits `ENCRYPT` use, adds its embedded subject key as a
+    /// recipient. Failures are surfaced via `encrypt_recipient_error` rather
+    /// than silently dropped, mirroring the CLI's `-r <CERT> --ca-key <VK>`.
+    fn add_cert_recipient(&mut self, cert_pem: &str) {
+        let Some(ca_vk_pem) = self.encrypt_ca_key.as_str() else {
+            self.encrypt_recipient_error = OpStatus::Err(
+                "This is a certificate; load the CA verifying key above first.".to_owned(),
+            );
+            return;
+        };
+        match pqfile::cert::verify_cert(ca_vk_pem, cert_pem, crate::types::current_unix_secs()) {
+            Ok(cert) if cert.permits(pqfile::cert::cert_use::ENCRYPT) => {
+                let pem = cert.subject_pem;
+                if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
+                    let variant_name = pem_variant_name(&pem);
+                    self.encrypt_recipients.push(RecipientEntry {
+                        name: format!("{} (cert)", cert.label),
+                        pem,
+                        variant_name,
+                    });
+                }
+                self.encrypt_recipient_error = OpStatus::None;
+            }
+            Ok(cert) => {
+                self.encrypt_recipient_error = OpStatus::Err(format!(
+                    "Certificate '{}' does not permit encryption use.",
+                    cert.label
+                ));
+            }
+            Err(e) => {
+                self.encrypt_recipient_error = OpStatus::Err(e.to_string());
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -954,6 +1064,7 @@ impl PqfileApp {
                 self.encrypt_passphrase.zeroize();
                 self.encrypt_passphrase_confirm.zeroize();
                 self.encrypt_keyfile.clear();
+                #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
                 self.encrypt_fido2_pin.zeroize();
                 self.encrypt_batch_summary = None;
             }
@@ -1017,6 +1128,7 @@ impl PqfileApp {
                 self.decrypt_passphrase.zeroize();
                 self.decrypt_v10_passphrase.zeroize();
                 self.decrypt_keyfile.clear();
+                #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
                 self.decrypt_fido2_pin.zeroize();
                 self.decrypt_batch_summary = None;
             }
@@ -1032,6 +1144,7 @@ impl PqfileApp {
     pub(crate) fn poll_files(&mut self) -> bool {
         self.encrypt_pubkey.poll();
         self.promote_staged_pubkey();
+        self.encrypt_ca_key.poll();
         self.encrypt_keyfile.poll();
         self.encrypt_fido2_enrollment.poll();
         self.decrypt_privkey.poll();
@@ -1067,6 +1180,15 @@ impl PqfileApp {
         self.rekey_privkey.poll();
         self.rekey_new_pubkey.poll();
         self.rekey_input.poll();
+        self.add_recipient_privkey.poll();
+        self.add_recipient_new_pubkey.poll();
+        self.add_recipient_input.poll();
+
+        // Keys tab: Issue / Verify Certificate panel
+        self.cert_issue_ca_key.poll();
+        self.cert_issue_subject_key.poll();
+        self.cert_verify_ca_vk.poll();
+        self.cert_verify_cert.poll();
 
         let enc_batch = drain_batch_pending(&self.encrypt_batch_pending, &mut self.encrypt_files);
         let dec_batch = drain_batch_pending(&self.decrypt_batch_pending, &mut self.decrypt_files);
@@ -1124,6 +1246,9 @@ impl PqfileApp {
             &self.rekey_privkey,
             &self.rekey_new_pubkey,
             &self.rekey_input,
+            &self.add_recipient_privkey,
+            &self.add_recipient_new_pubkey,
+            &self.add_recipient_input,
             &self.clipboard_pubkey,
             &self.clipboard_privkey,
         ]
@@ -1646,7 +1771,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              above the file list before decrypting; there is nothing in the file itself that \
              reveals this.",
         ]),
-        Tab::Inspect => ("Inspect File or Key", &[
+        Tab::Inspect => ("Health Check  (File or Key)", &[
             "Inspect runs health checks on a key file (.pem) or encrypted file (.pqf) and \
              shows all header metadata. No decryption key is required.",
             "## KEY HEALTH CHECKS",
@@ -1687,7 +1812,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              Encryption hides the contents but by itself does not prove who created them. \
              Use the Signcrypt tab if you need both properties at once.",
         ]),
-        Tab::Signcrypt => ("Signcrypt", &[
+        Tab::Signcrypt => ("Sign & Encrypt  (Signcrypt)", &[
             "Signcrypt combines signing and encryption into a single operation. The sender's \
              signature is placed inside the encrypted payload, so it is protected by the same \
              authentication as the file contents.",
@@ -1736,8 +1861,17 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
             "You can label and store key pairs in the panel for easy recall. Clicking a stored \
              key pre-loads it into the Encrypt or Decrypt tab, saving time when working with \
              the same key frequently.",
+            "## CERTIFICATES",
+            "The Issue / Verify Certificate panel lets a CA signing key attest to a subject \
+             public or verifying key's label, validity window, and permitted uses (encrypt \
+             and/or sign). Issuing writes a certificate file; verifying checks the CA's \
+             signature and validity window and shows the decoded contents. A certificate can \
+             be used in place of a raw key wherever pqfile accepts a recipient or verifying \
+             key - including the Encrypt tab's recipient list - as long as the matching CA \
+             verifying key is also supplied. Certificates do not chain and have no revocation \
+             mechanism beyond their validity window.",
         ]),
-        Tab::Shamir => ("Shamir Key Splitting", &[
+        Tab::Shamir => ("Split Key  (Shamir)", &[
             "Shamir's Secret Sharing lets you split a private key into N shares such that \
              any M of them can reconstruct the original key, but fewer than M reveal \
              nothing. This is useful for secure key backup, team key custody, and \
@@ -2185,18 +2319,5 @@ pub(crate) fn push_recent(list: &mut Vec<String>, path: String) {
 /// Map a URL fragment (e.g. `"#encrypt"`) to a `Tab` variant for deep-linking.
 #[cfg(target_arch = "wasm32")]
 fn tab_from_hash(hash: &str) -> Option<Tab> {
-    match hash.trim_start_matches('#').to_lowercase().as_str() {
-        "keys" => Some(Tab::Keys),
-        "keygen" | "generate" => Some(Tab::Keygen),
-        "encrypt" => Some(Tab::Encrypt),
-        "decrypt" => Some(Tab::Decrypt),
-        "sign" => Some(Tab::Sign),
-        "signcrypt" => Some(Tab::Signcrypt),
-        "archive" => Some(Tab::Archive),
-        "shamir" => Some(Tab::Shamir),
-        "inspect" | "doctor" => Some(Tab::Inspect),
-        "clipboard" | "tools" => Some(Tab::Clipboard),
-        "settings" => Some(Tab::Settings),
-        _ => None,
-    }
+    crate::types::tab_from_key(hash.trim_start_matches('#').to_lowercase().as_str())
 }

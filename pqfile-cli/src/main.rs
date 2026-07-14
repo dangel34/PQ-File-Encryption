@@ -8,7 +8,8 @@ use rayon::ThreadPoolBuilder;
 use pqfile::error::PqfileError;
 use pqfile::inspect::{inspect_stream, PqfHeaderInfo, RecipientInfo};
 use pqfile::{
-    archive, decrypt, encrypt, format, keygen, rekey, repassphrase, revoke, shamir, sign, signcrypt,
+    add_recipient, archive, decrypt, encrypt, format, keygen, rekey, repassphrase, revoke, shamir,
+    sign, signcrypt,
 };
 
 #[cfg(feature = "fido2")]
@@ -17,6 +18,7 @@ mod fido2;
 #[derive(Parser)]
 #[command(
     name = "pqfile",
+    version,
     about = "Quantum-resistant file encryption for the post-quantum era. Encrypt any file with a public key. Only the matching private key can decrypt it."
 )]
 struct Cli {
@@ -39,6 +41,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Generate a new ML-KEM (or hybrid X25519+ML-KEM) key pair.
     Keygen {
         #[arg(long, value_name = "DIR")]
         out: PathBuf,
@@ -73,6 +76,7 @@ enum Command {
         #[arg(long, default_value_t = false)]
         qr: bool,
     },
+    /// Encrypt a file to one or more recipients, or with a passphrase (v10).
     Encrypt {
         /// Recipient public key(s): a path to a pubkey.pem file, or a `pqf1…` recipient string.
         /// Repeat -r for multiple recipients (v4 format). Mutually exclusive with --passphrase.
@@ -180,6 +184,7 @@ enum Command {
         #[arg(long, default_value_t = false)]
         stealth: bool,
     },
+    /// Decrypt a file produced by `encrypt`.
     Decrypt {
         /// Private key file for decryption. Required unless --passphrase is set (v10 files).
         #[arg(short = 'k', value_name = "PRIVKEY", conflicts_with = "passphrase_v10")]
@@ -264,7 +269,10 @@ enum Command {
         #[arg(long, default_value_t = false, conflicts_with = "passphrase_v10")]
         stealth: bool,
     },
+    /// Print a .pqf file's header fields (version, KEM variant, recipient count)
+    /// without decrypting the payload.
     Inspect {
+        /// Encrypted .pqf file to inspect.
         input: PathBuf,
     },
     /// Enroll a FIDO2 hardware security key as a v10 second factor.
@@ -301,6 +309,10 @@ enum Command {
         /// Target shell (bash, zsh, fish, powershell, elvish).
         shell: Shell,
     },
+    /// Print a roff man page for `pqfile` (and every subcommand) to stdout.
+    ///
+    /// Example: pqfile man > /usr/local/share/man/man1/pqfile.1
+    Man,
     /// Generate a signing key pair (ML-DSA-65 by default, or SLH-DSA-SHAKE-192f).
     #[command(name = "sign-keygen")]
     SignKeygen {
@@ -345,9 +357,13 @@ enum Command {
     /// The signature algorithm (ML-DSA-65 or SLH-DSA-SHAKE-192f) is taken from
     /// the verifying key itself.
     Verify {
-        /// Path to sign_pubkey.pem (verifying key).
+        /// Path to sign_pubkey.pem (verifying key), or a certificate PEM
+        /// produced by `issue-cert` (requires --ca-key).
         #[arg(short = 'k', value_name = "VERIFYING_KEY")]
         key: PathBuf,
+        /// CA verifying key to check -k against, if -k is a certificate PEM.
+        #[arg(long, value_name = "CA_VERIFYING_KEY")]
+        ca_key: Option<PathBuf>,
         /// Detached signature file (.sig).
         #[arg(short = 's', value_name = "SIG")]
         sig: PathBuf,
@@ -383,6 +399,32 @@ enum Command {
         output: Option<String>,
         /// Overwrite an existing output file without prompting. Note: the default output path
         /// is the input file itself, so rekey overwrites the input in place unless -o is given.
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+    /// Add a recipient to an existing v4/v7/v8 multi-recipient file without
+    /// re-encrypting the payload (zero-copy).
+    ///
+    /// Requires one existing recipient's private key to recover the session key.
+    /// For v7/v8 (anonymous) files, the new entry is appended at the end, which
+    /// reveals its position to an observer comparing the file before and after;
+    /// re-encrypt with --anonymous-recipients to restore full shuffle anonymity.
+    #[command(name = "add-recipient")]
+    AddRecipient {
+        /// Private key of an existing recipient, used to recover the session key.
+        #[arg(short = 'k', value_name = "PRIVKEY")]
+        key: PathBuf,
+        /// New recipient's public key to add.
+        #[arg(short = 'r', value_name = "PUBKEY")]
+        recipient: PathBuf,
+        /// Encrypted .pqf file to add a recipient to, or '-' to read from stdin.
+        input: String,
+        /// Output path for the updated file, or '-' for stdout. Defaults to overwriting the input.
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: Option<String>,
+        /// Overwrite an existing output file without prompting. Note: the default output path
+        /// is the input file itself, so add-recipient overwrites the input in place unless -o
+        /// is given.
         #[arg(long, default_value_t = false)]
         force: bool,
     },
@@ -439,9 +481,13 @@ enum Command {
         /// ML-DSA-65 signing key (sign_privkey.pem).
         #[arg(short = 'k', value_name = "SIGNING_KEY")]
         key: PathBuf,
-        /// Recipient public key (pubkey.pem).
+        /// Recipient public key (pubkey.pem), or a certificate PEM produced
+        /// by `issue-cert` (requires --ca-key).
         #[arg(short = 'r', value_name = "PUBKEY")]
         recipient: PathBuf,
+        /// CA verifying key to check -r against, if -r is a certificate PEM.
+        #[arg(long, value_name = "CA_VERIFYING_KEY")]
+        ca_key: Option<PathBuf>,
         /// File to sign and encrypt.
         input: PathBuf,
         /// Output path. Defaults to <input>.pqf.
@@ -460,9 +506,13 @@ enum Command {
         /// Private decryption key (privkey.pem).
         #[arg(short = 'k', value_name = "PRIVKEY")]
         key: PathBuf,
-        /// Sender's ML-DSA-65 verifying key (sign_pubkey.pem).
+        /// Sender's ML-DSA-65 verifying key (sign_pubkey.pem), or a
+        /// certificate PEM produced by `issue-cert` (requires --ca-key).
         #[arg(short = 'v', value_name = "VERIFYING_KEY")]
         verifying_key: PathBuf,
+        /// CA verifying key to check -v against, if -v is a certificate PEM.
+        #[arg(long, value_name = "CA_VERIFYING_KEY")]
+        ca_key: Option<PathBuf>,
         /// Signcrypted .pqf file to decrypt, or '-' to read from stdin.
         input: String,
         /// Output path. Defaults to stripping .pqf from input.
@@ -1252,6 +1302,11 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             clap_complete::generate(shell, &mut Cli::command(), "pqfile", &mut io::stdout());
             Ok(())
         }
+        Command::Man => {
+            let man = clap_mangen::Man::new(Cli::command());
+            man.render(&mut io::stdout()).map_err(PqfileError::Io)?;
+            Ok(())
+        }
         Command::SignKeygen {
             out,
             force,
@@ -1261,7 +1316,12 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             algorithm,
         } => run_sign_keygen(out, force, passphrase, hardware, label, algorithm, json),
         Command::Sign { key, input, output } => run_sign(key, input, output, json),
-        Command::Verify { key, sig, input } => run_verify(key, sig, input, json),
+        Command::Verify {
+            key,
+            ca_key,
+            sig,
+            input,
+        } => run_verify(key, ca_key, sig, input, json),
         Command::Revoke { key, reason } => run_revoke(key, &reason, json),
         Command::Rekey {
             key,
@@ -1270,6 +1330,13 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             output,
             force,
         } => run_rekey(key, recipient, input, output, force, json),
+        Command::AddRecipient {
+            key,
+            recipient,
+            input,
+            output,
+            force,
+        } => run_add_recipient(key, recipient, input, output, force, json),
         Command::Archive {
             recipient,
             output,
@@ -1287,17 +1354,19 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
         Command::Signcrypt {
             key,
             recipient,
+            ca_key,
             input,
             output,
             force,
-        } => run_signcrypt(key, recipient, input, output, force, json),
+        } => run_signcrypt(key, recipient, ca_key, input, output, force, json),
         Command::Signdecrypt {
             key,
             verifying_key,
+            ca_key,
             input,
             output,
             force,
-        } => run_signdecrypt(key, verifying_key, input, output, force, json),
+        } => run_signdecrypt(key, verifying_key, ca_key, input, output, force, json),
         Command::SplitKey {
             key,
             threshold,
@@ -1559,7 +1628,6 @@ fn run_encrypt(
     // Load and validate recipient public keys. Each recipient can be a path to a
     // pubkey.pem file, a certificate PEM (produced by `issue-cert`), or a
     // `pqf1…` Bech32 recipient string.
-    let now = current_unix_secs();
     let pubkey_pems: Vec<String> = recipients
         .iter()
         .map(|r| {
@@ -1570,27 +1638,12 @@ fn run_encrypt(
                 // File path: read PEM and check for revocation.
                 let p = std::path::Path::new(r);
                 let pem = std::fs::read_to_string(p)?;
-                if pqfile::cert::is_certificate(&pem) {
-                    let ca_key = ca_key.as_ref().ok_or_else(|| {
-                        PqfileError::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!(
-                                "-r {r} is a certificate; pass --ca-key <CA_VERIFYING_KEY> to verify it"
-                            ),
-                        ))
-                    })?;
-                    let ca_vk_pem = std::fs::read_to_string(ca_key)?;
-                    let cert = pqfile::cert::verify_cert(&ca_vk_pem, &pem, now)?;
-                    if !cert.permits(pqfile::cert::cert_use::ENCRYPT) {
-                        return Err(PqfileError::CertUseNotPermitted {
-                            required: pqfile::cert::cert_use::ENCRYPT,
-                            allowed: cert.allowed_use,
-                        });
+                match resolve_cert(&pem, p, ca_key.as_deref(), pqfile::cert::cert_use::ENCRYPT)? {
+                    Some(subject_pem) => Ok(subject_pem),
+                    None => {
+                        revoke::check_not_revoked(p, &pem)?;
+                        Ok(pem)
                     }
-                    Ok(cert.subject_pem)
-                } else {
-                    revoke::check_not_revoked(p, &pem)?;
-                    Ok(pem)
                 }
             }
         })
@@ -2953,8 +3006,51 @@ fn run_sign(
     Ok(())
 }
 
-fn run_verify(key: PathBuf, sig: PathBuf, input: PathBuf, json: bool) -> Result<(), PqfileError> {
-    let vk_pem = std::fs::read_to_string(&key)?;
+/// Resolves `pem` (already read from `path`) to the key it actually
+/// authorizes: if it's a certificate PEM produced by `issue-cert`, verifies
+/// it against `ca_key` (required in that case), checks `required_use`, and
+/// returns `Some(subject_pem)`. Otherwise returns `None`, leaving raw
+/// (non-certificate) key handling - including any revocation check - to the
+/// caller.
+fn resolve_cert(
+    pem: &str,
+    path: &Path,
+    ca_key: Option<&Path>,
+    required_use: u8,
+) -> Result<Option<String>, PqfileError> {
+    if !pqfile::cert::is_certificate(pem) {
+        return Ok(None);
+    }
+    let ca_key = ca_key.ok_or_else(|| {
+        PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a certificate; pass --ca-key <CA_VERIFYING_KEY> to verify it",
+                path.display()
+            ),
+        ))
+    })?;
+    let ca_vk_pem = std::fs::read_to_string(ca_key)?;
+    let cert = pqfile::cert::verify_cert(&ca_vk_pem, pem, current_unix_secs())?;
+    if !cert.permits(required_use) {
+        return Err(PqfileError::CertUseNotPermitted {
+            required: required_use,
+            allowed: cert.allowed_use,
+        });
+    }
+    Ok(Some(cert.subject_pem))
+}
+
+fn run_verify(
+    key: PathBuf,
+    ca_key: Option<PathBuf>,
+    sig: PathBuf,
+    input: PathBuf,
+    json: bool,
+) -> Result<(), PqfileError> {
+    let pem = std::fs::read_to_string(&key)?;
+    let vk_pem =
+        resolve_cert(&pem, &key, ca_key.as_deref(), pqfile::cert::cert_use::SIGN)?.unwrap_or(pem);
     sign::verify_file(&vk_pem, &input, &sig)?;
     if json {
         println!(
@@ -3034,6 +3130,75 @@ fn run_rekey(
     writer.commit()?;
 
     emit_json_ok(json, to_stdout, &out_path)?;
+    Ok(())
+}
+
+fn run_add_recipient(
+    key: PathBuf,
+    recipient: PathBuf,
+    input: String,
+    output: Option<String>,
+    force: bool,
+    json: bool,
+) -> Result<(), PqfileError> {
+    let privkey_pem = std::fs::read_to_string(&key)?;
+    let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
+    let pp_str = pp.as_deref().map(|z| z.as_str());
+    let pubkey_pem = std::fs::read_to_string(&recipient)?;
+    revoke::check_not_revoked(&recipient, &pubkey_pem)?;
+
+    let out = output.as_deref().unwrap_or("");
+    let to_stdout = out == "-" || (out.is_empty() && input == "-");
+
+    let out_path: PathBuf = if to_stdout {
+        PathBuf::new()
+    } else if out.is_empty() {
+        PathBuf::from(&input)
+    } else {
+        PathBuf::from(out)
+    };
+
+    // add-recipient defaults to rewriting the input file in place, so an existing output
+    // that equals the input is expected and always allowed. Only guard an explicit -o that
+    // points at a *different* existing file.
+    if out_path.as_path() != Path::new(&input) {
+        ensure_overwrite_allowed(&out_path, to_stdout, force)?;
+    }
+
+    let mut reader = open_reader(&input)?;
+    let mut writer = CliOutput::new(to_stdout, &out_path)?;
+    let info = add_recipient::add_recipient_stream(
+        &privkey_pem,
+        &pubkey_pem,
+        &mut *reader,
+        &mut writer,
+        pp_str,
+    )?;
+    writer.commit()?;
+
+    if json {
+        let target: &mut dyn io::Write = if to_stdout {
+            &mut io::stderr()
+        } else {
+            &mut io::stdout()
+        };
+        let lossy = out_path.to_string_lossy();
+        let out_val: &str = if to_stdout { "-" } else { &lossy };
+        writeln!(
+            target,
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("output", out_val),
+                kv_raw("recipient_count", &info.recipient_count.to_string()),
+            ])
+        )?;
+    } else if !to_stdout {
+        eprintln!(
+            "Recipient added. File now has {} recipient(s).",
+            info.recipient_count
+        );
+    }
     Ok(())
 }
 
@@ -3222,6 +3387,7 @@ fn run_extract(
 fn run_signcrypt(
     key: PathBuf,
     recipient: PathBuf,
+    ca_key: Option<PathBuf>,
     input: PathBuf,
     output: Option<PathBuf>,
     force: bool,
@@ -3230,8 +3396,19 @@ fn run_signcrypt(
     let sk_pem = std::fs::read_to_string(&key)?;
     let pp = maybe_prompt_passphrase(&sk_pem, "Enter passphrase for signing key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
-    let pubkey_pem = std::fs::read_to_string(&recipient)?;
-    revoke::check_not_revoked(&recipient, &pubkey_pem)?;
+    let pem = std::fs::read_to_string(&recipient)?;
+    let pubkey_pem = match resolve_cert(
+        &pem,
+        &recipient,
+        ca_key.as_deref(),
+        pqfile::cert::cert_use::ENCRYPT,
+    )? {
+        Some(subject_pem) => subject_pem,
+        None => {
+            revoke::check_not_revoked(&recipient, &pem)?;
+            pem
+        }
+    };
 
     let input_len = std::fs::metadata(&input)?.len();
     let out_path = output.unwrap_or_else(|| {
@@ -3272,6 +3449,7 @@ fn run_signcrypt(
 fn run_signdecrypt(
     key: PathBuf,
     verifying_key: PathBuf,
+    ca_key: Option<PathBuf>,
     input: String,
     output: Option<String>,
     force: bool,
@@ -3280,7 +3458,14 @@ fn run_signdecrypt(
     let privkey_pem = std::fs::read_to_string(&key)?;
     let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
-    let vk_pem = std::fs::read_to_string(&verifying_key)?;
+    let pem = std::fs::read_to_string(&verifying_key)?;
+    let vk_pem = resolve_cert(
+        &pem,
+        &verifying_key,
+        ca_key.as_deref(),
+        pqfile::cert::cert_use::SIGN,
+    )?
+    .unwrap_or(pem);
 
     let out = output.as_deref().unwrap_or("");
     let to_stdout = out == "-" || (out.is_empty() && input == "-");

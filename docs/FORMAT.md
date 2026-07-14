@@ -534,6 +534,41 @@ Offset  Len  Field
 
 **Format version break (v3.2.x):** Prior to v3.2.x, PUBKEY_FP was 8 bytes and Y started at offset 14 (SHARE_HEADER_LEN = 14). Shares from v3.1.x and earlier are rejected with a clear error when decoded by v3.2.x or later. Implementors supporting old shares must handle both layouts by checking body length against the variant's expected seed length.
 
+### 6.4 Certificates
+
+| PEM Label | Contents |
+|-----------|----------|
+| `PQFILE CERTIFICATE` | CA-signed attestation of a subject public/verifying key (see below) |
+
+A certificate binds a subject key to a label, a validity window, and an allowed-use
+bitmask, signed by a CA signing key (ML-DSA-65 or SLH-DSA-SHAKE-192f, via the `sign`
+module - see 6.2). Certificates do not chain and carry no revocation mechanism beyond
+the validity window. Body layout (self-delimiting: every variable-length field carries
+its own length prefix, so the signed range is exactly `body`, with `SIG_LEN`/`SIG`
+appended afterward):
+
+```
+Offset  Len   Field
+0       4     MAGIC ("PQFC")
+4       1     VERSION (0x01)
+5       8     NOT_BEFORE (Unix seconds, LE, inclusive)
+13      8     NOT_AFTER (Unix seconds, LE, inclusive)
+21      1     ALLOWED_USE (bit 0 = ENCRYPT, bit 1 = SIGN)
+22      2     LABEL_LEN (LE, ≤ 256)
+24      var   LABEL (UTF-8)
+...     1     SUBJECT_TAG_LEN (≤ 64)
+...     var   SUBJECT_TAG (the subject key's own PEM tag, e.g. "ML-KEM-768 PUBLIC KEY")
+...     4     SUBJECT_KEY_LEN (LE, ≤ 16384)
+...     var   SUBJECT_KEY (the subject key's raw PEM body bytes)
+...     4     SIG_LEN (LE)
+...     var   SIG (CA signature over everything from MAGIC through SUBJECT_KEY)
+```
+
+The subject key's PEM tag travels inside the signed body, so a verified certificate
+hands back a ready-to-use, self-describing PEM (`SUBJECT_TAG` + `SUBJECT_KEY`) without
+the caller needing to know the key type in advance - any current or future pqfile
+public key type can be certified without a format change here.
+
 ---
 
 ## 7. Passphrase-Protected Private Key Format

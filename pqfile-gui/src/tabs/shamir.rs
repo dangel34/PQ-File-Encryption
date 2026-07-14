@@ -13,7 +13,7 @@ use pqfile::shamir;
 
 impl PqfileApp {
     pub(crate) fn show_shamir(&mut self, ui: &mut egui::Ui, dark: bool) {
-        if tab_heading_help(ui, "Shamir Key Splitting  (M-of-N)", dark) {
+        if tab_heading_help(ui, "Split Key  (Shamir, M-of-N)", dark) {
             self.help_modal_open = Some(Tab::Shamir);
         }
         ui.label(

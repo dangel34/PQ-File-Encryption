@@ -11,7 +11,7 @@ use crate::widgets::{
     seg_tabs, show_status, tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-use pqfile::{decrypt, keygen, rekey};
+use pqfile::{add_recipient, decrypt, keygen, rekey};
 use std::io::Cursor;
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
@@ -362,28 +362,95 @@ impl PqfileApp {
         }
         ui.label(
             RichText::new(
-                "Decrypt .pqf files with your private key, or use Rekey to transfer a \
-                 ciphertext to a new recipient without decrypting the payload.",
+                "Decrypt .pqf files with your private key, or use Rekey / Add Recipient to \
+                 transfer or extend access to a ciphertext without decrypting the payload.",
             )
             .size(13.0)
             .color(c_subtext(dark)),
         );
         ui.add_space(10.0);
 
-        seg_tabs(
-            ui,
-            &mut self.decrypt_sub_tab,
-            &[
-                ("Decrypt Files", DecryptSubTab::Decrypt),
-                ("Rekey File", DecryptSubTab::Rekey),
-            ],
-            dark,
-        );
-
+        // Rekey and Add Recipient are rare, specialized operations (transfer or extend
+        // ciphertext access without decrypting), so they're secondary links off the main
+        // Decrypt flow rather than equally-weighted peer tabs — first-time users land
+        // straight on the common path.
         match self.decrypt_sub_tab {
-            DecryptSubTab::Decrypt => self.show_decrypt_section(ui, dark),
-            DecryptSubTab::Rekey => self.show_rekey_section(ui, dark),
+            DecryptSubTab::Decrypt => {
+                self.show_decrypt_section(ui, dark);
+                self.show_secondary_op_prompt(ui, dark);
+            }
+            DecryptSubTab::Rekey => {
+                self.show_back_to_decrypt_link(ui, dark);
+                self.show_rekey_section(ui, dark);
+            }
+            DecryptSubTab::AddRecipient => {
+                self.show_back_to_decrypt_link(ui, dark);
+                self.show_add_recipient_section(ui, dark);
+            }
         }
+    }
+
+    fn show_secondary_op_prompt(&mut self, ui: &mut egui::Ui, dark: bool) {
+        ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new("Need to transfer this file to a new recipient, or add one, ")
+                    .size(12.0)
+                    .color(c_subtext(dark)),
+            );
+            ui.label(
+                RichText::new("without decrypting it?")
+                    .size(12.0)
+                    .color(c_subtext(dark)),
+            );
+            if ui
+                .add(
+                    egui::Label::new(
+                        RichText::new("Rekey instead →")
+                            .size(12.0)
+                            .color(c_accent(dark))
+                            .underline(),
+                    )
+                    .sense(egui::Sense::click()),
+                )
+                .clicked()
+            {
+                self.decrypt_sub_tab = DecryptSubTab::Rekey;
+            }
+            ui.label(RichText::new("·").size(12.0).color(c_subtext(dark)));
+            if ui
+                .add(
+                    egui::Label::new(
+                        RichText::new("Add a recipient →")
+                            .size(12.0)
+                            .color(c_accent(dark))
+                            .underline(),
+                    )
+                    .sense(egui::Sense::click()),
+                )
+                .clicked()
+            {
+                self.decrypt_sub_tab = DecryptSubTab::AddRecipient;
+            }
+        });
+    }
+
+    fn show_back_to_decrypt_link(&mut self, ui: &mut egui::Ui, dark: bool) {
+        if ui
+            .add(
+                egui::Label::new(
+                    RichText::new("← Back to Decrypt")
+                        .size(12.5)
+                        .color(c_accent(dark))
+                        .underline(),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .clicked()
+        {
+            self.decrypt_sub_tab = DecryptSubTab::Decrypt;
+        }
+        ui.add_space(6.0);
     }
 
     fn show_decrypt_section(&mut self, ui: &mut egui::Ui, dark: bool) {
@@ -939,6 +1006,162 @@ impl PqfileApp {
             }
             Err(e) => {
                 self.rekey_status = OpStatus::Err(e.to_string());
+            }
+        }
+    }
+
+    // ── Add Recipient ────────────────────────────────────────────────────
+
+    fn show_add_recipient_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        ui.add_space(4.0);
+        section_label(ui, "ADD RECIPIENT", dark);
+        ui.label(
+            RichText::new(
+                "Add a new recipient to a v4/v7/v8 multi-recipient .pqf file without \
+                 re-encrypting the payload. The session key is recovered with an existing \
+                 recipient's private key and re-encapsulated for the new recipient. The \
+                 encrypted content is untouched.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(6.0);
+        let mut pp_submitted = false;
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            file_row(
+                ui,
+                "Existing recipient's private key (for decapsulation)",
+                &mut self.add_recipient_privkey,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            pp_submitted = passphrase_row(
+                ui,
+                "Existing key passphrase:",
+                &mut self.add_recipient_privkey_passphrase,
+                &mut self.add_recipient_privkey_passphrase_visible,
+                "Leave empty for an unencrypted key",
+                dark,
+            );
+            ui.add_space(4.0);
+            file_row(
+                ui,
+                "New recipient public key",
+                &mut self.add_recipient_new_pubkey,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            file_row(
+                ui,
+                "Encrypted file to add a recipient to (.pqf)",
+                &mut self.add_recipient_input,
+                "PQF",
+                &["pqf"],
+                dark,
+            );
+        });
+        ui.add_space(8.0);
+
+        let ready = self.add_recipient_privkey.loaded()
+            && self.add_recipient_new_pubkey.loaded()
+            && self.add_recipient_input.loaded();
+        if ui
+            .add_enabled(
+                ready,
+                egui::Button::new(
+                    RichText::new("➕  Add Recipient")
+                        .size(14.0)
+                        .color(c_chrome(dark))
+                        .strong(),
+                )
+                .fill(c_accent(dark))
+                .min_size(Vec2::new(160.0, 32.0)),
+            )
+            .clicked()
+            || (ready
+                && (pp_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
+        {
+            self.do_add_recipient();
+        }
+
+        show_status(ui, &self.add_recipient_status, dark);
+    }
+
+    fn do_add_recipient(&mut self) {
+        let existing_priv = match self.add_recipient_privkey.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.add_recipient_status =
+                    OpStatus::Err("Load an existing recipient's private key first.".to_owned());
+                return;
+            }
+        };
+        let new_pub = match self.add_recipient_new_pubkey.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.add_recipient_status =
+                    OpStatus::Err("Load the new recipient public key first.".to_owned());
+                return;
+            }
+        };
+        let data = match self.add_recipient_input.data.clone() {
+            Some(d) => d,
+            None => {
+                self.add_recipient_status =
+                    OpStatus::Err("Choose the .pqf file to add a recipient to first.".to_owned());
+                return;
+            }
+        };
+        let passphrase = if self.add_recipient_privkey_passphrase.is_empty() {
+            None
+        } else {
+            Some(zeroize::Zeroizing::new(
+                (*self.add_recipient_privkey_passphrase).clone(),
+            ))
+        };
+
+        let mut output = Vec::new();
+        let mut reader = Cursor::new(&data);
+        match add_recipient::add_recipient_stream(
+            &existing_priv,
+            &new_pub,
+            &mut reader,
+            &mut output,
+            passphrase.as_deref().map(String::as_str),
+        ) {
+            Ok(_info) => {
+                let out_name = self.add_recipient_input.name.clone();
+                #[cfg(not(target_arch = "wasm32"))]
+                let native_path = {
+                    let base = self
+                        .add_recipient_input
+                        .path
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from(&out_name));
+                    let path = if self.settings.output_dir.is_empty() {
+                        base
+                    } else {
+                        PathBuf::from(&self.settings.output_dir)
+                            .join(base.file_name().unwrap_or_default())
+                    };
+                    Some(path)
+                };
+                #[cfg(target_arch = "wasm32")]
+                let native_path: Option<PathBuf> = None;
+                self.add_recipient_status = save_result(
+                    &out_name,
+                    &output,
+                    native_path,
+                    self.settings.confirm_overwrite,
+                );
+            }
+            Err(e) => {
+                self.add_recipient_status = OpStatus::Err(e.to_string());
             }
         }
     }

@@ -312,6 +312,12 @@ fn write_multi_header_prefix<W: Write + ?Sized>(
     version: u8,
     count: usize,
 ) -> Result<(), std::io::Error> {
+    if count > MAX_RECIPIENTS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("recipient count {count} exceeds maximum ({MAX_RECIPIENTS})"),
+        ));
+    }
     w.write_all(MAGIC)?;
     w.write_all(&[version])?;
     w.write_all(&(count as u16).to_le_bytes())

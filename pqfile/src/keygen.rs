@@ -204,21 +204,27 @@ fn extract_ssh_ed25519_seed(pem_str: &str) -> Result<Zeroizing<[u8; 32]>, Pqfile
 }
 
 fn ssh_read_u32(data: &[u8], pos: &mut usize) -> Result<u32, PqfileError> {
-    if *pos + 4 > data.len() {
-        return Err(PqfileError::InvalidPem("truncated SSH key data".into()));
-    }
+    let end = pos
+        .checked_add(4)
+        .filter(|&end| end <= data.len())
+        .ok_or_else(|| PqfileError::InvalidPem("truncated SSH key data".into()))?;
     let v = u32::from_be_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
-    *pos += 4;
+    *pos = end;
     Ok(v)
 }
 
 fn ssh_read_string<'a>(data: &'a [u8], pos: &mut usize) -> Result<&'a [u8], PqfileError> {
     let len = ssh_read_u32(data, pos)? as usize;
-    if *pos + len > data.len() {
-        return Err(PqfileError::InvalidPem("truncated SSH key string".into()));
-    }
-    let s = &data[*pos..*pos + len];
-    *pos += len;
+    // `checked_add` guards against a crafted, oversized length field wrapping
+    // `*pos + len` on 32-bit targets (wasm32), which would otherwise bypass
+    // this bounds check and panic on the slice index below instead of
+    // returning a clean error.
+    let end = pos
+        .checked_add(len)
+        .filter(|&end| end <= data.len())
+        .ok_or_else(|| PqfileError::InvalidPem("truncated SSH key string".into()))?;
+    let s = &data[*pos..end];
+    *pos = end;
     Ok(s)
 }
 
@@ -661,6 +667,29 @@ mod tests {
             err.to_string().contains("exceeds maximum"),
             "expected size-cap error, got: {err}"
         );
+    }
+
+    #[test]
+    fn ssh_read_string_rejects_oversized_length_without_panicking() {
+        // Length prefix (u32 BE) claims far more data than the buffer holds.
+        // `checked_add` must reject this cleanly rather than panicking on an
+        // overflowed/out-of-range slice index.
+        let mut data = Vec::new();
+        data.extend_from_slice(&(u32::MAX - 10).to_be_bytes());
+        data.extend_from_slice(&[0u8; 4]);
+        let mut pos = 0usize;
+        assert!(ssh_read_string(&data, &mut pos).is_err());
+    }
+
+    #[test]
+    fn ssh_read_string_rejects_length_that_would_overflow_from_nonzero_pos() {
+        // Same idea starting from a nonzero position - closer to the actual
+        // wasm32 (32-bit usize) overflow shape, where `pos + len` wrapping
+        // past `usize::MAX` would otherwise bypass the bounds check entirely.
+        let mut data = vec![0u8; 8];
+        data[4..8].copy_from_slice(&(u32::MAX - 2).to_be_bytes());
+        let mut pos = 4usize;
+        assert!(ssh_read_string(&data, &mut pos).is_err());
     }
 
     #[test]

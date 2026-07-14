@@ -1660,6 +1660,30 @@ mod tests {
     }
 
     #[test]
+    fn encrypt_stream_multi_rejects_more_than_max_recipients() {
+        use crate::format::MAX_RECIPIENTS;
+        let (pub_pem, _) = keypair();
+        let pubkey_pems: Vec<&str> =
+            std::iter::repeat_n(pub_pem.as_str(), MAX_RECIPIENTS + 1).collect();
+        let plaintext = b"too many recipients";
+        let mut reader: &[u8] = plaintext;
+        let mut writer = Vec::new();
+        let err = encrypt_stream_multi(
+            &pubkey_pems,
+            plaintext.len() as u64,
+            &mut reader,
+            &mut writer,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, PqfileError::Io(_)),
+            "expected a clean error at encrypt time, got {err:?}"
+        );
+        // Nothing should have been written to the output on failure.
+        assert!(writer.is_empty());
+    }
+
+    #[test]
     fn encrypt_stream_writes_v3_version_byte() {
         use crate::format::VERSION_V3;
         use std::io::Cursor;

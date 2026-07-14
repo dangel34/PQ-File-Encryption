@@ -7,8 +7,8 @@ use crate::types::{EncryptMode, OpStatus, SecondFactorMode, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_files;
 use crate::widgets::{
-    card, pick_file, pick_files, save_result, scrollable_list, section_label, show_status,
-    tab_heading_help,
+    card, file_row, pick_file, pick_files, save_result, scrollable_list, section_label,
+    show_status, tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use pqfile::padding::PadmeReader;
@@ -636,13 +636,24 @@ impl PqfileApp {
         let mut action = ListAction::None;
         section_label(ui, "RECIPIENTS", dark);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
+            file_row(
+                ui,
+                "CA verifying key (only needed for certificate recipients)",
+                &mut self.encrypt_ca_key,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let n = self.encrypt_recipients.len();
                 if n == 0 {
                     ui.label(
-                        RichText::new("No recipients. Browse or drag and drop a public key")
-                            .size(13.0)
-                            .color(c_overlay(dark)),
+                        RichText::new(
+                            "No recipients. Browse or drag and drop a public key or certificate",
+                        )
+                        .size(13.0)
+                        .color(c_overlay(dark)),
                     );
                 } else {
                     ui.label(
@@ -727,6 +738,7 @@ impl PqfileApp {
                 }
             }
         });
+        show_status(ui, &self.encrypt_recipient_error, dark);
         action
     }
 

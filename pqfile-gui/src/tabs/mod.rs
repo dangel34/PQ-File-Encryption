@@ -1,4 +1,5 @@
 pub(crate) mod archive;
+pub(crate) mod cert;
 pub(crate) mod decrypt;
 pub(crate) mod doctor;
 pub(crate) mod encrypt;
