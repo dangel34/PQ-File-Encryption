@@ -1,7 +1,10 @@
 name: Mutation Testing
 
-# Run nightly and on manual dispatch. Not run on every push/PR because
-# cargo-mutants is CPU-intensive (can take 20-40 minutes on the full set).
+# Run weekly and on manual dispatch. Not run on every push/PR because
+# cargo-mutants is CPU-intensive, and the full ~700-mutant set across the
+# four scoped files takes too long for a single CI job - see the --shard
+# comment below. Each scheduled run only covers 1/8 of the mutants, cycling
+# through full coverage over ~2 months.
 #
 # Scope is intentionally limited to the four crypto-critical modules where a
 # surviving mutant is a genuine test gap. Any survivor should result in a new
@@ -13,6 +16,10 @@ on:
     inputs:
       extra_flags:
         description: 'Extra cargo-mutants flags (e.g. "--timeout 30")'
+        required: false
+        default: ''
+      shard:
+        description: 'Shard to run as "k/n" (e.g. "0/8"). Blank runs the full ~700-mutant set - can take 40+ hours, so only do this deliberately.'
         required: false
         default: ''
 
@@ -53,6 +60,15 @@ jobs:
 
       # Run mutations on the four crypto-critical modules only.
       # --jobs 4: run 4 mutations concurrently.
+      # -- --test-threads=1: each of those 4 concurrent `cargo test`
+      #   processes otherwise also parallelizes internally across all
+      #   visible CPUs, so 4 jobs x N-core internal parallelism massively
+      #   oversubscribes a 4-vCPU runner. Measured effect: mutant runs took
+      #   ~800s each against a 204s unmutated baseline (~4x inflation) with
+      #   this unset, which at 703 mutants works out to 40+ hours - nowhere
+      #   near fitting in a CI job. --jobs stays the outer parallelism knob;
+      #   --test-threads=1 keeps each inner process to one core so 4 jobs
+      #   roughly matches a 4-vCPU runner instead of thrashing it.
       # --timeout-multiplier 5 (cargo-mutants default, spelled out for
       #   clarity): each mutant gets 5x the *measured* baseline test time,
       #   rather than a fixed --timeout. A fixed --timeout also bounds the
@@ -67,12 +83,28 @@ jobs:
       # timeout-minutes on the job (above) is the actual ceiling against a
       #   runaway/hung mutant tail; most mutants still fail within the
       #   first few tests (<10s).
-      # --no-shuffle: stable ordering for reproducible logs.
+      # --shard k/8 on scheduled runs: even with the oversubscription fix,
+      #   ~700 mutants across 4 files is too much for one CI job. Rotate
+      #   through 8 shards keyed off the ISO week number so the full set
+      #   gets covered roughly every 2 months instead of one run trying
+      #   (and failing) to test all of it. Manual dispatch can target a
+      #   specific shard via the `shard` input, or leave it blank to run
+      #   the full set deliberately.
+      # --no-shuffle: stable ordering, required for --shard to be
+      #   deterministic across runs (and for reproducible logs).
       # extra_flags goes through an env var rather than ${{ }} interpolation
       # into the script (shell-injection vector, zizmor template-injection).
       # Deliberately unquoted below so multiple flags word-split.
       - name: Run cargo-mutants on crypto-critical paths
         run: |
+          shard_arg=""
+          if [ -n "$SHARD_INPUT" ]; then
+            shard_arg="--shard $SHARD_INPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            week=$(date -u +%V)
+            shard_index=$(( 10#$week % 8 ))
+            shard_arg="--shard ${shard_index}/8"
+          fi
           cargo mutants \
             --package pqfile \
             --file pqfile/src/decrypt.rs \
@@ -83,10 +115,13 @@ jobs:
             --timeout-multiplier 5 \
             --minimum-test-timeout 60 \
             --no-shuffle \
-            $EXTRA_FLAGS
+            $shard_arg \
+            $EXTRA_FLAGS \
+            -- --test-threads=1
         env:
           CARGO_INCREMENTAL: '0'
           EXTRA_FLAGS: ${{ github.event.inputs.extra_flags }}
+          SHARD_INPUT: ${{ github.event.inputs.shard }}
 
       - name: Upload mutants log
         if: always()
