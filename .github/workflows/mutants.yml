@@ -60,15 +60,19 @@ jobs:
 
       # Run mutations on the four crypto-critical modules only.
       # --jobs 4: run 4 mutations concurrently.
-      # -- --test-threads=1: each of those 4 concurrent `cargo test`
-      #   processes otherwise also parallelizes internally across all
-      #   visible CPUs, so 4 jobs x N-core internal parallelism massively
-      #   oversubscribes a 4-vCPU runner. Measured effect: mutant runs took
-      #   ~800s each against a 204s unmutated baseline (~4x inflation) with
-      #   this unset, which at 703 mutants works out to 40+ hours - nowhere
-      #   near fitting in a CI job. --jobs stays the outer parallelism knob;
-      #   --test-threads=1 keeps each inner process to one core so 4 jobs
-      #   roughly matches a 4-vCPU runner instead of thrashing it.
+      # -- -- --test-threads=1 (two separators: the first ends
+      #   cargo-mutants' own args, the second passes through cargo test to
+      #   the test binary itself - one -- routes to `cargo test`, which
+      #   rejects --test-threads outright): each of the 4 concurrent
+      #   `cargo test` processes otherwise also parallelizes internally
+      #   across all visible CPUs, so 4 jobs x N-core internal parallelism
+      #   massively oversubscribes a 4-vCPU runner. Measured effect: mutant
+      #   runs took ~800s each against a 204s unmutated baseline (~4x
+      #   inflation) with this unset, which at 703 mutants works out to
+      #   40+ hours - nowhere near fitting in a CI job. --jobs stays the
+      #   outer parallelism knob; --test-threads=1 keeps each inner
+      #   process to one core so 4 jobs roughly matches a 4-vCPU runner
+      #   instead of thrashing it.
       # --timeout-multiplier 5 (cargo-mutants default, spelled out for
       #   clarity): each mutant gets 5x the *measured* baseline test time,
       #   rather than a fixed --timeout. A fixed --timeout also bounds the
@@ -117,7 +121,7 @@ jobs:
             --no-shuffle \
             $shard_arg \
             $EXTRA_FLAGS \
-            -- --test-threads=1
+            -- -- --test-threads=1
         env:
           CARGO_INCREMENTAL: '0'
           EXTRA_FLAGS: ${{ github.event.inputs.extra_flags }}
