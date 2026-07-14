@@ -779,7 +779,13 @@ impl eframe::App for PqfileApp {
                                 tab_btn(ui, &mut self.tab, tab, tab_label(tab), dark);
                             }
                             crate::widgets::advanced_tabs_menu(ui, &mut self.tab, dark);
-                            tab_btn(ui, &mut self.tab, Tab::Settings, tab_label(Tab::Settings), dark);
+                            tab_btn(
+                                ui,
+                                &mut self.tab,
+                                Tab::Settings,
+                                tab_label(Tab::Settings),
+                                dark,
+                            );
                         });
                     });
 

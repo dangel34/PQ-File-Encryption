@@ -76,7 +76,10 @@ pub(crate) fn advanced_tabs_menu(ui: &mut egui::Ui, current: &mut crate::types::
         .stroke(Stroke::NONE);
     let (response, _) = egui::containers::menu::MenuButton::from_button(btn).ui(ui, |ui| {
         for tab in ADVANCED_TABS {
-            if ui.selectable_label(*current == tab, tab_label(tab)).clicked() {
+            if ui
+                .selectable_label(*current == tab, tab_label(tab))
+                .clicked()
+            {
                 *current = tab;
                 ui.close();
             }
