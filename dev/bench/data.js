@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783992209921,
+  "lastUpdate": 1783992585410,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -2549,6 +2549,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48244,
             "range": "± 141",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "b03309ef29247a7791a4d0973947fe39a991c438",
+          "message": "fix(ci): use double -- separator to reach the test binary\n\nSingle -- routes args to cargo test itself, which rejects\n--test-threads outright. cargo-mutants needs -- -- to forward past\ncargo test to the actual test binary. Caught by re-running the\nshard workflow before trusting its output.",
+          "timestamp": "2026-07-13T21:25:47-04:00",
+          "tree_id": "e10edcc3fcc38a09ad7b26313d3cad8fbc4fa478",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/b03309ef29247a7791a4d0973947fe39a991c438"
+        },
+        "date": 1783992585130,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66074,
+            "range": "± 404",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 964728,
+            "range": "± 2559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 110482814,
+            "range": "± 1075735",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 107535,
+            "range": "± 573",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 974037,
+            "range": "± 2319",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 96199985,
+            "range": "± 745559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 69107,
+            "range": "± 382",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 970771,
+            "range": "± 2903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 102053806,
+            "range": "± 533512",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 112826,
+            "range": "± 794",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1192114,
+            "range": "± 21935",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 101398755,
+            "range": "± 449442",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 47992,
+            "range": "± 129",
             "unit": "ns/iter"
           }
         ]
