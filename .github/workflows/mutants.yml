@@ -59,20 +59,18 @@ jobs:
           tool: cargo-mutants
 
       # Run mutations on the four crypto-critical modules only.
-      # --jobs 4: run 4 mutations concurrently.
-      # -- -- --test-threads=1 (two separators: the first ends
-      #   cargo-mutants' own args, the second passes through cargo test to
-      #   the test binary itself - one -- routes to `cargo test`, which
-      #   rejects --test-threads outright): each of the 4 concurrent
-      #   `cargo test` processes otherwise also parallelizes internally
-      #   across all visible CPUs, so 4 jobs x N-core internal parallelism
-      #   massively oversubscribes a 4-vCPU runner. Measured effect: mutant
-      #   runs took ~800s each against a 204s unmutated baseline (~4x
-      #   inflation) with this unset, which at 703 mutants works out to
-      #   40+ hours - nowhere near fitting in a CI job. --jobs stays the
-      #   outer parallelism knob; --test-threads=1 keeps each inner
-      #   process to one core so 4 jobs roughly matches a 4-vCPU runner
-      #   instead of thrashing it.
+      # No --jobs flag (cargo-mutants defaults to 1, i.e. one mutant test
+      #   run at a time): tried --jobs 4 first, since running mutants
+      #   concurrently seems like free speedup. It isn't, on a shared
+      #   runner - each `cargo test` process *also* parallelizes internally
+      #   across all visible CPUs, so 4 concurrent jobs x N-core internal
+      #   parallelism oversubscribes the runner and each run slows to
+      #   ~800s against a 204s unmutated baseline (~4x inflation). Forcing
+      #   the inner parallelism down instead (--test-threads=1) just moves
+      #   the cost: each run becomes fully serial and takes about as long
+      #   as it did concurrently-but-contended. Either way throughput comes
+      #   out the same as running one mutant at a time and letting it use
+      #   the full machine - so skip the complexity and do that directly.
       # --timeout-multiplier 5 (cargo-mutants default, spelled out for
       #   clarity): each mutant gets 5x the *measured* baseline test time,
       #   rather than a fixed --timeout. A fixed --timeout also bounds the
@@ -115,13 +113,11 @@ jobs:
             --file pqfile/src/format.rs \
             --file pqfile/src/shamir.rs \
             --file pqfile/src/passphrase.rs \
-            --jobs 4 \
             --timeout-multiplier 5 \
             --minimum-test-timeout 60 \
             --no-shuffle \
             $shard_arg \
-            $EXTRA_FLAGS \
-            -- -- --test-threads=1
+            $EXTRA_FLAGS
         env:
           CARGO_INCREMENTAL: '0'
           EXTRA_FLAGS: ${{ github.event.inputs.extra_flags }}
