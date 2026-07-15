@@ -371,6 +371,46 @@ jobs:
       - name: Test (pqfile, kem-libcrux feature)
         run: cargo test -p pqfile --features kem-libcrux
 
+  # ── Optional-feature compile check (tlock) ────────────────────────────────
+  # Time-locked encryption (V11 format) pulls in the only network-capable
+  # dependencies in the workspace (`tlock`, `drand_core`); off by default so a
+  # normal build never gains an HTTP stack. This job compiles and runs the
+  # feature's offline unit tests (a pinned historical drand beacon signature,
+  # so no network access is needed here) for both the library and the CLI.
+  # The two live-network tests in pqfile/src/tlock.rs are #[ignore]d and never
+  # run in CI, per the same convention as the ct_*.rs dudect harnesses.
+  tlock-check:
+    name: tlock feature check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: tlock
+          cache-target: "true"
+
+      - name: Clippy (pqfile, tlock feature)
+        run: cargo clippy -p pqfile --all-targets --features tlock -- --deny warnings
+
+      - name: Test (pqfile, tlock feature)
+        run: cargo test -p pqfile --features tlock
+
+      - name: Clippy (pqfile-cli, tlock feature)
+        run: cargo clippy -p pqfile-cli --all-targets --features tlock -- --deny warnings
+
+      - name: Test (pqfile-cli, tlock feature)
+        run: cargo test -p pqfile-cli --features tlock
+
   # ── WASM smoke test ────────────────────────────────────────────────────────
   wasm-test:
     name: WASM smoke test

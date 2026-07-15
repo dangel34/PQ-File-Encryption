@@ -12,3 +12,5 @@ pub(crate) mod shamir;
 pub(crate) mod sign;
 pub(crate) mod signcrypt;
 pub(crate) mod tools;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod webauthn_ui;

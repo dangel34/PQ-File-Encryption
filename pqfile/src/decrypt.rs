@@ -581,6 +581,58 @@ pub fn decrypt_stream_passphrase_fido2_with_limits(
     )
 }
 
+/// Decrypts a v10 passphrase-only `.pqf` stream that was encrypted with a
+/// WebAuthn `prf` extension second factor
+/// ([`crate::encrypt::encrypt_stream_passphrase_webauthn_prf`]), using the
+/// default KDF ceiling (m ≤ 64 MiB, t ≤ 3). Browser-native equivalent of
+/// [`decrypt_stream_passphrase_fido2`].
+///
+/// `prf_output` must be the same 32-byte value the browser returned from
+/// `PublicKeyCredential.getClientExtensionResults().prf.results.first` for the
+/// enrolled credential; obtaining it means talking to a browser, which is the
+/// caller's responsibility - pqfile's core library never touches one.
+/// Returns [`PqfileError::WebauthnPrfNotRequired`] if the file was not
+/// encrypted with this second factor; a wrong output surfaces as
+/// [`PqfileError::DecryptionFailure`], indistinguishable from a wrong
+/// passphrase.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_passphrase_webauthn_prf(
+    passphrase: &str,
+    prf_output: &[u8; 32],
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    decrypt_stream_passphrase_webauthn_prf_with_limits(
+        passphrase,
+        prf_output,
+        crate::passphrase::ARGON2_M_COST,
+        crate::passphrase::ARGON2_T_COST,
+        reader,
+        writer,
+    )
+}
+
+/// [`decrypt_stream_passphrase_webauthn_prf`] with a custom KDF ceiling.
+/// See [`decrypt_stream_passphrase_with_limits`] for the ceiling semantics.
+#[must_use = "decryption result must be used"]
+pub fn decrypt_stream_passphrase_webauthn_prf_with_limits(
+    passphrase: &str,
+    prf_output: &[u8; 32],
+    max_m_kib: u32,
+    max_t: u32,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    decrypt_stream_passphrase_inner(
+        passphrase,
+        SecondFactor::WebauthnPrf(prf_output),
+        max_m_kib,
+        max_t,
+        reader,
+        writer,
+    )
+}
+
 /// Which v10 second factor (if any) the caller is presenting at decrypt time.
 /// Distinct from the header's own flag bits, which record what the file
 /// actually requires; [`decrypt_stream_passphrase_inner`] reconciles the two.
@@ -588,6 +640,30 @@ enum SecondFactor<'a> {
     None,
     Keyfile(&'a [u8]),
     Fido2(&'a [u8; 32]),
+    WebauthnPrf(&'a [u8; 32]),
+}
+
+/// The header's own required second factor, reduced from its raw flag byte.
+/// `PqfHeaderV10::read_body` already rejects any header with more than one of
+/// the known bits set, so this reduction is total and unambiguous.
+enum RequiredFactor {
+    None,
+    Keyfile,
+    Fido2,
+    WebauthnPrf,
+}
+
+fn required_factor(flags: u8) -> RequiredFactor {
+    use crate::format::{V10_FLAG_FIDO2, V10_FLAG_KEYFILE, V10_FLAG_WEBAUTHN_PRF};
+    if flags & V10_FLAG_KEYFILE != 0 {
+        RequiredFactor::Keyfile
+    } else if flags & V10_FLAG_FIDO2 != 0 {
+        RequiredFactor::Fido2
+    } else if flags & V10_FLAG_WEBAUTHN_PRF != 0 {
+        RequiredFactor::WebauthnPrf
+    } else {
+        RequiredFactor::None
+    }
 }
 
 fn decrypt_stream_passphrase_inner(
@@ -598,8 +674,10 @@ fn decrypt_stream_passphrase_inner(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
-    use crate::format::{PqfHeaderV10, V10_FLAG_FIDO2, V10_FLAG_KEYFILE};
-    use crate::passphrase::{derive_key_with_params_and_secret, fido2_secret, keyfile_secret};
+    use crate::format::PqfHeaderV10;
+    use crate::passphrase::{
+        derive_key_with_params_and_secret, fido2_secret, keyfile_secret, webauthn_prf_secret,
+    };
 
     let version = PqfHeader::read_magic_version(reader)?;
     if version_layout(version) != VERSION_V10 {
@@ -612,28 +690,28 @@ fn decrypt_stream_passphrase_inner(
     // supplied before any expensive work: a mismatch in either direction (or
     // presenting the wrong kind) gets a specific error rather than an opaque
     // authentication failure after the KDF. read_body already rejects a
-    // header carrying both bits, so that combination cannot reach here.
-    let keyfile_flag = header.flags & V10_FLAG_KEYFILE != 0;
-    let fido2_flag = header.flags & V10_FLAG_FIDO2 != 0;
-    let secret = match (keyfile_flag, fido2_flag) {
-        (true, false) => match second_factor {
-            SecondFactor::Keyfile(kf) => Some(keyfile_secret(kf)),
-            SecondFactor::None | SecondFactor::Fido2(_) => {
-                return Err(PqfileError::KeyfileRequired)
-            }
-        },
-        (false, true) => match second_factor {
-            SecondFactor::Fido2(hs) => Some(fido2_secret(hs)),
-            SecondFactor::None | SecondFactor::Keyfile(_) => {
-                return Err(PqfileError::Fido2Required)
-            }
-        },
-        (false, false) => match second_factor {
-            SecondFactor::None => None,
-            SecondFactor::Keyfile(_) => return Err(PqfileError::KeyfileNotRequired),
-            SecondFactor::Fido2(_) => return Err(PqfileError::Fido2NotRequired),
-        },
-        (true, true) => return Err(PqfileError::UnsupportedHeaderFlags(header.flags)),
+    // header carrying more than one of the known bits, so required_factor's
+    // reduction is total and unambiguous.
+    let secret = match (required_factor(header.flags), second_factor) {
+        (RequiredFactor::Keyfile, SecondFactor::Keyfile(kf)) => Some(keyfile_secret(kf)),
+        (RequiredFactor::Keyfile, _) => return Err(PqfileError::KeyfileRequired),
+
+        (RequiredFactor::Fido2, SecondFactor::Fido2(hs)) => Some(fido2_secret(hs)),
+        (RequiredFactor::Fido2, _) => return Err(PqfileError::Fido2Required),
+
+        (RequiredFactor::WebauthnPrf, SecondFactor::WebauthnPrf(p)) => Some(webauthn_prf_secret(p)),
+        (RequiredFactor::WebauthnPrf, _) => return Err(PqfileError::WebauthnPrfRequired),
+
+        (RequiredFactor::None, SecondFactor::None) => None,
+        (RequiredFactor::None, SecondFactor::Keyfile(_)) => {
+            return Err(PqfileError::KeyfileNotRequired)
+        }
+        (RequiredFactor::None, SecondFactor::Fido2(_)) => {
+            return Err(PqfileError::Fido2NotRequired)
+        }
+        (RequiredFactor::None, SecondFactor::WebauthnPrf(_)) => {
+            return Err(PqfileError::WebauthnPrfNotRequired)
+        }
     };
 
     if header.m_kib > max_m_kib || header.t_cost > max_t {
@@ -960,7 +1038,7 @@ fn decrypt_v2_payload(
     Ok(())
 }
 
-fn decrypt_v3_chunks(
+pub(crate) fn decrypt_v3_chunks(
     cipher: &ChaCha20Poly1305,
     header_nonce: &[u8; NONCE_LEN],
     chunk_size: usize,
@@ -2555,10 +2633,11 @@ mod tests {
     }
 
     #[test]
-    fn v10_both_second_factor_flags_rejected() {
-        // pqfile never writes both bits; a header claiming to need both a
-        // keyfile and a FIDO2 token is rejected as unsupported rather than
-        // silently picked apart.
+    fn v10_two_of_three_second_factor_flags_rejected() {
+        // pqfile never writes more than one of the three bits; a header
+        // claiming to need both a keyfile and a FIDO2 token is rejected as
+        // unsupported rather than silently picked apart. Exercises the
+        // generalized count_ones() <= 1 check, not just a hardcoded pair.
         let mut ct = keyfile_ciphertext("hunter2", b"the keyfile", b"secret");
         assert_eq!(ct[V10_FLAGS_OFFSET], 0x01);
         ct[V10_FLAGS_OFFSET] = 0x03; // V10_FLAG_KEYFILE | V10_FLAG_FIDO2
@@ -2569,5 +2648,183 @@ mod tests {
             matches!(result, Err(PqfileError::UnsupportedHeaderFlags(0x03))),
             "combined flags must be rejected, got {result:?}"
         );
+    }
+
+    #[test]
+    fn v10_three_of_three_second_factor_flags_rejected() {
+        let mut ct = keyfile_ciphertext("hunter2", b"the keyfile", b"secret");
+        ct[V10_FLAGS_OFFSET] = 0x07; // keyfile | fido2 | webauthn_prf
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out);
+        assert!(
+            matches!(result, Err(PqfileError::UnsupportedHeaderFlags(0x07))),
+            "all three flags set must be rejected, got {result:?}"
+        );
+    }
+
+    // ── WebAuthn PRF second factor ───────────────────────────────────────────
+
+    /// Encrypts with a WebAuthn `prf` output using weak (fast) KDF params for
+    /// test speed. The library never talks to a browser; tests stand in a
+    /// fixed 32-byte value for the PRF extension output.
+    fn webauthn_prf_ciphertext(
+        passphrase: &str,
+        prf_output: &[u8; 32],
+        plaintext: &[u8],
+    ) -> Vec<u8> {
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase_webauthn_prf_with_params(
+            passphrase,
+            prf_output,
+            16 * 1024, // 16 MiB
+            2,
+            4,
+            plaintext.len() as u64,
+            &mut &plaintext[..],
+            &mut ct,
+        )
+        .unwrap();
+        ct
+    }
+
+    #[test]
+    fn v10_webauthn_prf_roundtrip() {
+        let prf_output = [0x5Au8; 32];
+        let ct = webauthn_prf_ciphertext("hunter2", &prf_output, b"top secret");
+
+        let mut out = Vec::new();
+        decrypt_stream_passphrase_webauthn_prf(
+            "hunter2",
+            &prf_output,
+            &mut ct.as_slice(),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out, b"top secret");
+    }
+
+    #[test]
+    fn v10_webauthn_prf_sets_flag_byte() {
+        let ct = webauthn_prf_ciphertext("hunter2", &[0x11u8; 32], b"secret");
+        assert_eq!(
+            ct[V10_FLAGS_OFFSET], 0x04,
+            "WebAuthn PRF flag bit must be V10_FLAG_WEBAUTHN_PRF (0x04)"
+        );
+    }
+
+    #[test]
+    fn v10_webauthn_prf_wrong_output_fails() {
+        let ct = webauthn_prf_ciphertext("hunter2", &[0x22u8; 32], b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_webauthn_prf(
+            "hunter2",
+            &[0x33u8; 32],
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(
+            matches!(result, Err(PqfileError::DecryptionFailure)),
+            "wrong PRF output must cause decryption failure"
+        );
+    }
+
+    #[test]
+    fn v10_webauthn_prf_wrong_passphrase_fails() {
+        let prf_output = [0x44u8; 32];
+        let ct = webauthn_prf_ciphertext("correct", &prf_output, b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_webauthn_prf(
+            "wrong",
+            &prf_output,
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(matches!(result, Err(PqfileError::DecryptionFailure)));
+    }
+
+    #[test]
+    fn v10_webauthn_prf_missing_returns_webauthn_prf_required() {
+        let ct = webauthn_prf_ciphertext("hunter2", &[0x55u8; 32], b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase("hunter2", &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::WebauthnPrfRequired)));
+    }
+
+    #[test]
+    fn v10_webauthn_prf_on_plain_file_returns_webauthn_prf_not_required() {
+        let plaintext = b"no webauthn involved";
+        let mut ct = Vec::new();
+        crate::encrypt::encrypt_stream_passphrase(
+            "hunter2",
+            plaintext.len() as u64,
+            &mut plaintext.as_slice(),
+            &mut ct,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_webauthn_prf(
+            "hunter2",
+            &[0x66u8; 32],
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(matches!(result, Err(PqfileError::WebauthnPrfNotRequired)));
+    }
+
+    #[test]
+    fn v10_keyfile_file_rejects_webauthn_prf_secret() {
+        let ct = keyfile_ciphertext("hunter2", b"the keyfile", b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_webauthn_prf(
+            "hunter2",
+            &[0x77u8; 32],
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(matches!(result, Err(PqfileError::KeyfileRequired)));
+    }
+
+    #[test]
+    fn v10_fido2_file_rejects_webauthn_prf_secret() {
+        let ct = fido2_ciphertext("hunter2", &[0x88u8; 32], b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_webauthn_prf(
+            "hunter2",
+            &[0x99u8; 32],
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(matches!(result, Err(PqfileError::Fido2Required)));
+    }
+
+    #[test]
+    fn v10_webauthn_prf_file_rejects_keyfile_secret() {
+        let ct = webauthn_prf_ciphertext("hunter2", &[0xAAu8; 32], b"secret");
+
+        let mut out = Vec::new();
+        let result = decrypt_stream_passphrase_keyfile(
+            "hunter2",
+            b"wrong kind of second factor",
+            &mut ct.as_slice(),
+            &mut out,
+        );
+        assert!(matches!(result, Err(PqfileError::WebauthnPrfRequired)));
+    }
+
+    #[test]
+    fn v10_webauthn_prf_file_rejects_fido2_secret() {
+        let ct = webauthn_prf_ciphertext("hunter2", &[0xBBu8; 32], b"secret");
+
+        let mut out = Vec::new();
+        let result =
+            decrypt_stream_passphrase_fido2("hunter2", &[0xCCu8; 32], &mut ct.as_slice(), &mut out);
+        assert!(matches!(result, Err(PqfileError::WebauthnPrfRequired)));
     }
 }

@@ -5,6 +5,7 @@ mod fido2;
 mod tabs;
 mod theme;
 mod types;
+mod webauthn;
 mod widgets;
 
 pub use app::PqfileApp;

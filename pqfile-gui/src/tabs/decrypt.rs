@@ -36,6 +36,11 @@ enum DecryptTarget {
             allow(dead_code)
         )]
         fido2: Option<(PathBuf, Option<Zeroizing<String>>)>,
+        // Browser-native equivalent of `fido2`, resolved asynchronously (a
+        // passkey prompt) - see `handle_decrypt_batch`'s wasm branch and
+        // `poll_decrypt_webauthn`.
+        #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+        webauthn: Option<crate::webauthn::Enrollment>,
     },
 }
 
@@ -50,9 +55,12 @@ enum ResolvedDecryptTarget {
         passphrase: Zeroizing<String>,
         keyfile: Option<Vec<u8>>,
         fido2_secret: Option<Zeroizing<[u8; 32]>>,
+        webauthn_secret: Option<Zeroizing<[u8; 32]>>,
     },
 }
 
+/// Never called with `webauthn: Some(_)` - see `resolve_encrypt_target`'s
+/// docs for why.
 fn resolve_decrypt_target(target: DecryptTarget) -> Result<ResolvedDecryptTarget, String> {
     match target {
         DecryptTarget::PrivateKey {
@@ -66,7 +74,12 @@ fn resolve_decrypt_target(target: DecryptTarget) -> Result<ResolvedDecryptTarget
             passphrase,
             keyfile,
             fido2,
+            webauthn,
         } => {
+            debug_assert!(
+                webauthn.is_none(),
+                "webauthn second factor must be resolved asynchronously before resolve_decrypt_target"
+            );
             let fido2_secret = match fido2 {
                 None => None,
                 Some((path, pin)) => Some(crate::tabs::encrypt::derive_fido2_secret(
@@ -78,6 +91,7 @@ fn resolve_decrypt_target(target: DecryptTarget) -> Result<ResolvedDecryptTarget
                 passphrase,
                 keyfile,
                 fido2_secret,
+                webauthn_secret: None,
             })
         }
     }
@@ -128,6 +142,7 @@ fn decrypt_entry(
             passphrase,
             keyfile,
             fido2_secret,
+            webauthn_secret,
         } => {
             let mut cursor = Cursor::new(data);
             let mut out = Vec::new();
@@ -135,6 +150,13 @@ fn decrypt_entry(
                 decrypt::decrypt_stream_passphrase_keyfile(passphrase, kf, &mut cursor, &mut out)
             } else if let Some(hs) = fido2_secret {
                 decrypt::decrypt_stream_passphrase_fido2(passphrase, hs, &mut cursor, &mut out)
+            } else if let Some(p) = webauthn_secret {
+                decrypt::decrypt_stream_passphrase_webauthn_prf(
+                    passphrase,
+                    p,
+                    &mut cursor,
+                    &mut out,
+                )
             } else {
                 decrypt::decrypt_stream_passphrase(passphrase, &mut cursor, &mut out)
             };
@@ -264,39 +286,92 @@ impl PqfileApp {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = ctx;
-            let target = match resolve_decrypt_target(target) {
-                Ok(t) => t,
-                Err(msg) => {
-                    self.decrypt_status = OpStatus::Err(msg);
-                    return;
+            match target {
+                DecryptTarget::Passphrase {
+                    webauthn: Some(enrollment),
+                    ..
+                } => {
+                    // WebAuthn PRF derivation is an async browser prompt, so
+                    // it can't resolve synchronously the way every other
+                    // second factor does. Kick it off and stop here -
+                    // poll_decrypt_webauthn resumes once it sees the result.
+                    // No resume field needed (unlike encrypt): decrypt_v10_passphrase
+                    // is untouched in `self` and just re-read once this resolves.
+                    let pending: crate::types::WebAuthnPending<Zeroizing<[u8; 32]>> =
+                        std::sync::Arc::new(std::sync::Mutex::new(None));
+                    self.decrypt_webauthn_derive_pending = Some(std::sync::Arc::clone(&pending));
+                    let ctx = ctx.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let result = crate::webauthn::derive_secret(&enrollment).await;
+                        *pending.lock().unwrap() = Some(result);
+                        ctx.request_repaint();
+                    });
                 }
-            };
-            for entry in &mut self.decrypt_files {
-                let result = decrypt_entry(&target, &entry.data, stealth, &|_, _| {});
-                entry.status = match result {
-                    Ok(plain) => {
-                        let out_name = if entry.name.ends_with(".pqf") {
-                            entry.name[..entry.name.len() - 4].to_owned()
-                        } else {
-                            entry.name.clone()
-                        };
-                        save_result(&out_name, &plain, None, false)
-                    }
-                    Err(e) => OpStatus::Err(e.to_string()),
+                other => match resolve_decrypt_target(other) {
+                    Ok(resolved) => self.run_decrypt_wasm(resolved, stealth),
+                    Err(msg) => self.decrypt_status = OpStatus::Err(msg),
+                },
+            }
+        }
+    }
+
+    /// Called once per frame: drains an outstanding WebAuthn PRF derivation
+    /// kicked off by `handle_decrypt_batch` and, once it resolves, runs the
+    /// decrypt batch that was deferred waiting for it.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn poll_decrypt_webauthn(&mut self) {
+        let Some(pending) = &self.decrypt_webauthn_derive_pending else {
+            return;
+        };
+        let Some(result) = pending.lock().unwrap().take() else {
+            return;
+        };
+        self.decrypt_webauthn_derive_pending = None;
+        match result {
+            Ok(secret) => {
+                let stealth = self.decrypt_stealth && self.decrypt_mode == DecryptMode::PrivateKey;
+                let resolved = ResolvedDecryptTarget::Passphrase {
+                    passphrase: self.decrypt_v10_passphrase.clone(),
+                    keyfile: None,
+                    fido2_secret: None,
+                    webauthn_secret: Some(secret),
                 };
+                self.run_decrypt_wasm(resolved, stealth);
             }
-            if self.settings.auto_clear
-                && self
-                    .decrypt_files
-                    .iter()
-                    .all(|e| matches!(e.status, OpStatus::Ok(_)))
-            {
-                self.decrypt_privkey.clear();
-                self.decrypt_files.clear();
-                self.decrypt_passphrase.zeroize();
-                self.decrypt_v10_passphrase.zeroize();
-            }
+            Err(msg) => self.decrypt_status = OpStatus::Err(msg),
+        }
+    }
+
+    /// Runs an already-resolved decrypt batch synchronously to completion.
+    /// `target` is either built directly (None/Keyfile second factor, or no
+    /// passphrase mode at all) or resumed after an async WebAuthn PRF
+    /// derivation completed (see `poll_decrypt_webauthn`).
+    #[cfg(target_arch = "wasm32")]
+    fn run_decrypt_wasm(&mut self, target: ResolvedDecryptTarget, stealth: bool) {
+        for entry in &mut self.decrypt_files {
+            let result = decrypt_entry(&target, &entry.data, stealth, &|_, _| {});
+            entry.status = match result {
+                Ok(plain) => {
+                    let out_name = if entry.name.ends_with(".pqf") {
+                        entry.name[..entry.name.len() - 4].to_owned()
+                    } else {
+                        entry.name.clone()
+                    };
+                    save_result(&out_name, &plain, None, false)
+                }
+                Err(e) => OpStatus::Err(e.to_string()),
+            };
+        }
+        if self.settings.auto_clear
+            && self
+                .decrypt_files
+                .iter()
+                .all(|e| matches!(e.status, OpStatus::Ok(_)))
+        {
+            self.decrypt_privkey.clear();
+            self.decrypt_files.clear();
+            self.decrypt_passphrase.zeroize();
+            self.decrypt_v10_passphrase.zeroize();
         }
     }
 
@@ -324,13 +399,13 @@ impl PqfileApp {
                 if self.decrypt_v10_passphrase.is_empty() {
                     return Err("Enter the passphrase.".to_owned());
                 }
-                let (keyfile, fido2) = match self.decrypt_second_factor {
-                    SecondFactorMode::None => (None, None),
+                let (keyfile, fido2, webauthn) = match self.decrypt_second_factor {
+                    SecondFactorMode::None => (None, None, None),
                     SecondFactorMode::Keyfile => {
                         let Some(data) = self.decrypt_keyfile.data.clone() else {
                             return Err("Choose the keyfile used at encryption time.".to_owned());
                         };
-                        (Some(data), None)
+                        (Some(data), None, None)
                     }
                     SecondFactorMode::Fido2 => {
                         let Some(path) = self.decrypt_fido2_enrollment.path.clone() else {
@@ -344,13 +419,24 @@ impl PqfileApp {
                         };
                         #[cfg(not(all(not(target_arch = "wasm32"), feature = "fido2")))]
                         let pin: Option<Zeroizing<String>> = None;
-                        (None, Some((path, pin)))
+                        (None, Some((path, pin)), None)
+                    }
+                    SecondFactorMode::WebAuthnPrf => {
+                        let Some(data) = self.decrypt_webauthn_enrollment.data.clone() else {
+                            return Err("Choose the WebAuthn enrollment file.".to_owned());
+                        };
+                        let text = std::str::from_utf8(&data).map_err(|_| {
+                            "Could not read the WebAuthn enrollment file.".to_owned()
+                        })?;
+                        let enrollment = crate::webauthn::Enrollment::parse(text)?;
+                        (None, None, Some(enrollment))
                     }
                 };
                 Ok(DecryptTarget::Passphrase {
                     passphrase: self.decrypt_v10_passphrase.clone(),
                     keyfile,
                     fido2,
+                    webauthn,
                 })
             }
         }
@@ -459,7 +545,7 @@ impl PqfileApp {
         #[cfg(not(target_arch = "wasm32"))]
         let job_running = self.decrypt_batch_job.is_some();
         #[cfg(target_arch = "wasm32")]
-        let job_running = false;
+        let job_running = self.decrypt_webauthn_derive_pending.is_some();
 
         seg_tabs(
             ui,
@@ -569,6 +655,21 @@ impl PqfileApp {
                                 SecondFactorMode::Fido2,
                                 "FIDO2 token",
                             );
+                            // Disabled for now: see the matching comment in
+                            // tabs/encrypt.rs's second-factor selector.
+                            #[cfg(target_arch = "wasm32")]
+                            ui.add_enabled_ui(false, |ui| {
+                                ui.selectable_value(
+                                    &mut self.decrypt_second_factor,
+                                    SecondFactorMode::WebAuthnPrf,
+                                    "Passkey",
+                                )
+                            })
+                            .inner
+                            .on_hover_text(
+                                "Under implementation: browser/OS support for passkey-based \
+                                 encryption (WebAuthn PRF) is still too inconsistent to enable yet.",
+                            );
                         });
                         match self.decrypt_second_factor {
                             SecondFactorMode::None => {}
@@ -586,6 +687,10 @@ impl PqfileApp {
                             SecondFactorMode::Fido2 => {
                                 #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
                                 self.show_decrypt_fido2_second_factor(ui, dark);
+                            }
+                            SecondFactorMode::WebAuthnPrf => {
+                                #[cfg(target_arch = "wasm32")]
+                                self.show_decrypt_webauthn_second_factor(ui, dark);
                             }
                         }
                     });

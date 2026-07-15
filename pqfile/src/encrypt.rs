@@ -1031,6 +1031,67 @@ pub fn encrypt_stream_passphrase_fido2_with_params(
     )
 }
 
+/// [`encrypt_stream_passphrase`] with a WebAuthn `prf` extension output as a
+/// second factor - the browser-native equivalent of
+/// [`encrypt_stream_passphrase_fido2`] (see its docs for the shared
+/// mutual-exclusivity/pepper-slot rationale).
+///
+/// `prf_output` is the 32-byte value the browser returned from
+/// `PublicKeyCredential.getClientExtensionResults().prf.results.first` for a
+/// credential enrolled ahead of time; pqfile's core library never talks to a
+/// browser, so obtaining this value is the caller's responsibility (see
+/// `pqfile-gui`'s wasm-only `webauthn` module). Decrypting without the same
+/// credential fails with [`PqfileError::WebauthnPrfRequired`] before the KDF
+/// runs. Use [`crate::decrypt::decrypt_stream_passphrase_webauthn_prf`] to
+/// decrypt.
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_passphrase_webauthn_prf(
+    passphrase: &str,
+    prf_output: &[u8; 32],
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    use crate::passphrase::{ARGON2_M_COST, ARGON2_P_COST, ARGON2_T_COST};
+    encrypt_stream_passphrase_webauthn_prf_with_params(
+        passphrase,
+        prf_output,
+        ARGON2_M_COST,
+        ARGON2_T_COST,
+        ARGON2_P_COST,
+        original_size,
+        reader,
+        writer,
+    )
+}
+
+/// [`encrypt_stream_passphrase_webauthn_prf`] with caller-chosen Argon2id parameters.
+/// See [`encrypt_stream_passphrase_with_params`] for the KDF-ceiling caveats.
+#[allow(clippy::too_many_arguments)]
+#[must_use = "encryption result must be used"]
+pub fn encrypt_stream_passphrase_webauthn_prf_with_params(
+    passphrase: &str,
+    prf_output: &[u8; 32],
+    m_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+    original_size: u64,
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+) -> Result<(), PqfileError> {
+    let secret = crate::passphrase::webauthn_prf_secret(prf_output);
+    encrypt_stream_passphrase_inner(
+        passphrase,
+        Some((crate::format::V10_FLAG_WEBAUTHN_PRF, secret)),
+        m_kib,
+        t_cost,
+        p_cost,
+        original_size,
+        reader,
+        writer,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn encrypt_stream_passphrase_inner(
     passphrase: &str,
@@ -1087,7 +1148,7 @@ fn encrypt_stream_passphrase_inner(
     )
 }
 
-fn encrypt_chunks(
+pub(crate) fn encrypt_chunks(
     cipher: &ChaCha20Poly1305,
     base_nonce: &[u8; BASE_NONCE_LEN],
     chunk_size: usize,

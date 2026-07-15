@@ -430,7 +430,7 @@ impl PqfileApp {
     }
 
     fn do_clipboard_encrypt(&mut self, ctx: &egui::Context) {
-        self.clipboard_last_used = Some(std::time::Instant::now());
+        self.clipboard_last_used = Some(crate::types::current_unix_secs());
         let pub_pem = match self.clipboard_pubkey.as_str().map(str::to_owned) {
             Some(s) => s,
             None => {
@@ -463,7 +463,7 @@ impl PqfileApp {
     }
 
     fn do_clipboard_decrypt(&mut self) {
-        self.clipboard_last_used = Some(std::time::Instant::now());
+        self.clipboard_last_used = Some(crate::types::current_unix_secs());
         let priv_pem = match self.clipboard_privkey.as_str().map(str::to_owned) {
             Some(s) => s,
             None => {

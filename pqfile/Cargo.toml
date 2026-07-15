@@ -58,6 +58,13 @@ memsec = { version = "0.7", default-features = false, features = ["use_os"] }
 # unconditionally below as a dev-dependency so tests/kem_oracle.rs runs on
 # every `cargo test` regardless of feature flags; Cargo unions the two.
 libcrux-ml-kem = { version = "0.0.9", optional = true }
+# Time-lock encryption (`tlock` feature): IBE over the drand beacon (tlock) and
+# a synchronous (ureq-based, no tokio) drand HTTP client (drand_core). This is
+# the only network-capable dependency in the workspace; both are optional so a
+# default build never pulls in an HTTP stack, and native-only since ureq does
+# not target wasm32. See pqfile/src/tlock.rs.
+tlock = { version = "0.0.10", optional = true }
+drand_core = { version = "0.0.19", optional = true }
 
 # Platform-specific credential store backends (no sqlite/tantivy bloat).
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -79,6 +86,10 @@ timing-tests = []
 # proves the two agree byte-for-byte on FIPS 203. See docs/ROADMAP.md, "Optional
 # formally verified ML-KEM backend".
 kem-libcrux = ["dep:libcrux-ml-kem"]
+# Time-locked encryption (V11 format): encrypt --tlock-round is fully offline;
+# decrypt fetches a drand beacon signature over the network. See docs/ROADMAP.md,
+# "Time-locked encryption".
+tlock = ["dep:tlock", "dep:drand_core"]
 
 [dependencies.tokio]
 version = "1"

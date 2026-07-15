@@ -106,6 +106,19 @@ pub enum PqfHeaderInfo {
         /// Uncompressed plaintext size in bytes.
         original_size: u64,
     },
+    /// Time-locked format (v11, `tlock` feature): no key pair; the session key is
+    /// wrapped so it cannot be recovered before a drand beacon round fires.
+    #[cfg(feature = "tlock")]
+    TimeLocked {
+        /// drand chain identifier the `round` is relative to.
+        chain_hash: [u8; crate::format::TLOCK_CHAIN_HASH_LEN],
+        /// Target beacon round; the file cannot be decrypted before this round fires.
+        round: u64,
+        /// Per-file base nonce (12 bytes).
+        nonce: [u8; NONCE_LEN],
+        /// Uncompressed plaintext size in bytes.
+        original_size: u64,
+    },
 }
 
 /// Read and parse the header of a `.pqf` stream without decrypting the payload.
@@ -181,6 +194,16 @@ pub fn inspect_stream<R: Read>(reader: &mut R) -> Result<PqfHeaderInfo, PqfileEr
                 t_cost: h.t_cost,
                 p_cost: h.p_cost,
                 flags: h.flags,
+                nonce: h.nonce,
+                original_size: h.original_size,
+            })
+        }
+        #[cfg(feature = "tlock")]
+        crate::format::VERSION_TLOCK => {
+            let h = crate::format::PqfHeaderTlock::read_body(reader)?;
+            Ok(PqfHeaderInfo::TimeLocked {
+                chain_hash: h.chain_hash,
+                round: h.round,
                 nonce: h.nonce,
                 original_size: h.original_size,
             })

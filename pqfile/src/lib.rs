@@ -151,6 +151,10 @@ pub mod padding;
 #[cfg(feature = "async")]
 pub mod async_io;
 
+/// Time-locked encryption (V11 format) over the drand beacon (requires the `tlock` feature).
+#[cfg(feature = "tlock")]
+pub mod tlock;
+
 // ── Crate-root re-exports ──────────────────────────────────────────────────
 
 pub use error::PqfileError;

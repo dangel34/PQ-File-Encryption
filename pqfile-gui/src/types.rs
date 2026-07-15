@@ -216,8 +216,7 @@ pub(crate) fn read_pem_expiry(pem_str: &str) -> Option<String> {
 /// Positive = days remaining; 0 = expires today; negative = expired N days ago.
 /// Returns `None` if `date_str` is empty, malformed, or system time is unavailable.
 pub(crate) fn expiry_days_remaining(date_str: &str) -> Option<i64> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now_days = (SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() / 86400) as i64;
+    let now_days = (current_unix_secs() / 86400) as i64;
     let parts: Vec<i64> = date_str.split('-').filter_map(|p| p.parse().ok()).collect();
     if parts.len() != 3 {
         return None;
@@ -273,12 +272,27 @@ pub(crate) fn unix_secs_to_ymd(secs: u64) -> String {
 
 /// Current time as Unix seconds. Returns 0 if system time is unavailable
 /// (e.g. before the epoch), which is not a realistic case in practice.
+///
+/// `std::time::SystemTime::now()` unconditionally panics on `wasm32-unknown-unknown`
+/// ("time not implemented on this platform" - there is no OS clock without a
+/// JS shim), so wasm uses `js_sys::Date::now()` (milliseconds since the Unix
+/// epoch as an `f64`) instead. This is called from `PqfileApp::default()` to
+/// seed the keygen expiry date picker, i.e. before the first frame renders,
+/// so getting this wrong doesn't just misbehave - it panics during app
+/// startup and the loading screen never clears.
 pub(crate) fn current_unix_secs() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    #[cfg(target_arch = "wasm32")]
+    {
+        (js_sys::Date::now() / 1000.0) as u64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
 }
 
 /// Returns today's date for the expiry date picker widget.
@@ -379,9 +393,10 @@ pub(crate) enum DecryptMode {
 }
 
 /// Which second factor (if any) accompanies v10 passphrase mode, mirroring the
-/// CLI's `--keyfile` / `--fido2` mutual exclusivity. The `Fido2` variant exists
-/// on every target for code-sharing simplicity; only native builds with the
-/// `fido2` feature ever expose UI to select it.
+/// CLI's `--keyfile` / `--fido2` mutual exclusivity. The `Fido2`/`WebAuthnPrf`
+/// variants exist on every target for code-sharing simplicity; only native
+/// builds with the `fido2` feature (`Fido2`) or wasm32 builds (`WebAuthnPrf`)
+/// ever expose UI to select them.
 #[derive(PartialEq, Default, Clone, Copy)]
 pub(crate) enum SecondFactorMode {
     #[default]
@@ -394,6 +409,10 @@ pub(crate) enum SecondFactorMode {
         allow(dead_code)
     )]
     Fido2,
+    // Browser-native equivalent of `Fido2` (WebAuthn `prf` extension); only
+    // ever constructed by UI code gated to wasm32, mirroring `Fido2`'s shape.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    WebAuthnPrf,
 }
 
 /// Shared state for a background FIDO2 enrollment or secret-derivation
@@ -402,6 +421,14 @@ pub(crate) enum SecondFactorMode {
 /// the multi-file `EncryptJob`/`DecryptBatchJob` above.
 #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
 pub(crate) type Fido2Pending<T> = Arc<Mutex<Option<Result<T, String>>>>;
+
+/// Shared state for a background WebAuthn registration or PRF-derivation call
+/// (wasm32 only). Both are async browser prompts driven via
+/// `wasm_bindgen_futures::spawn_local`, polled from the UI thread once per
+/// frame - the wasm32 analogue of `Fido2Pending`, which instead blocks a
+/// native background thread.
+#[cfg(target_arch = "wasm32")]
+pub(crate) type WebAuthnPending<T> = Arc<Mutex<Option<Result<T, String>>>>;
 
 /// Which sub-section is active in the Sign tab.
 #[derive(PartialEq, Default, Clone, Copy)]

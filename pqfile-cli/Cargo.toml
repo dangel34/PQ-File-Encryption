@@ -33,6 +33,10 @@ getrandom      = { workspace = true, optional = true }
 # encrypt/decrypt/check). Off by default: pulls in hidapi (needs libudev-dev
 # on Linux) purely for this one opt-in feature.
 fido2 = ["dep:ctap-hid-fido2", "dep:getrandom"]
+# Time-locked encryption (`encrypt --tlock-round`, `tlock round`). Off by
+# default: pulls in an HTTP stack (via pqfile's own `tlock` feature) purely
+# for this one opt-in feature; no CLI-only dependency is needed.
+tlock = ["pqfile/tlock"]
 
 [dev-dependencies]
 tempfile     = { workspace = true }

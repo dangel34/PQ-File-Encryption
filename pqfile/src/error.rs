@@ -191,6 +191,49 @@ pub enum PqfileError {
         /// Bitmask of [`crate::cert::cert_use`] flags the certificate allows.
         allowed: u8,
     },
+
+    /// A tlock (`tlock` feature) file cannot be decrypted yet: the drand relay
+    /// reports the target round has not fired. Not an error condition per se;
+    /// retry after the round's expected time.
+    #[cfg(feature = "tlock")]
+    #[error("time-lock round {round} has not been reached yet; try again later")]
+    TlockRoundNotReached {
+        /// The target round recorded in the file header.
+        round: u64,
+    },
+
+    /// Fetching the drand beacon failed for a reason other than "not yet reached"
+    /// (network error, relay unreachable, chain hash mismatch, malformed response).
+    #[cfg(feature = "tlock")]
+    #[error("failed to fetch drand beacon: {0}")]
+    TlockBeaconFetchFailed(String),
+
+    /// The beacon signature was fetched successfully (the round has fired) but the
+    /// tlock IBE decryption or the subsequent AEAD authentication failed. Since this
+    /// can only happen once the round has fired, it indicates ciphertext corruption
+    /// or tampering, not an early decryption attempt.
+    #[cfg(feature = "tlock")]
+    #[error("time-lock decryption failed: ciphertext is corrupt or was tampered with")]
+    TlockDecryptionFailed,
+
+    /// The v10 file was encrypted with a WebAuthn `prf` extension second
+    /// factor but none was supplied (or a different second factor was
+    /// supplied instead). Browser-native equivalent of [`Fido2Required`].
+    ///
+    /// [`Fido2Required`]: PqfileError::Fido2Required
+    #[error(
+        "this file requires a WebAuthn passkey: it was encrypted with a browser PRF second \
+         factor; present the same enrolled credential used at encryption"
+    )]
+    WebauthnPrfRequired,
+
+    /// A WebAuthn `prf` output was supplied but the v10 file was not
+    /// encrypted with one (or was encrypted with a different second factor
+    /// instead). Mirrors [`Fido2NotRequired`].
+    ///
+    /// [`Fido2NotRequired`]: PqfileError::Fido2NotRequired
+    #[error("file was not encrypted with a WebAuthn PRF second factor; remove it and retry")]
+    WebauthnPrfNotRequired,
 }
 
 impl PqfileError {
@@ -233,6 +276,14 @@ impl PqfileError {
             PqfileError::Fido2NotRequired => 27,
             PqfileError::CertNotValid { .. } => 28,
             PqfileError::CertUseNotPermitted { .. } => 29,
+            #[cfg(feature = "tlock")]
+            PqfileError::TlockRoundNotReached { .. } => 30,
+            #[cfg(feature = "tlock")]
+            PqfileError::TlockBeaconFetchFailed(_) => 31,
+            #[cfg(feature = "tlock")]
+            PqfileError::TlockDecryptionFailed => 32,
+            PqfileError::WebauthnPrfRequired => 33,
+            PqfileError::WebauthnPrfNotRequired => 34,
         }
     }
 }

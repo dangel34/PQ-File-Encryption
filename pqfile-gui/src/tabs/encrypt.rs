@@ -42,6 +42,11 @@ enum EncryptTarget {
             allow(dead_code)
         )]
         fido2: Option<(std::path::PathBuf, Option<Zeroizing<String>>)>,
+        // Browser-native equivalent of `fido2`, resolved asynchronously (a
+        // passkey prompt) rather than on a native worker thread - see
+        // `handle_encrypt_all`'s wasm branch and `poll_encrypt_webauthn`.
+        #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+        webauthn: Option<crate::webauthn::Enrollment>,
     },
 }
 
@@ -62,8 +67,65 @@ impl PqfileApp {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = ctx;
-            self.run_encrypt_wasm(target);
+            match target {
+                EncryptTarget::Passphrase {
+                    passphrase,
+                    webauthn: Some(enrollment),
+                    ..
+                } => {
+                    // WebAuthn PRF derivation is an async browser prompt, so
+                    // it can't resolve synchronously the way every other
+                    // second factor does. Kick it off and stop here - the
+                    // queue starts once poll_encrypt_webauthn sees the result
+                    // next frame (or a few frames later, once the user
+                    // completes the passkey ceremony).
+                    self.encrypt_webauthn_resume = Some(passphrase);
+                    let pending: crate::types::WebAuthnPending<Zeroizing<[u8; 32]>> =
+                        std::sync::Arc::new(std::sync::Mutex::new(None));
+                    self.encrypt_webauthn_derive_pending = Some(std::sync::Arc::clone(&pending));
+                    let ctx = ctx.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let result = crate::webauthn::derive_secret(&enrollment).await;
+                        *pending.lock().unwrap() = Some(result);
+                        ctx.request_repaint();
+                    });
+                }
+                other => match resolve_encrypt_target(other) {
+                    Ok(resolved) => self.run_encrypt_wasm(resolved),
+                    Err(msg) => self.encrypt_batch_summary = Some(OpStatus::Err(msg)),
+                },
+            }
+        }
+    }
+
+    /// Called once per frame: drains an outstanding WebAuthn PRF derivation
+    /// kicked off by `handle_encrypt_all` and, once it resolves, starts the
+    /// encrypt queue that was deferred waiting for it.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn poll_encrypt_webauthn(&mut self) {
+        let Some(pending) = &self.encrypt_webauthn_derive_pending else {
+            return;
+        };
+        let Some(result) = pending.lock().unwrap().take() else {
+            return;
+        };
+        self.encrypt_webauthn_derive_pending = None;
+        let passphrase = self.encrypt_webauthn_resume.take();
+        match result {
+            Ok(secret) => {
+                let Some(passphrase) = passphrase else {
+                    self.encrypt_batch_summary =
+                        Some(OpStatus::Err("Encryption state was lost.".to_owned()));
+                    return;
+                };
+                self.run_encrypt_wasm(ResolvedEncryptTarget::Passphrase {
+                    passphrase,
+                    keyfile: None,
+                    fido2_secret: None,
+                    webauthn_secret: Some(secret),
+                });
+            }
+            Err(msg) => self.encrypt_batch_summary = Some(OpStatus::Err(msg)),
         }
     }
 
@@ -91,13 +153,13 @@ impl PqfileApp {
                 if *self.encrypt_passphrase != *self.encrypt_passphrase_confirm {
                     return Err("Passphrases do not match.".to_owned());
                 }
-                let (keyfile, fido2) = match self.encrypt_second_factor {
-                    SecondFactorMode::None => (None, None),
+                let (keyfile, fido2, webauthn) = match self.encrypt_second_factor {
+                    SecondFactorMode::None => (None, None, None),
                     SecondFactorMode::Keyfile => {
                         let Some(data) = self.encrypt_keyfile.data.clone() else {
                             return Err("Choose a keyfile.".to_owned());
                         };
-                        (Some(data), None)
+                        (Some(data), None, None)
                     }
                     SecondFactorMode::Fido2 => {
                         let Some(path) = self.encrypt_fido2_enrollment.path.clone() else {
@@ -111,13 +173,24 @@ impl PqfileApp {
                         };
                         #[cfg(not(all(not(target_arch = "wasm32"), feature = "fido2")))]
                         let pin: Option<Zeroizing<String>> = None;
-                        (None, Some((path, pin)))
+                        (None, Some((path, pin)), None)
+                    }
+                    SecondFactorMode::WebAuthnPrf => {
+                        let Some(data) = self.encrypt_webauthn_enrollment.data.clone() else {
+                            return Err("Choose a WebAuthn enrollment file.".to_owned());
+                        };
+                        let text = std::str::from_utf8(&data).map_err(|_| {
+                            "Could not read the WebAuthn enrollment file.".to_owned()
+                        })?;
+                        let enrollment = crate::webauthn::Enrollment::parse(text)?;
+                        (None, None, Some(enrollment))
                     }
                 };
                 Ok(EncryptTarget::Passphrase {
                     passphrase: self.encrypt_passphrase.clone(),
                     keyfile,
                     fido2,
+                    webauthn,
                 })
             }
         }
@@ -226,19 +299,19 @@ impl PqfileApp {
             .expect("failed to spawn encrypt worker thread");
     }
 
-    // Enqueue files for frame-by-frame processing on WASM.
+    // Enqueue files for frame-by-frame processing on WASM. `target` is
+    // already resolved: either built synchronously (None/Keyfile second
+    // factor, or no passphrase mode at all) or resumed after an async
+    // WebAuthn PRF derivation completed (see `poll_encrypt_webauthn`).
     #[cfg(target_arch = "wasm32")]
-    fn run_encrypt_wasm(&mut self, target: EncryptTarget) {
+    fn run_encrypt_wasm(&mut self, target: ResolvedEncryptTarget) {
         let queue: Vec<(usize, String, Vec<u8>)> = self
             .encrypt_files
             .iter()
             .enumerate()
             .map(|(i, e)| (i, e.name.clone(), e.data.clone()))
             .collect();
-        // WASM has no FIDO2 backend at all; resolve_encrypt_target only ever
-        // does real work for the (unreachable here) Fido2 variant, so this
-        // can't fail on this target.
-        self.encrypt_wasm_target = resolve_encrypt_target(target).ok();
+        self.encrypt_wasm_target = Some(target);
         self.encrypt_wasm_total = queue.len();
         self.encrypt_wasm_done = 0;
         self.encrypt_wasm_queue = queue;
@@ -326,7 +399,8 @@ impl PqfileApp {
         #[cfg(not(target_arch = "wasm32"))]
         let job_running = self.encrypt_job.is_some();
         #[cfg(target_arch = "wasm32")]
-        let job_running = !self.encrypt_wasm_queue.is_empty();
+        let job_running =
+            !self.encrypt_wasm_queue.is_empty() || self.encrypt_webauthn_derive_pending.is_some();
 
         crate::widgets::seg_tabs(
             ui,
@@ -478,6 +552,27 @@ impl PqfileApp {
                         SecondFactorMode::Fido2,
                         "FIDO2 token",
                     );
+                    // Disabled for now: real-world browser/OS support for the
+                    // WebAuthn PRF extension is still too inconsistent to be
+                    // usable (verified firsthand - Windows Hello via Edge
+                    // registers but doesn't return a PRF output, Firefox
+                    // fails registration outright, Bitwarden's passkey
+                    // provider doesn't implement PRF at all). The
+                    // implementation itself is complete and spec-correct;
+                    // flip this back on once the ecosystem catches up.
+                    #[cfg(target_arch = "wasm32")]
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.selectable_value(
+                            &mut self.encrypt_second_factor,
+                            SecondFactorMode::WebAuthnPrf,
+                            "Passkey",
+                        )
+                    })
+                    .inner
+                    .on_hover_text(
+                        "Under implementation: browser/OS support for passkey-based \
+                         encryption (WebAuthn PRF) is still too inconsistent to enable yet.",
+                    );
                 });
                 match self.encrypt_second_factor {
                     SecondFactorMode::None => {}
@@ -503,6 +598,10 @@ impl PqfileApp {
                     SecondFactorMode::Fido2 => {
                         #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
                         self.show_encrypt_fido2_second_factor(ui, dark);
+                    }
+                    SecondFactorMode::WebAuthnPrf => {
+                        #[cfg(target_arch = "wasm32")]
+                        self.show_encrypt_webauthn_second_factor(ui, dark);
                     }
                 }
             });
@@ -1000,7 +1099,14 @@ impl PqfileApp {
 
     fn show_encrypt_button(&mut self, ui: &mut egui::Ui, dark: bool, job_running: bool) {
         let n = self.encrypt_files.len();
-        let ready = !self.encrypt_recipients.is_empty() && n > 0 && !job_running;
+        // Mirrors build_encrypt_target's own per-mode validation: Passphrase
+        // mode has no recipient list at all, so gating on encrypt_recipients
+        // unconditionally left the button permanently disabled in that mode.
+        let target_ready = match self.encrypt_mode {
+            EncryptMode::PublicKey => !self.encrypt_recipients.is_empty(),
+            EncryptMode::Passphrase => !self.encrypt_passphrase.is_empty(),
+        };
+        let ready = target_ready && n > 0 && !job_running;
         let btn_label = if n == 0 {
             "🔒  Encrypt All".to_owned()
         } else {
@@ -1031,11 +1137,15 @@ impl PqfileApp {
         });
         if !ready && !job_running {
             ui.add_space(4.0);
-            ui.label(
-                RichText::new("Add at least one recipient key and one file to continue.")
-                    .size(12.0)
-                    .color(c_overlay(dark)),
-            );
+            let hint = match self.encrypt_mode {
+                EncryptMode::PublicKey => {
+                    "Add at least one recipient key and one file to continue."
+                }
+                EncryptMode::Passphrase => {
+                    "Enter a passphrase and add at least one file to continue."
+                }
+            };
+            ui.label(RichText::new(hint).size(12.0).color(c_overlay(dark)));
         }
         // Output path preview for first file (native only).
         #[cfg(not(target_arch = "wasm32"))]
@@ -1151,12 +1261,19 @@ pub(crate) enum ResolvedEncryptTarget {
         passphrase: Zeroizing<String>,
         keyfile: Option<Vec<u8>>,
         fido2_secret: Option<Zeroizing<[u8; 32]>>,
+        webauthn_secret: Option<Zeroizing<[u8; 32]>>,
     },
 }
 
 /// Resolves an [`EncryptTarget`] into a [`ResolvedEncryptTarget`], deriving
 /// the FIDO2 secret (a blocking hardware touch) at most once regardless of
 /// how many files the batch contains.
+///
+/// Never called with `webauthn: Some(_)`: deriving a WebAuthn PRF secret is
+/// an async browser call, so `handle_encrypt_all`'s wasm branch intercepts
+/// that case before this function runs (see `poll_encrypt_webauthn`), the
+/// same way this function is never called at all with a `Fido2` variant on
+/// wasm (no backend exists there to call `derive_fido2_secret` against).
 fn resolve_encrypt_target(target: EncryptTarget) -> Result<ResolvedEncryptTarget, String> {
     match target {
         EncryptTarget::PublicKeys(pems) => Ok(ResolvedEncryptTarget::PublicKeys(pems)),
@@ -1164,7 +1281,12 @@ fn resolve_encrypt_target(target: EncryptTarget) -> Result<ResolvedEncryptTarget
             passphrase,
             keyfile,
             fido2,
+            webauthn,
         } => {
+            debug_assert!(
+                webauthn.is_none(),
+                "webauthn second factor must be resolved asynchronously before resolve_encrypt_target"
+            );
             let fido2_secret = match fido2 {
                 None => None,
                 Some((path, pin)) => Some(derive_fido2_secret(
@@ -1176,6 +1298,7 @@ fn resolve_encrypt_target(target: EncryptTarget) -> Result<ResolvedEncryptTarget
                 passphrase,
                 keyfile,
                 fido2_secret,
+                webauthn_secret: None,
             })
         }
     }
@@ -1225,6 +1348,7 @@ fn encrypt_entry(
             passphrase,
             keyfile,
             fido2_secret,
+            webauthn_secret,
         } => {
             let mut reader = padded_reader(data, original_size, pad);
             let mut out = Vec::new();
@@ -1240,6 +1364,14 @@ fn encrypt_entry(
                 encrypt::encrypt_stream_passphrase_fido2(
                     passphrase,
                     hs,
+                    original_size,
+                    &mut *reader,
+                    &mut out,
+                )
+            } else if let Some(p) = webauthn_secret {
+                encrypt::encrypt_stream_passphrase_webauthn_prf(
+                    passphrase,
+                    p,
                     original_size,
                     &mut *reader,
                     &mut out,

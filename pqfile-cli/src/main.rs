@@ -183,6 +183,18 @@ enum Command {
         pad: bool,
         #[arg(long, default_value_t = false)]
         stealth: bool,
+        /// Time-lock this file to a drand beacon round instead of a recipient key
+        /// or passphrase: nobody (including the sender) can decrypt it before
+        /// this round's threshold signature is published. Get a round number
+        /// from `pqfile tlock round`. Uses the League of Entropy mainnet
+        /// `quicknet` chain. Mutually exclusive with -r and --passphrase.
+        #[cfg(feature = "tlock")]
+        #[arg(
+            long,
+            value_name = "ROUND",
+            conflicts_with_all = ["recipients", "passphrase_only"]
+        )]
+        tlock_round: Option<u64>,
     },
     /// Decrypt a file produced by `encrypt`.
     Decrypt {
@@ -227,6 +239,17 @@ enum Command {
         fido2: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         stealth: bool,
+        /// Decrypt a file written with `encrypt --tlock-round`. Fetches the
+        /// target round's beacon signature over the network. No -k or
+        /// --passphrase needed; mutually exclusive with both.
+        #[cfg(feature = "tlock")]
+        #[arg(long, default_value_t = false, conflicts_with_all = ["key", "passphrase_v10", "stealth"])]
+        tlock: bool,
+        /// drand HTTP relay to fetch the beacon from (default: the chain's own
+        /// default relay, resolved from the file header).
+        #[cfg(feature = "tlock")]
+        #[arg(long, value_name = "URL", requires = "tlock")]
+        tlock_url: Option<String>,
     },
     /// Verify that a .pqf file authenticates end-to-end without writing any plaintext.
     ///
@@ -268,6 +291,17 @@ enum Command {
         /// exclusive with --passphrase.
         #[arg(long, default_value_t = false, conflicts_with = "passphrase_v10")]
         stealth: bool,
+        /// Check a file written with `encrypt --tlock-round`. Fetches the
+        /// target round's beacon signature over the network. No -k or
+        /// --passphrase needed; mutually exclusive with both.
+        #[cfg(feature = "tlock")]
+        #[arg(long, default_value_t = false, conflicts_with_all = ["key", "passphrase_v10", "stealth"])]
+        tlock: bool,
+        /// drand HTTP relay to fetch the beacon from (default: the chain's own
+        /// default relay, resolved from the file header).
+        #[cfg(feature = "tlock")]
+        #[arg(long, value_name = "URL", requires = "tlock")]
+        tlock_url: Option<String>,
     },
     /// Print a .pqf file's header fields (version, KEM variant, recipient count)
     /// without decrypting the payload.
@@ -297,6 +331,12 @@ enum Command {
         /// `--fido2` must prompt for one too when deriving the secret later.
         #[arg(long, default_value_t = false)]
         pin: bool,
+    },
+    /// Time-locked encryption helpers (drand beacon).
+    #[cfg(feature = "tlock")]
+    Tlock {
+        #[command(subcommand)]
+        action: TlockCommand,
     },
     /// Print a shell completion script to stdout.
     ///
@@ -685,6 +725,22 @@ enum Command {
     },
 }
 
+#[cfg(feature = "tlock")]
+#[derive(Subcommand)]
+enum TlockCommand {
+    /// Resolve a human time expression to a drand round number, for use with
+    /// `encrypt --tlock-round`. Fetches the chain's public parameters over the
+    /// network (never the round's own beacon, which may not exist yet).
+    Round {
+        /// An absolute round number ("123"), a relative duration ("24h", "30m",
+        /// "90s", "7d"), or an RFC 3339 datetime.
+        when: String,
+        /// drand HTTP relay to query (default: the quicknet chain's own relay).
+        #[arg(long, value_name = "URL")]
+        relay: Option<String>,
+    },
+}
+
 const PARALLEL_BATCH_SIZE: usize = 8;
 
 /// Wraps a plaintext reader with Padmé length padding when requested,
@@ -1063,6 +1119,7 @@ fn interactive_encrypt() -> Result<(), PqfileError> {
         recipients,
         None,
         passphrase_only,
+        None,
         false,
         input,
         Some(output),
@@ -1124,6 +1181,8 @@ fn interactive_decrypt() -> Result<(), PqfileError> {
         false,
         force,
         false,
+        false,
+        None,
         false,
     )
 }
@@ -1209,10 +1268,16 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             fido2,
             pad,
             stealth,
+            #[cfg(feature = "tlock")]
+            tlock_round,
         } => run_encrypt(
             recipients,
             ca_key,
             passphrase_only,
+            #[cfg(feature = "tlock")]
+            tlock_round,
+            #[cfg(not(feature = "tlock"))]
+            None,
             no_config,
             input,
             output,
@@ -1252,6 +1317,10 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             #[cfg(feature = "fido2")]
             fido2,
             stealth,
+            #[cfg(feature = "tlock")]
+            tlock,
+            #[cfg(feature = "tlock")]
+            tlock_url,
         } => run_decrypt(
             key,
             passphrase_v10,
@@ -1268,6 +1337,14 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             parallel,
             force,
             stealth,
+            #[cfg(feature = "tlock")]
+            tlock,
+            #[cfg(not(feature = "tlock"))]
+            false,
+            #[cfg(feature = "tlock")]
+            tlock_url,
+            #[cfg(not(feature = "tlock"))]
+            None,
             json,
         ),
         Command::Check {
@@ -1280,6 +1357,10 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             #[cfg(feature = "fido2")]
             fido2,
             stealth,
+            #[cfg(feature = "tlock")]
+            tlock,
+            #[cfg(feature = "tlock")]
+            tlock_url,
         } => run_check(
             key,
             passphrase_v10,
@@ -1293,11 +1374,23 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             max_kdf_time,
             input,
             stealth,
+            #[cfg(feature = "tlock")]
+            tlock,
+            #[cfg(not(feature = "tlock"))]
+            false,
+            #[cfg(feature = "tlock")]
+            tlock_url,
+            #[cfg(not(feature = "tlock"))]
+            None,
             json,
         ),
         Command::Inspect { input } => inspect(input.as_path(), json),
         #[cfg(feature = "fido2")]
         Command::Fido2Enroll { output, force, pin } => run_fido2_enroll(output, force, pin, json),
+        #[cfg(feature = "tlock")]
+        Command::Tlock { action } => match action {
+            TlockCommand::Round { when, relay } => run_tlock_round(&when, relay, json),
+        },
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "pqfile", &mut io::stdout());
             Ok(())
@@ -1577,12 +1670,27 @@ fn run_encrypt(
     mut recipients: Vec<String>,
     ca_key: Option<PathBuf>,
     passphrase_only: bool,
+    tlock_round: Option<u64>,
     no_config: bool,
     input: String,
     output: Option<String>,
     recursive: bool,
     opts: EncryptOpts,
 ) -> Result<(), PqfileError> {
+    if let Some(round) = tlock_round {
+        if recursive {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--tlock-round and --recursive cannot be combined",
+            )));
+        }
+        if opts.stealth {
+            return Err(PqfileError::Io(std::io::Error::other(
+                "--stealth is not supported with --tlock-round",
+            )));
+        }
+        return run_encrypt_tlock(round, &input, output.as_deref(), opts);
+    }
     if passphrase_only {
         if recursive {
             return Err(PqfileError::Io(std::io::Error::new(
@@ -1827,6 +1935,37 @@ fn run_encrypt_passphrase(
 
     emit_json_ok(opts.json, to_stdout, &out_path)?;
     Ok(())
+}
+
+/// Always present regardless of the `tlock` feature so `run_encrypt` doesn't
+/// need its own `#[cfg]` branch: without the feature, `tlock_round` is always
+/// `None` (the CLI flag doesn't exist to set it), so this is provably
+/// unreachable in that build, but still has to type-check. Mirrors
+/// `derive_fido2_secret`'s pattern.
+fn run_encrypt_tlock(
+    #[cfg_attr(not(feature = "tlock"), allow(unused_variables))] round: u64,
+    input: &str,
+    output: Option<&str>,
+    opts: EncryptOpts,
+) -> Result<(), PqfileError> {
+    #[cfg(feature = "tlock")]
+    {
+        let (original_size, to_stdout, out_path) =
+            resolve_encrypt_output(input, output, opts.force)?;
+        let mut raw_reader = open_reader(input)?;
+        let mut reader = MaybePadded::new(&mut *raw_reader, opts.pad, original_size)?;
+        let mut writer = CliOutput::new(to_stdout, &out_path)?;
+        pqfile::tlock::encrypt_stream_tlock(round, None, original_size, &mut reader, &mut writer)?;
+        writer.commit()?;
+
+        emit_json_ok(opts.json, to_stdout, &out_path)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "tlock"))]
+    {
+        let _ = (input, output, opts);
+        unreachable!("tlock feature disabled; --tlock-round CLI flag does not exist without it")
+    }
 }
 
 fn run_encrypt_single(
@@ -2141,6 +2280,8 @@ fn run_decrypt(
     parallel: bool,
     force: bool,
     stealth: bool,
+    tlock: bool,
+    tlock_url: Option<String>,
     json: bool,
 ) -> Result<(), PqfileError> {
     let out = output.as_deref().unwrap_or("");
@@ -2155,6 +2296,17 @@ fn run_decrypt(
 
     ensure_overwrite_allowed(&out_path, to_stdout, force)?;
     let mut reader = open_reader(&input)?;
+
+    if tlock {
+        return run_decrypt_tlock(
+            tlock_url.as_deref(),
+            &mut *reader,
+            &input,
+            to_stdout,
+            &out_path,
+            json,
+        );
+    }
 
     if stealth {
         let key_path = resolve_key_path(key, no_config)?;
@@ -2236,6 +2388,45 @@ fn run_decrypt(
     Ok(())
 }
 
+/// Always present regardless of the `tlock` feature so `run_decrypt`/`run_check`
+/// don't need their own `#[cfg]` branch: without the feature, `tlock` is
+/// always `false` (the CLI flag doesn't exist to set it), so this is provably
+/// unreachable in that build, but still has to type-check. Mirrors
+/// `derive_fido2_secret`'s pattern.
+#[allow(clippy::too_many_arguments)]
+fn run_decrypt_tlock(
+    #[cfg_attr(not(feature = "tlock"), allow(unused_variables))] relay_url: Option<&str>,
+    #[cfg_attr(not(feature = "tlock"), allow(unused_variables))] reader: &mut dyn io::Read,
+    input: &str,
+    to_stdout: bool,
+    out_path: &Path,
+    json: bool,
+) -> Result<(), PqfileError> {
+    #[cfg(feature = "tlock")]
+    {
+        if !json {
+            eprintln!(
+                "Fetching drand beacon signature{}...",
+                relay_url.map(|u| format!(" from {u}")).unwrap_or_default()
+            );
+        }
+        let mut writer = pqfile::padding::TruncatingWriter::new(
+            CliOutput::new(to_stdout, out_path)?,
+            peek_original_size(input),
+        );
+        pqfile::tlock::decrypt_stream_tlock(relay_url, reader, &mut writer)?;
+        let mut writer = writer.into_inner();
+        writer.commit()?;
+        emit_json_ok(json, to_stdout, out_path)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "tlock"))]
+    {
+        let _ = (input, to_stdout, out_path, json);
+        unreachable!("tlock feature disabled; --tlock CLI flag does not exist without it")
+    }
+}
+
 /// Derives the `--fido2` second-factor secret, uniformly regardless of
 /// whether this build has the `fido2` feature. `opts.fido2` /
 /// `run_decrypt`'s and `run_check`'s `fido2` parameter are always `None`
@@ -2296,9 +2487,15 @@ fn run_check(
     max_kdf_time: u32,
     input: String,
     stealth: bool,
+    tlock: bool,
+    tlock_url: Option<String>,
     json: bool,
 ) -> Result<(), PqfileError> {
     let mut reader = open_reader(&input)?;
+
+    if tlock {
+        return run_check_tlock(tlock_url.as_deref(), &mut *reader, &input, json);
+    }
 
     if stealth {
         let key_path = resolve_key_path(key, no_config)?;
@@ -2392,6 +2589,67 @@ fn run_check(
     Ok(())
 }
 
+/// Always present regardless of the `tlock` feature; mirrors
+/// `run_decrypt_tlock`/`derive_fido2_secret`'s uniform-call-site pattern.
+fn run_check_tlock(
+    #[cfg_attr(not(feature = "tlock"), allow(unused_variables))] relay_url: Option<&str>,
+    #[cfg_attr(not(feature = "tlock"), allow(unused_variables))] reader: &mut dyn io::Read,
+    input: &str,
+    json: bool,
+) -> Result<(), PqfileError> {
+    #[cfg(feature = "tlock")]
+    {
+        if !json {
+            eprintln!(
+                "Fetching drand beacon signature{}...",
+                relay_url.map(|u| format!(" from {u}")).unwrap_or_default()
+            );
+        }
+        let mut sink =
+            pqfile::padding::TruncatingWriter::new(CountingSink(0), peek_original_size(input));
+        pqfile::tlock::decrypt_stream_tlock(relay_url, reader, &mut sink)?;
+        let count = sink.into_inner().0;
+        if json {
+            println!(
+                "{}",
+                json_object(&[
+                    kv_str("status", "ok"),
+                    kv_str("input", input),
+                    kv_raw("plaintext_bytes", &count.to_string()),
+                ])
+            );
+        } else {
+            println!(
+                "OK: {input} authenticated ({count} plaintext byte{})",
+                if count == 1 { "" } else { "s" }
+            );
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "tlock"))]
+    {
+        let _ = (input, json);
+        unreachable!("tlock feature disabled; --tlock CLI flag does not exist without it")
+    }
+}
+
+/// `pqfile tlock round <WHEN>`: resolves a human time expression to a drand
+/// round number for `encrypt --tlock-round`. Fetches only the chain's public
+/// parameters (genesis time, period), never a round's own beacon.
+#[cfg(feature = "tlock")]
+fn run_tlock_round(when: &str, relay: Option<String>, json: bool) -> Result<(), PqfileError> {
+    let round = pqfile::tlock::round_for_target_time(when, None, relay.as_deref())?;
+    if json {
+        println!(
+            "{}",
+            json_object(&[kv_str("status", "ok"), kv_raw("round", &round.to_string())])
+        );
+    } else {
+        println!("{round}");
+    }
+    Ok(())
+}
+
 #[cfg(feature = "fido2")]
 fn run_fido2_enroll(
     output: PathBuf,
@@ -2456,6 +2714,8 @@ fn peek_original_size(input: &str) -> u64 {
         | Ok(PqfHeaderInfo::AnonMulti { original_size, .. })
         | Ok(PqfHeaderInfo::AnonMultiV8 { original_size, .. })
         | Ok(PqfHeaderInfo::Passphrase { original_size, .. }) => original_size,
+        #[cfg(feature = "tlock")]
+        Ok(PqfHeaderInfo::TimeLocked { original_size, .. }) => original_size,
         _ => 0,
     }
 }
@@ -2829,6 +3089,40 @@ fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                     "Keyfile required:   {}",
                     if keyfile_required { "yes" } else { "no" }
                 );
+                println!("Nonce:              {nonce_hex}");
+                println!("Original file size: {original_size} bytes");
+            }
+        }
+        #[cfg(feature = "tlock")]
+        PqfHeaderInfo::TimeLocked {
+            chain_hash,
+            round,
+            nonce,
+            original_size,
+        } => {
+            let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+            let chain_hex: String = chain_hash.iter().map(|b| format!("{b:02x}")).collect();
+            if json {
+                println!(
+                    "{}",
+                    json_object(&[
+                        kv_str("status", "ok"),
+                        kv_str("magic", "PQFL"),
+                        kv_str("version", &format!("{raw_version:#04x}")),
+                        kv_raw("header_authenticated", auth_json),
+                        kv_str("mode", "tlock"),
+                        kv_str("chain_hash", &chain_hex),
+                        kv_raw("round", &round.to_string()),
+                        kv_str("nonce", &nonce_hex),
+                        kv_raw("original_size", &original_size.to_string()),
+                    ])
+                );
+            } else {
+                println!("Magic:              PQFL");
+                println!("Version:            {raw_version:#04x} (time-locked)");
+                println!("Auth. header:       {auth_str}");
+                println!("Chain hash:         {chain_hex}");
+                println!("Round:              {round}");
                 println!("Nonce:              {nonce_hex}");
                 println!("Original file size: {original_size} bytes");
             }
@@ -3871,6 +4165,16 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
         } => {
             let v = format!("{version:#04x}");
             let k = format!("passphrase (m={m_kib} KiB, t={t_cost})");
+            (v, k, *original_size)
+        }
+        #[cfg(feature = "tlock")]
+        PqfHeaderInfo::TimeLocked {
+            round,
+            original_size,
+            ..
+        } => {
+            let v = format!("{:#04x}", content.get(4).copied().unwrap_or(0));
+            let k = format!("time-locked (round {round})");
             (v, k, *original_size)
         }
         _ => ("unknown".to_string(), "unknown".to_string(), 0u64),

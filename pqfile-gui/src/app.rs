@@ -78,6 +78,26 @@ pub struct PqfileApp {
     pub(crate) fido2_enroll_status: OpStatus,
     #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
     pub(crate) fido2_enroll_pending: Option<crate::types::Fido2Pending<()>>,
+    /// WebAuthn passkey enrollment file (wasm32 only feature, but the field
+    /// itself is unconditional for code-sharing, mirroring
+    /// `encrypt_fido2_enrollment`'s shape).
+    pub(crate) encrypt_webauthn_enrollment: FileInput,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) webauthn_enroll_status: OpStatus,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) webauthn_enroll_pending:
+        Option<crate::types::WebAuthnPending<crate::webauthn::Enrollment>>,
+    /// Outstanding async PRF derivation for an in-progress encrypt batch; its
+    /// presence (independent of `encrypt_wasm_queue`) is what puts the tab in
+    /// the "waiting for passkey" state before the queue starts.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) encrypt_webauthn_derive_pending:
+        Option<crate::types::WebAuthnPending<Zeroizing<[u8; 32]>>>,
+    /// Passphrase to resume encrypting with once `encrypt_webauthn_derive_pending`
+    /// resolves; `EncryptTarget::Passphrase` was already destructured by the
+    /// time the async call was kicked off, so this isn't otherwise recoverable.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) encrypt_webauthn_resume: Option<Zeroizing<String>>,
     /// Pad recipient count to the next power of two with random dummy slots (v9 format).
     pub(crate) encrypt_pad_recipients: bool,
     /// Pad plaintext length to a Padmé bucket before encrypting (hides exact file size).
@@ -117,6 +137,14 @@ pub struct PqfileApp {
     pub(crate) decrypt_fido2_enrollment: FileInput,
     #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
     pub(crate) decrypt_fido2_pin: Zeroizing<String>,
+    pub(crate) decrypt_webauthn_enrollment: FileInput,
+    /// Outstanding async PRF derivation for an in-progress decrypt batch, the
+    /// decrypt-side analogue of `encrypt_webauthn_derive_pending`. No resume
+    /// field needed: `decrypt_v10_passphrase`/`decrypt_stealth` are untouched
+    /// in `self` and just re-read once this resolves.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) decrypt_webauthn_derive_pending:
+        Option<crate::types::WebAuthnPending<Zeroizing<[u8; 32]>>>,
     /// File(s) were written with Encrypt tab's Stealth mode (no magic bytes to auto-detect).
     pub(crate) decrypt_stealth: bool,
     pub(crate) decrypt_status: OpStatus,
@@ -290,8 +318,12 @@ pub struct PqfileApp {
     pub(crate) clipboard_passphrase_visible: bool,
     pub(crate) clipboard_enc_status: OpStatus,
     pub(crate) clipboard_dec_status: OpStatus,
-    /// Timestamp of the last clipboard encrypt/decrypt operation; used for auto-clear timer.
-    pub(crate) clipboard_last_used: Option<std::time::Instant>,
+    /// Unix-seconds timestamp of the last clipboard encrypt/decrypt operation;
+    /// used for the auto-clear timer. Wall-clock (`current_unix_secs`) rather
+    /// than `std::time::Instant`: `Instant::now()` panics on
+    /// `wasm32-unknown-unknown` the same way `SystemTime::now()` does, and a
+    /// short client-side auto-clear timer has no need for a monotonic clock.
+    pub(crate) clipboard_last_used: Option<u64>,
 }
 
 impl Default for PqfileApp {
@@ -331,6 +363,15 @@ impl Default for PqfileApp {
             fido2_enroll_status: OpStatus::None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
             fido2_enroll_pending: None,
+            encrypt_webauthn_enrollment: FileInput::default(),
+            #[cfg(target_arch = "wasm32")]
+            webauthn_enroll_status: OpStatus::None,
+            #[cfg(target_arch = "wasm32")]
+            webauthn_enroll_pending: None,
+            #[cfg(target_arch = "wasm32")]
+            encrypt_webauthn_derive_pending: None,
+            #[cfg(target_arch = "wasm32")]
+            encrypt_webauthn_resume: None,
             encrypt_pad_recipients: false,
             encrypt_pad: false,
             encrypt_stealth: false,
@@ -351,6 +392,9 @@ impl Default for PqfileApp {
             decrypt_fido2_enrollment: FileInput::default(),
             #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
             decrypt_fido2_pin: Zeroizing::new(String::new()),
+            decrypt_webauthn_enrollment: FileInput::default(),
+            #[cfg(target_arch = "wasm32")]
+            decrypt_webauthn_derive_pending: None,
             decrypt_stealth: false,
             decrypt_status: OpStatus::None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -608,7 +652,7 @@ impl eframe::App for PqfileApp {
         // Clipboard auto-clear timer.
         if self.settings.clipboard_auto_clear {
             if let Some(t) = self.clipboard_last_used {
-                let elapsed = t.elapsed().as_secs();
+                let elapsed = crate::types::current_unix_secs().saturating_sub(t);
                 let timeout = self.settings.clipboard_clear_secs as u64;
                 if elapsed >= timeout {
                     self.clipboard_plain.zeroize();
@@ -1153,9 +1197,11 @@ impl PqfileApp {
         self.encrypt_ca_key.poll();
         self.encrypt_keyfile.poll();
         self.encrypt_fido2_enrollment.poll();
+        self.encrypt_webauthn_enrollment.poll();
         self.decrypt_privkey.poll();
         self.decrypt_keyfile.poll();
         self.decrypt_fido2_enrollment.poll();
+        self.decrypt_webauthn_enrollment.poll();
         self.doctor_file.poll();
 
         // Sign tab
@@ -1214,6 +1260,13 @@ impl PqfileApp {
 
         #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
         self.poll_fido2_jobs();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.poll_webauthn_enroll_job();
+            self.poll_encrypt_webauthn();
+            self.poll_decrypt_webauthn();
+        }
 
         // Clipboard tool file slots
         self.clipboard_pubkey.poll();

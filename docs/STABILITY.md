@@ -30,8 +30,8 @@ surface.
 
 | Module | What is stable |
 |--------|----------------|
-| `pqfile::encrypt` | `encrypt_bytes`, `encrypt_stream`, `encrypt_stream_multi`, `encrypt_stream_multi_anon`, `encrypt_stream_multi_anon_padded`, `encrypt_stream_compressed`, `encrypt_stream_parallel`, `encrypt_stream_pipelined`, `encrypt_stream_passphrase`, `encrypt_stream_passphrase_with_params`, `encrypt_stream_passphrase_keyfile`, `encrypt_stream_passphrase_keyfile_with_params`, `encrypt_stream_passphrase_fido2`, `encrypt_stream_passphrase_fido2_with_params`, `encrypt_stream_stealth`, `encrypt_mmap` (native only) |
-| `pqfile::decrypt` | `decrypt_bytes`, `decrypt_stream`, `decrypt_stream_parallel`, `decrypt_stream_passphrase`, `decrypt_stream_passphrase_with_limits`, `decrypt_stream_passphrase_keyfile`, `decrypt_stream_passphrase_keyfile_with_limits`, `decrypt_stream_passphrase_fido2`, `decrypt_stream_passphrase_fido2_with_limits`, `decrypt_stream_stealth` |
+| `pqfile::encrypt` | `encrypt_bytes`, `encrypt_stream`, `encrypt_stream_multi`, `encrypt_stream_multi_anon`, `encrypt_stream_multi_anon_padded`, `encrypt_stream_compressed`, `encrypt_stream_parallel`, `encrypt_stream_pipelined`, `encrypt_stream_passphrase`, `encrypt_stream_passphrase_with_params`, `encrypt_stream_passphrase_keyfile`, `encrypt_stream_passphrase_keyfile_with_params`, `encrypt_stream_passphrase_fido2`, `encrypt_stream_passphrase_fido2_with_params`, `encrypt_stream_passphrase_webauthn_prf`, `encrypt_stream_passphrase_webauthn_prf_with_params`, `encrypt_stream_stealth`, `encrypt_mmap` (native only) |
+| `pqfile::decrypt` | `decrypt_bytes`, `decrypt_stream`, `decrypt_stream_parallel`, `decrypt_stream_passphrase`, `decrypt_stream_passphrase_with_limits`, `decrypt_stream_passphrase_keyfile`, `decrypt_stream_passphrase_keyfile_with_limits`, `decrypt_stream_passphrase_fido2`, `decrypt_stream_passphrase_fido2_with_limits`, `decrypt_stream_passphrase_webauthn_prf`, `decrypt_stream_passphrase_webauthn_prf_with_limits`, `decrypt_stream_stealth` |
 | `pqfile::sign` | `sign_keygen`, `sign_keygen_bytes`, `sign_keygen_hardware`, `sign_keygen_hardware_bytes`, `sign_bytes`, `sign_file`, `verify_bytes`, `verify_file`, `encode_sig_pem`, `decode_sig_pem`, `default_sig_path`, `SignKeygenResult` |
 | `pqfile::signcrypt` | `signcrypt`, `signcrypt_bytes`, `signdecrypt` |
 | `pqfile::keygen` | `keygen`, `keygen_bytes`, `keygen_bytes_hybrid_768`, `keygen_hardware`, `keygen_bytes_hardware`, `keygen_bytes_hardware_hybrid`, `is_encrypted_key`, `is_hardware_key`, `fingerprint`, `fingerprint_pem` |
@@ -43,6 +43,7 @@ surface.
 | `pqfile::hardware` | `HW_TAG_*` constants, `is_hardware_tag`, `default_backend_id` |
 | `pqfile::hardware::stub` | `BACKEND_CREDENTIAL_STORE`, `BACKEND_PKCS11` |
 | `pqfile::async_io` *(feature = "async")* | `encrypt_stream_async`, `decrypt_stream_async`, `AsyncPqfWriter` |
+| `pqfile::tlock` *(feature = "tlock")* | `encrypt_stream_tlock`, `decrypt_stream_tlock`, `round_for_target_time`, `quicknet`, `TlockChain` |
 | `pqfile::archive` | `create`, `extract`, `list`, `create_from_memory`, `extract_to_memory`, `ArchiveEntry` |
 | `pqfile::shamir` | `split_key`, `reconstruct_key`, `write_shares`, `SplitResult` |
 | `pqfile::rekey` | `rekey_stream` |

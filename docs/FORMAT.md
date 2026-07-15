@@ -407,8 +407,9 @@ Offset  Len   Field
 21      4     M_KIB (u32 LE; Argon2id memory cost in kibibytes)
 25      4     T_COST (u32 LE; Argon2id time cost / iterations)
 29      4     P_COST (u32 LE; Argon2id parallelism lanes)
-33      1     FLAGS (bit 0 = keyfile required, bit 1 = FIDO2 token required
-                       [mutually exclusive]; bits 2-7 reserved, MUST be 0)
+33      1     FLAGS (bit 0 = keyfile required, bit 1 = FIDO2 token required,
+                       bit 2 = WebAuthn PRF required [at most one of the
+                       three may be set]; bits 3-7 reserved, MUST be 0)
 34      12    BASE_NONCE (first 8 bytes random; bytes 8-11 are 0x00)
 46      8     ORIGINAL_SIZE (u64 LE; informational)
 54      var   STREAM chunks (chunk_size = 65536; identical to v3)
@@ -421,6 +422,7 @@ session_key = Argon2id(
     salt     = SALT (16 bytes),
     secret   = SHA3-256("pqfile-keyfile-v1" || keyfile bytes)         -- only if FLAGS bit 0 set
              | SHA3-256("pqfile-fido2-v1" || hmac-secret output)      -- only if FLAGS bit 1 set
+             | SHA3-256("pqfile-webauthn-prf-v1" || PRF output)       -- only if FLAGS bit 2 set
     m_cost   = M_KIB,
     t_cost   = T_COST,
     p_cost   = P_COST,
@@ -432,9 +434,11 @@ The 32-byte output is used directly as the ChaCha20-Poly1305 session key for the
 
 **Keyfile second factor (FLAGS bit 0):** when set, the SHA3-256 hash of a caller-supplied keyfile (any non-empty byte string) is passed as the Argon2id *secret* (pepper) input, so deriving the session key requires both the passphrase and the identical keyfile bytes. A decryptor without a keyfile MUST fail with `PqfileError::KeyfileRequired` before running the KDF; a decryptor given a keyfile for a file whose bit is clear MUST fail with `PqfileError::KeyfileNotRequired`. The flag is not independently authenticated, but tampering with it cannot bypass the second factor: the keyfile hash is baked into the session key, so a cleared bit only produces an authentication failure.
 
-**FIDO2 token second factor (FLAGS bit 1):** the same pepper slot as the keyfile second factor, sourced from a hardware security key instead of a file. The secret is the domain-separated SHA3-256 hash of the 32-byte output of the CTAP2 `hmac-secret` extension, presented by a token holding the credential enrolled by `pqfile fido2-enroll` (credential ID and salt recorded in a separate, non-sensitive enrollment file - reproducing the output requires physically touching the same token). Mutually exclusive with bit 0: a header with both bits set is rejected as unsupported. Missing/superfluous-token failures mirror the keyfile case: `PqfileError::Fido2Required` / `PqfileError::Fido2NotRequired`, and tampering with the bit is likewise self-defeating since the derived secret is baked into the session key.
+**FIDO2 token second factor (FLAGS bit 1):** the same pepper slot as the keyfile second factor, sourced from a hardware security key instead of a file. The secret is the domain-separated SHA3-256 hash of the 32-byte output of the CTAP2 `hmac-secret` extension, presented by a token holding the credential enrolled by `pqfile fido2-enroll` (credential ID and salt recorded in a separate, non-sensitive enrollment file - reproducing the output requires physically touching the same token). Mutually exclusive with bits 0 and 2: a header with more than one of the three bits set is rejected as unsupported. Missing/superfluous-token failures mirror the keyfile case: `PqfileError::Fido2Required` / `PqfileError::Fido2NotRequired`, and tampering with the bit is likewise self-defeating since the derived secret is baked into the session key.
 
-**Unknown flag bits:** decoders MUST reject a header with any reserved bit set, or with both bit 0 and bit 1 set (`PqfileError::UnsupportedHeaderFlags`), rather than ignore it, so files written by future versions with different derivation semantics are never silently misdecrypted.
+**WebAuthn PRF second factor (FLAGS bit 2):** the browser-native equivalent of the FIDO2 second factor above, for the WASM web GUI (which has no CTAP2/USB HID access). The same pepper slot, sourced from the WebAuthn `prf` extension instead of CTAP2 `hmac-secret`: the secret is the domain-separated SHA3-256 hash of the 32-byte value returned by `PublicKeyCredential.getClientExtensionResults().prf.results.first`, evaluated against a credential ID and salt recorded in a separate, non-sensitive enrollment file (analogous in shape to the FIDO2 one, but produced by `navigator.credentials.create`/`.get()` in the browser rather than CTAP2). Registers a *resident* (discoverable) credential (`residentKey: "required"`), unlike the FIDO2 second factor's non-resident choice - Windows Hello's OS-level WebAuthn API hard-requires a resident credential before it will expose `hmac-secret`/PRF at all, so a non-resident credential silently breaks PRF there. Still passes the credential ID via `allowCredentials` at derive time rather than relying on full passwordless discovery, for consistency with the enrollment-file-based flow every other second factor uses. Mutually exclusive with bits 0 and 1. Missing/superfluous-passkey failures mirror the keyfile/FIDO2 cases: `PqfileError::WebauthnPrfRequired` / `PqfileError::WebauthnPrfNotRequired`. Not a post-quantum concern either way: this only changes which secret feeds the same classical Argon2id pepper slot, not the payload's PQ security.
+
+**Unknown flag bits:** decoders MUST reject a header with any reserved bit set, or with more than one of bits 0-2 set (`PqfileError::UnsupportedHeaderFlags`), rather than ignore it, so files written by future versions with different derivation semantics are never silently misdecrypted.
 
 **Security note:** M_KIB, T_COST, and P_COST are attacker-controlled. Decryptors MUST enforce a ceiling before calling the KDF. Exceeding the ceiling returns `PqfileError::KdfLimitExceeded`. The default ceiling matches the encrypt-side default: 64 MiB / t=3.
 
@@ -469,6 +473,48 @@ Padmé padding (`pqfile::padding::padme_length`/`PadmeReader`/`TruncatingWriter`
 2. **Decrypt side:** wrap the output writer in `TruncatingWriter::new(writer, original_size)`, capping forwarded bytes at the header's (authenticated) `original_size` and silently dropping the padding tail. Because non-padded files already decrypt to exactly `original_size` bytes, this is a no-op unless the file was actually padded - callers do not need to know in advance.
 
 `padme_length(len)` rounds `len` up to a bucket whose low-order bits are masked to zero (the number of masked bits grows with `len`'s own bit-length), bounding overhead to roughly 1/2^k for a length k bits short of a power of two - in practice at most ~12% for real file sizes.
+
+---
+
+### 5.12 v11 - Time-locked (`tlock` feature)
+
+No KEM step and no recipient key pair at all. The session key is derived from a random 16-byte seed that is itself protected by [tlock](https://eprint.iacr.org/2023/189) identity-based encryption (IBE) against a target [drand](https://drand.love) beacon round: nobody, including the sender, can reconstruct the seed until that round's threshold BLS signature is published. `pqfile::tlock::encrypt_stream_tlock` / `decrypt_stream_tlock` (off by default; `tlock` Cargo feature on `pqfile`/`pqfile-cli`).
+
+```
+Offset  Len   Field
+0       4     MAGIC
+4       1     VERSION (0x8B; always carries the VERSION_AUTH_BIT, 0x80, set -
+                        there is no legacy v11 layout predating it)
+5       32    CHAIN_HASH (identifies the drand chain the ROUND is relative to)
+37      8     ROUND (u64 BE; target beacon round)
+45      4     TLOCK_CT_LEN (u32 LE)
+49      var   TLOCK_CT (tlock IBE ciphertext: U (48 or 96 bytes, whichever
+                        group is opposite the chain's public key) || V (16
+                        bytes) || W (16 bytes))
+49+L    12    BASE_NONCE (first 8 bytes random; bytes 8-11 are 0x00)
+61+L    8     ORIGINAL_SIZE (u64 LE; informational)
+69+L    var   STREAM chunks (chunk_size = 65536; identical to v3)
+```
+
+Session key derivation:
+```
+seed        = 16 random bytes, resampled until the last byte is non-zero
+                (see "tlock quirk" below)
+TLOCK_CT    = tlock::encrypt(seed, chain_public_key, ROUND)
+session_key = HKDF-SHA256(ikm = seed, info = "pqfile-tlock-v1", 32 bytes)
+```
+
+Decryption fetches the beacon signature for `ROUND` from a drand HTTP relay (the only network-touching step in the `pqfile` library), uses it as the IBE "private key" to recover `seed` via `tlock::decrypt(TLOCK_CT, signature)`, then re-derives `session_key` identically. Decrypting before `ROUND` has fired returns `PqfileError::TlockRoundNotReached`; the underlying beacon fetch is otherwise indistinguishable in shape from a normal decrypt failure path.
+
+**Default chain:** the League of Entropy mainnet `quicknet` chain (3-second rounds, unchained BLS12-381 with the RFC 9380 hash-to-curve scheme). `CHAIN_HASH` records which chain a file targets so a decryptor knows which relay/public key to use; it is public information, not sensitive, and is bound into the key commitment (below) so tampering with it is caught rather than silently causing a decrypt against the wrong chain.
+
+**tlock quirk:** the reference `tlock` crate silently strips trailing zero bytes from its recovered 16-byte plaintext. As long as the seed's last byte is non-zero, no truncation occurs regardless of earlier bytes, so the encoder resamples (~1/256 chance per attempt) rather than accepting a seed whose last byte is `0x00`.
+
+**Key commitment:** own domain separator (`"pqfile-tlock-key-commitment-v1"`, distinct from the v2/v3 stream commitments and from v10's), always computed as SHA3-256 of `CTX || session_key || CHAIN_HASH || ROUND || BASE_NONCE || ORIGINAL_SIZE` - unlike v10, there is no legacy v11 layout predating `VERSION_AUTH_BIT` to stay compatible with, so there is only one commitment definition.
+
+**Not a post-quantum guarantee:** drand's tlock scheme is BLS12-381 pairing-based (classical), layered on top of pqfile's usual chunked, authenticated AEAD payload exactly like every other format - only the session-key derivation differs.
+
+**Scope (v1):** pure time-lock only; there is no way to additionally require a recipient's own private key alongside the round (see `docs/ROADMAP.md`). `encrypt_stream_tlock` is fully offline given a round number; resolving a human time expression ("in 24h", an RFC 3339 date) to a round number is a separate, explicitly network-touching convenience (`pqfile::tlock::round_for_target_time`, `pqfile tlock round` CLI subcommand) that never fetches the round's own beacon.
 
 ---
 

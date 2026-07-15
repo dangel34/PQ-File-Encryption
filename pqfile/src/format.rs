@@ -40,6 +40,15 @@ pub const VERSION_V9: u8 = 0x09;
 /// Format: MAGIC | 0x0A | SALT(16) | ARGON2_PARAMS(12: m_kib/t/p as u32 LE each) | NONCE(12) | ORIGINAL_SIZE(8)
 /// Payload is chunked identically to v3 (standard AEAD AAD and key commitment).
 pub const VERSION_V10: u8 = 0x0A;
+/// Time-locked format (`tlock` feature): no key pair required. A random 16-byte seed
+/// is time-lock-encrypted (IBE) against a drand beacon round, so the session key
+/// (HKDF-derived from the seed) cannot be reconstructed until that round's threshold
+/// BLS signature is public. Always written with [`VERSION_AUTH_BIT`] set (there is no
+/// legacy layout to stay compatible with).
+/// Format: MAGIC | 0x8B | CHAIN_HASH(32) | ROUND(8, BE) | TLOCK_CT_LEN(4, LE) | TLOCK_CT(variable) | NONCE(12) | ORIGINAL_SIZE(8)
+/// Payload is chunked identically to v3 (standard AEAD AAD and key commitment).
+/// See `pqfile::tlock` and `docs/FORMAT.md`.
+pub const VERSION_TLOCK: u8 = 0x0B;
 
 /// Authenticated-header flag bit on the version byte.
 ///
@@ -553,14 +562,23 @@ pub(crate) const V10_FLAG_KEYFILE: u8 = 0b0000_0001;
 /// v10 header flag bit: key derivation additionally requires a FIDO2 hardware
 /// token's `hmac-secret` extension output (domain-separated hash mixed into
 /// Argon2id as the secret/pepper input, the same slot [`V10_FLAG_KEYFILE`]
-/// occupies). Mutually exclusive with [`V10_FLAG_KEYFILE`]: pqfile never
-/// writes both bits together, and a header carrying both is rejected below.
+/// occupies). Mutually exclusive with [`V10_FLAG_KEYFILE`] and
+/// [`V10_FLAG_WEBAUTHN_PRF`]: pqfile never writes more than one of the three
+/// bits together, and a header carrying more than one is rejected below.
 pub(crate) const V10_FLAG_FIDO2: u8 = 0b0000_0010;
+
+/// v10 header flag bit: key derivation additionally requires a browser
+/// WebAuthn credential's `prf` extension output (domain-separated hash mixed
+/// into Argon2id as the secret/pepper input, the same slot [`V10_FLAG_KEYFILE`]
+/// and [`V10_FLAG_FIDO2`] occupy). Mutually exclusive with both: this is the
+/// browser-native equivalent of [`V10_FLAG_FIDO2`]'s hardware-USB mechanism,
+/// reachable from wasm32 (where CTAP2/HID is not).
+pub(crate) const V10_FLAG_WEBAUTHN_PRF: u8 = 0b0000_0100;
 
 /// All v10 flag bits this build understands. Headers carrying unknown bits are
 /// rejected with [`PqfileError::UnsupportedHeaderFlags`] rather than silently
 /// decrypted under different assumptions than the sender's.
-pub(crate) const V10_KNOWN_FLAGS: u8 = V10_FLAG_KEYFILE | V10_FLAG_FIDO2;
+pub(crate) const V10_KNOWN_FLAGS: u8 = V10_FLAG_KEYFILE | V10_FLAG_FIDO2 | V10_FLAG_WEBAUTHN_PRF;
 
 /// Parsed header for v10 (passphrase-only) format.
 pub(crate) struct PqfHeaderV10 {
@@ -572,8 +590,9 @@ pub(crate) struct PqfHeaderV10 {
     pub t_cost: u32,
     /// Argon2id parallelism (lanes).
     pub p_cost: u32,
-    /// Feature flag bits ([`V10_FLAG_KEYFILE`], [`V10_FLAG_FIDO2`]; remaining
-    /// bits reserved; the two are mutually exclusive).
+    /// Feature flag bits ([`V10_FLAG_KEYFILE`], [`V10_FLAG_FIDO2`],
+    /// [`V10_FLAG_WEBAUTHN_PRF`]; remaining bits reserved; at most one of the
+    /// three may be set).
     pub flags: u8,
     /// Per-file base nonce (12 bytes; only first 8 are random, last 4 are the chunk counter).
     pub nonce: [u8; NONCE_LEN],
@@ -607,9 +626,8 @@ impl PqfHeaderV10 {
         r.read_exact(&mut p)?;
         let mut flags = [0u8; 1];
         r.read_exact(&mut flags)?;
-        let known_and_exclusive = (flags[0] & !V10_KNOWN_FLAGS) == 0
-            && (flags[0] & (V10_FLAG_KEYFILE | V10_FLAG_FIDO2))
-                != (V10_FLAG_KEYFILE | V10_FLAG_FIDO2);
+        let known_and_exclusive =
+            (flags[0] & !V10_KNOWN_FLAGS) == 0 && (flags[0] & V10_KNOWN_FLAGS).count_ones() <= 1;
         if !known_and_exclusive {
             return Err(PqfileError::UnsupportedHeaderFlags(flags[0]));
         }
@@ -620,6 +638,73 @@ impl PqfHeaderV10 {
             t_cost: u32::from_le_bytes(t),
             p_cost: u32::from_le_bytes(p),
             flags: flags[0],
+            nonce,
+            original_size,
+        })
+    }
+}
+
+/// Chain hash length in the tlock header: identifies which drand chain the round
+/// number is relative to. Public information (not sensitive).
+pub const TLOCK_CHAIN_HASH_LEN: usize = 32;
+
+/// Parsed header for the time-locked (`tlock` feature) format.
+#[cfg(feature = "tlock")]
+pub(crate) struct PqfHeaderTlock {
+    /// drand chain identifier the `round` is relative to.
+    pub chain_hash: [u8; TLOCK_CHAIN_HASH_LEN],
+    /// Target beacon round: the file cannot be decrypted before this round's
+    /// threshold BLS signature is published.
+    pub round: u64,
+    /// tlock IBE ciphertext wrapping a random 16-byte seed. Length depends on the
+    /// chain's public key group (see `pqfile::tlock`); stored length-prefixed since
+    /// it varies by chain.
+    pub tlock_ct: Vec<u8>,
+    /// Per-file base nonce (12 bytes; only first 8 are random, last 4 are the chunk counter).
+    pub nonce: [u8; NONCE_LEN],
+    /// Uncompressed plaintext size in bytes.
+    pub original_size: u64,
+}
+
+#[cfg(feature = "tlock")]
+impl PqfHeaderTlock {
+    /// Serializes the tlock header to `w`. `version` is the full version byte to emit
+    /// (always [`VERSION_TLOCK`] `| `[`VERSION_AUTH_BIT`]).
+    pub fn write<W: Write + ?Sized>(&self, w: &mut W, version: u8) -> Result<(), std::io::Error> {
+        w.write_all(MAGIC)?;
+        w.write_all(&[version])?;
+        w.write_all(&self.chain_hash)?;
+        w.write_all(&self.round.to_be_bytes())?;
+        w.write_all(&(self.tlock_ct.len() as u32).to_le_bytes())?;
+        w.write_all(&self.tlock_ct)?;
+        write_nonce_and_size(w, &self.nonce, self.original_size)
+    }
+
+    /// Reads the tlock header body (everything after MAGIC + VERSION byte).
+    pub fn read_body<R: Read + ?Sized>(r: &mut R) -> Result<Self, PqfileError> {
+        let mut chain_hash = [0u8; TLOCK_CHAIN_HASH_LEN];
+        r.read_exact(&mut chain_hash)?;
+        let mut round_bytes = [0u8; 8];
+        r.read_exact(&mut round_bytes)?;
+        let mut ct_len_bytes = [0u8; 4];
+        r.read_exact(&mut ct_len_bytes)?;
+        let ct_len = u32::from_le_bytes(ct_len_bytes) as usize;
+        // A tlock IBE ciphertext is at most a G2 point (96) + v(16) + w(16); reject
+        // anything wildly larger as a malformed/adversarial header rather than
+        // allocating an attacker-controlled amount of memory.
+        if ct_len > 512 {
+            return Err(PqfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("tlock ciphertext length {ct_len} exceeds maximum (512)"),
+            )));
+        }
+        let mut tlock_ct = vec![0u8; ct_len];
+        r.read_exact(&mut tlock_ct)?;
+        let (nonce, original_size) = read_nonce_and_size(r)?;
+        Ok(PqfHeaderTlock {
+            chain_hash,
+            round: u64::from_be_bytes(round_bytes),
+            tlock_ct,
             nonce,
             original_size,
         })
@@ -814,6 +899,30 @@ pub(crate) fn commitment_for_v10(
     } else {
         compute_key_commitment(session_key, &header.nonce, header.original_size)
     }
+}
+
+/// Domain separator for the tlock session-key commitment.
+#[cfg(feature = "tlock")]
+const KEY_COMMITMENT_CTX_TLOCK: &[u8] = b"pqfile-tlock-key-commitment-v1";
+
+/// Key commitment for the tlock layout: SHA3-256 of
+/// `CTX_TLOCK || session_key || chain_hash || round || nonce || original_size`.
+///
+/// Binds `chain_hash` and `round` into chunk-0's AEAD tag so tampering with either
+/// (e.g. pointing the header at an already-fired round) is caught even before the
+/// wrong beacon signature would fail to reproduce the session key. Always computed
+/// this way: unlike v10, there is no legacy tlock layout predating
+/// [`VERSION_AUTH_BIT`] to stay compatible with.
+#[cfg(feature = "tlock")]
+pub(crate) fn commitment_for_tlock(session_key: &[u8], header: &PqfHeaderTlock) -> [u8; 32] {
+    let mut h = Sha3_256::new();
+    h.update(KEY_COMMITMENT_CTX_TLOCK);
+    h.update(session_key);
+    h.update(header.chain_hash);
+    h.update(header.round.to_be_bytes());
+    h.update(header.nonce.as_ref());
+    h.update(header.original_size.to_le_bytes());
+    h.finalize().into()
 }
 
 /// Maximum AAD byte length across all chunk positions (first chunk is largest).

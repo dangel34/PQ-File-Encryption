@@ -244,6 +244,12 @@ pqfile encrypt -r pubkey.pem --stealth secret.txt
 
 # The two compose: unidentifiable ciphertext with a bucketed length
 pqfile encrypt -r pubkey.pem --stealth --pad secret.txt
+
+# Time-locked encryption (v11 format, requires the `tlock` cargo feature):
+# nobody, including the sender, can decrypt before the target drand beacon
+# round is public. Resolve a human time expression to a round number first.
+pqfile tlock round "24h"
+pqfile encrypt --tlock-round 30438443 secret.txt
 ```
 
 Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their own encapsulated session key; the file payload is encrypted once. `--anonymous-recipients` upgrades to v8 format, dropping the per-slot KEM variant field so key types are hidden. `--pad-recipients` upgrades to v9 format, which additionally pads the slot count to the next power of two with random dummy entries. `--recursive` requires exactly one recipient. `--compress-level` accepts 1 (fastest) to 22 (best ratio), default 3. `--parallel` uses rayon for concurrent chunk processing and requires a single recipient.
@@ -279,7 +285,33 @@ pqfile decrypt --passphrase --fido2 fido2-enrollment.txt secret.txt.pqf
 
 # File written with `encrypt --stealth` (magic-free; cannot be auto-detected)
 pqfile decrypt -k privkey.pem --stealth secret.txt.pqf
+
+# File written with `encrypt --tlock-round`; fetches the beacon signature over
+# the network and fails with a clear error if the round hasn't fired yet
+pqfile decrypt --tlock secret.txt.pqf
 ```
+
+### Time-locked encryption (drand beacon)
+
+**Not a post-quantum guarantee**: the underlying [tlock](https://eprint.iacr.org/2023/189) scheme is BLS12-381 pairing-based (classical), layered on top of pqfile's usual authenticated, chunked payload. Requires building with the `tlock` cargo feature (off by default: pulls in the only network-capable dependencies in the workspace).
+
+```bash
+# Resolve a human time expression to a drand round number (fetches only the
+# chain's public parameters, never a round's own beacon - safe for future rounds)
+pqfile tlock round "24h"        # relative duration
+pqfile tlock round "7d"
+pqfile tlock round "2026-08-01T00:00:00Z"   # RFC 3339 datetime
+
+# Encrypt: fully offline given a round number. No recipient key or passphrase.
+pqfile encrypt --tlock-round 30438443 secret.txt
+
+# Decrypt: fetches the target round's beacon signature (the only network call
+# in the pqfile library). Fails cleanly if the round hasn't fired yet.
+pqfile decrypt --tlock secret.txt.pqf
+pqfile check --tlock secret.txt.pqf
+```
+
+Uses the League of Entropy mainnet `quicknet` chain by default; `--tlock-url` overrides the relay for `decrypt`/`check`. See [docs/FORMAT.md](docs/FORMAT.md) §5.12 for the wire format.
 
 ### FIDO2 hardware token second factor
 
@@ -296,11 +328,19 @@ pqfile fido2-enroll -o fido2-enrollment.txt
 pqfile fido2-enroll -o fido2-enrollment.txt --pin
 ```
 
-**Desktop GUI**: `pqfile-desktop` ships with this built in (no separate feature flag to pass). On the Encrypt or Decrypt tab, switch to Passphrase mode, then pick "FIDO2 token" under Second Factor and click "Enroll New Token…" the first time. Not available in the web (WASM) GUI - there is no browser-compatible USB HID backend, only the native `hidapi`-based one `pqfile-desktop` uses.
+**Desktop GUI**: `pqfile-desktop` ships with this built in (no separate feature flag to pass). On the Encrypt or Decrypt tab, switch to Passphrase mode, then pick "FIDO2 token" under Second Factor and click "Enroll New Token…" the first time. Not available in the web (WASM) GUI - there is no browser-compatible USB HID backend, only the native `hidapi`-based one `pqfile-desktop` uses. See "WebAuthn PRF second factor" below for the web build's own equivalent.
 
 Pass the enrollment file to `encrypt --fido2` / `decrypt --fido2` / `check --fido2` in place of `--keyfile`; the two are mutually exclusive. Each operation touches the token (and prompts for its PIN, if enrolled with one).
 
 If the private key is passphrase-protected, the passphrase is prompted interactively. Works with v2 through v10 files (all single-recipient variants) and v4/v7/v8/v9 (multi-recipient).
+
+### WebAuthn PRF second factor (web GUI only, currently disabled in the UI)
+
+The browser-native equivalent of the FIDO2 second factor above, for the web build of `pqfile-gui` (no CTAP2/USB HID access exists in a browser). Uses the WebAuthn `prf` extension (`navigator.credentials` with a passkey) instead of raw CTAP2. No CLI surface (there is no browser in a terminal) and no cargo feature to build with - it's just part of the wasm32 build.
+
+**Status: implemented but disabled in the Second Factor selector** ("Passkey" is greyed out with an explanatory tooltip). The implementation is complete and spec-correct - it matches the reference flow in Yubico's own PRF developer guide exactly, and the v10 format/library side is fully tested - but real-world browser/OS support for evaluating PRF (not just reporting it as present) turned out too inconsistent to enable as of mid-2026, confirmed by hands-on testing rather than assumed from documentation: Bitwarden's browser extension doesn't implement PRF for third-party sites at all (registration succeeds, `prf.enabled` correctly reports false); Windows Hello via Edge registers and reports `prf.enabled: true` but the follow-up secret derivation returns no output; Firefox fails at registration itself with a generic platform error. Revisit once this settles down - the second-factor selector's disabled branch is a one-line flip back to `ui.selectable_value(...)` once it does.
+
+**Local testing note:** WebAuthn's relying-party ID must be a valid *domain string* - a raw IP address like `127.0.0.1` doesn't qualify (unlike for the separate secure-context check, where an IP is fine over plain HTTP on the same machine). If `trunk serve` prints both `http://127.0.0.1:8080/` and `http://localhost:8080/`, use the `localhost` one - `127.0.0.1` fails passkey registration with an "invalid domain" error.
 
 ### Check (verify a backup without writing plaintext)
 
@@ -540,7 +580,7 @@ Hardware-backed keys, the folder watcher, SSH key import, passphrase change, and
 
 ## The .pqf file format
 
-There are nine format versions (v2 through v10). The version byte at offset 4 selects the layout. Files written by the current version additionally set bit 7 of the version byte (`VERSION_AUTH_BIT`, so `0x83` = v3 layout with an authenticated header): the chunk-0 key commitment then also binds the header fields that were previously malleable (chunk size, compression algorithm, v10 Argon2id parameters). Older pqfile versions reject bit-carrying files with `UnsupportedVersion`; files written by pqfile 4.2.4 and earlier remain fully readable. Two features layer on top of these versions without a version bump: stealth mode (no magic, version, or KEM variant field at all) and Padme plaintext-length padding. Byte-level details for all of this live in [docs/FORMAT.md](docs/FORMAT.md) (sections 4.4, 5.10, and 5.11).
+There are ten format versions (v2 through v11, the last gated behind the `tlock` cargo feature). The version byte at offset 4 selects the layout. Files written by the current version additionally set bit 7 of the version byte (`VERSION_AUTH_BIT`, so `0x83` = v3 layout with an authenticated header): the chunk-0 key commitment then also binds the header fields that were previously malleable (chunk size, compression algorithm, v10 Argon2id parameters, v11 chain hash/round). Older pqfile versions reject bit-carrying files with `UnsupportedVersion`; files written by pqfile 4.2.4 and earlier remain fully readable. Two features layer on top of these versions without a version bump: stealth mode (no magic, version, or KEM variant field at all) and Padme plaintext-length padding. Byte-level details for all of this live in [docs/FORMAT.md](docs/FORMAT.md) (sections 4.4, 5.10, 5.11, and 5.12).
 
 ### v2: single-recipient, whole-file AEAD
 
@@ -695,6 +735,28 @@ Offset   Length    Field
 ```
 
 **Security note:** M_KIB, T_COST, and P_COST are attacker-controlled fields. Decryptors must cap these before deriving. `decrypt_stream_passphrase` enforces a default ceiling (64 MiB / t=3); `decrypt_stream_passphrase_with_limits` accepts caller-specified ceilings. Exceeding the ceiling returns `PqfileError::KdfLimitExceeded`. The CLI exposes `--max-kdf-mem` and `--max-kdf-time`.
+
+### v11: time-locked (`tlock` cargo feature)
+
+No KEM step and no recipient key pair. The session key is derived from a random 16-byte seed that is itself locked via [tlock](https://eprint.iacr.org/2023/189) identity-based encryption against a target drand beacon round - not a post-quantum guarantee (the underlying scheme is BLS12-381 pairing-based), but layered on top of the same authenticated, chunked payload as every other format.
+
+```
+Offset   Length    Field
+------   ------    -----
+0        4         Magic: "PQFL"
+4        1         Version: 0x8B (always carries the authenticated-header bit)
+5        32        drand chain hash
+37       8         Target beacon round (u64 big-endian)
+45       4         tlock ciphertext length (u32 little-endian)
+49       var       tlock IBE ciphertext (locks the 16-byte seed to the round)
+--- Shared tail -------------------------------------------------
+         12        Base nonce (bytes 8-11 are 0x00)
+         8         Original plaintext size (u64 little-endian, informational)
+--- Payload -----------------------------------------------------
+         ...       Chunked STREAM identical to v3, keyed by HKDF-SHA256(seed)
+```
+
+Defaults to the League of Entropy mainnet `quicknet` chain. Off by default: pulls in the only network-capable dependencies in the workspace (`tlock`, `drand_core`), so a normal build never gains an HTTP stack. See [docs/FORMAT.md](docs/FORMAT.md) §5.12.
 
 ### KEM variant field
 

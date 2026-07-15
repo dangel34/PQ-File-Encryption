@@ -481,6 +481,22 @@ pub(crate) fn fido2_secret(hmac_secret: &[u8; 32]) -> LockedSecret<32> {
     out
 }
 
+/// Hashes a WebAuthn `prf` extension output into the 32-byte Argon2 secret
+/// used by v10 WebAuthn-PRF mode. The browser-native equivalent of
+/// [`fido2_secret`] - PRF eval output is already a uniform 32-byte value
+/// (treated as opaque IKM, same as the FIDO2 hmac-secret output), so this
+/// hash exists purely for domain separation from [`keyfile_secret`]/
+/// [`fido2_secret`], mirroring their rationale rather than adding entropy.
+pub(crate) fn webauthn_prf_secret(prf_output: &[u8; 32]) -> LockedSecret<32> {
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(b"pqfile-webauthn-prf-v1");
+    hasher.update(prf_output);
+    let mut out = LockedSecret::<32>::zeroed();
+    out.copy_from_slice(&hasher.finalize());
+    out
+}
+
 /// Result of benchmarking Argon2id on this machine via [`calibrate`].
 #[cfg(not(target_arch = "wasm32"))]
 #[non_exhaustive]

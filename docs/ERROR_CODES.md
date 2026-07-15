@@ -44,3 +44,8 @@ Code `0` is a catch-all for errors that do not map to a known variant (should no
 | 27 | `Fido2NotRequired` | `--fido2` was passed but the file was not encrypted with one (or uses `--keyfile` instead); remove the flag |
 | 28 | `CertNotValid` | Certificate signature verified, but the check time falls outside its validity window |
 | 29 | `CertUseNotPermitted` | Certificate does not authorize the requested use (encrypt or sign) |
+| 30 | `TlockRoundNotReached` | Time-locked (v11) file's target drand round has not fired yet; try again later |
+| 31 | `TlockBeaconFetchFailed` | Fetching the drand beacon failed for a reason other than "not yet reached" |
+| 32 | `TlockDecryptionFailed` | Beacon signature was fetched but tlock/AEAD decryption failed; ciphertext is likely corrupt or tampered |
+| 33 | `WebauthnPrfRequired` | v10 file was encrypted with a WebAuthn `prf` second factor; present the same enrolled passkey |
+| 34 | `WebauthnPrfNotRequired` | A WebAuthn PRF output was supplied but the file was not encrypted with one (or uses a different second factor); remove it and retry |
