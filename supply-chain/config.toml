@@ -53,11 +53,11 @@ version = "0.36.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.accesskit_consumer]]
-version = "0.37.0"
+version = "0.38.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.accesskit_macos]]
-version = "0.26.2"
+version = "0.26.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.accesskit_unix]]
@@ -1029,7 +1029,7 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.mio]]
-version = "1.2.1"
+version = "1.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.ml-dsa]]
@@ -1577,11 +1577,11 @@ version = "3.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.simd-adler32]]
-version = "0.3.9"
+version = "0.3.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.simd_cesu8]]
-version = "1.1.1"
+version = "1.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.simdutf8]]
@@ -1653,7 +1653,7 @@ version = "0.28.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.syn]]
-version = "2.0.118"
+version = "2.0.119"
 criteria = "safe-to-deploy"
 
 [[exemptions.tempfile]]
@@ -1725,7 +1725,7 @@ version = "0.5.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.toml_edit]]
-version = "0.25.12+spec-1.1.0"
+version = "0.25.13+spec-1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tracing]]
