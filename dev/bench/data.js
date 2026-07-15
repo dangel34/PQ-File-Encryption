@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784040496889,
+  "lastUpdate": 1784127442905,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -2855,6 +2855,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48327,
             "range": "± 1112",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "c6d669831af005b75e510839a7dba7ef7865d1db",
+          "message": "feat(tlock): implement time-locked encryption and WebAuthn PRF support\n\n- Introduced time-locked encryption (v11 format) using the `tlock` cargo feature, allowing files to be encrypted such that decryption is only possible after a specified drand beacon round is reached.\n- Added new commands for time-lock functionality: `pqfile encrypt --tlock-round <ROUND>` and `pqfile decrypt --tlock`.\n- Implemented WebAuthn PRF second factor for the web GUI, enabling browser-native passkey support for enhanced security.\n- Updated documentation in `CHANGELOG.md`, `FORMAT.md`, and `ROADMAP.md` to reflect new features and usage instructions.\n- Enhanced error handling for new scenarios related to time-locked encryption and WebAuthn PRF.\n- Updated dependencies in `Cargo.toml` and `Cargo.lock` to include necessary libraries for the new features.",
+          "timestamp": "2026-07-15T10:53:50-04:00",
+          "tree_id": "12a03b5dd6d705a1a42dc05e08bf216fe34f3b60",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/c6d669831af005b75e510839a7dba7ef7865d1db"
+        },
+        "date": 1784127442361,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 71642,
+            "range": "± 290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1057456,
+            "range": "± 12189",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 115148236,
+            "range": "± 292278",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 120757,
+            "range": "± 3777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1078237,
+            "range": "± 15357",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 103862379,
+            "range": "± 1508711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 72990,
+            "range": "± 352",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1101767,
+            "range": "± 14730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 112643507,
+            "range": "± 252918",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 123018,
+            "range": "± 1947",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1154761,
+            "range": "± 9968",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 111644104,
+            "range": "± 1638324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 54070,
+            "range": "± 253",
             "unit": "ns/iter"
           }
         ]
