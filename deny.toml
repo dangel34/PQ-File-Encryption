@@ -76,6 +76,10 @@ allow = [
     # egui → epaint_default_fonts (bundled font assets)
     "OFL-1.1",
     "Ubuntu-font-1.0",
+    # drand_core → ureq (platform-verifier feature) → rustls-platform-verifier
+    # → webpki-roots / webpki-root-certs (Mozilla's own license for its
+    # embedded root CA certificate data, not executable code).
+    "CDLA-Permissive-2.0",
 ]
 # Confidence threshold for license detection via SPDX header scanning.
 confidence-threshold = 0.8
