@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784214876778,
+  "lastUpdate": 1784215785281,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -3569,6 +3569,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 53382,
             "range": "± 147",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "8015571437b6032b8d7b4e475fca7f4abf6d9747",
+          "message": "fix(release): rename icon so linuxdeploy's AppImage build can find it\n\nlinuxdeploy deploys --icon-file under its own basename, so passing\npqfile-desktop/assets/icon.png deployed it as \"icon\", which didn't\nmatch the .desktop file's Icon=pqfile-desktop entry:\n\"ERROR: Could not find suitable icon for Icon entry: pqfile-desktop\".\nCopy the icon to pqfile-desktop.png before invoking linuxdeploy instead\nof renaming the Icon= entry to the generic \"icon\".",
+          "timestamp": "2026-07-16T11:25:37-04:00",
+          "tree_id": "a135011a0ccc94bdce5d96ff071604c4a70fb508",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/8015571437b6032b8d7b4e475fca7f4abf6d9747"
+        },
+        "date": 1784215784386,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67760,
+            "range": "± 276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 959900,
+            "range": "± 2928",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 106465513,
+            "range": "± 1204663",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 108319,
+            "range": "± 858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 975896,
+            "range": "± 10640",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93175319,
+            "range": "± 370020",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68009,
+            "range": "± 371",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 967558,
+            "range": "± 3210",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99108155,
+            "range": "± 2509254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 111662,
+            "range": "± 827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1020709,
+            "range": "± 29678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99354421,
+            "range": "± 299310",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48494,
+            "range": "± 319",
             "unit": "ns/iter"
           }
         ]
