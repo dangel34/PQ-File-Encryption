@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784212769357,
+  "lastUpdate": 1784213961565,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -3365,6 +3365,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48075,
             "range": "± 1341",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "fe2eaf7f25cdc03252c431f9decfadaa2168d08b",
+          "message": "fix(release): repair broken v4.3.1 native packaging steps\n\n- cargo-deb/cargo-generate-rpm asset paths hardcoded the target triple:\n  \"../target/release/pqfile\" only auto-retargets to the per-triple dir\n  when the path starts with exactly \"target/release/\", and the \"../\"\n  prefix a workspace member's Cargo.toml needs breaks that match, so\n  `cargo deb --target ... --no-build` couldn't find the PGO-built binary.\n- create-dmg has no --no-code-sign flag; it only signs when --codesign\n  <identity> is explicitly passed, so the unsigned output we want needs\n  no flag at all. The bogus flag made every macOS DMG build fail.\n\nBoth were caught by the v4.3.1 release run.",
+          "timestamp": "2026-07-16T10:55:22-04:00",
+          "tree_id": "b19430f58078839b195859f6afd63ea853a77564",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/fe2eaf7f25cdc03252c431f9decfadaa2168d08b"
+        },
+        "date": 1784213960651,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66825,
+            "range": "± 351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 958869,
+            "range": "± 3163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 105707412,
+            "range": "± 591730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 108917,
+            "range": "± 737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 978122,
+            "range": "± 4359",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93396371,
+            "range": "± 340884",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 70481,
+            "range": "± 2235",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 972530,
+            "range": "± 5511",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99417123,
+            "range": "± 1954263",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 112039,
+            "range": "± 997",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1019100,
+            "range": "± 13071",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99457100,
+            "range": "± 1613179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48075,
+            "range": "± 102",
             "unit": "ns/iter"
           }
         ]
