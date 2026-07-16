@@ -50,11 +50,18 @@ extended-description = "Quantum-resistant file encryption using ML-KEM-768 and C
 depends = "$auto"
 section = "utils"
 priority = "optional"
+# Hardcoded to the target triple (rather than "../target/release/pqfile" +
+# cargo-deb's auto target-dir substitution) because that substitution only
+# triggers for paths starting with exactly "target/release/" - the leading
+# "../" needed for a workspace member's Cargo.toml breaks the match, so
+# `cargo deb --target ... --no-build` looks in plain target/release/ and
+# fails to find the cross/native-built binary. release.yml only packages
+# x86_64-unknown-linux-gnu today; update this if a second Linux target is added.
 assets = [
-  ["../target/release/pqfile", "usr/bin/", "755"],
+  ["../target/x86_64-unknown-linux-gnu/release/pqfile", "usr/bin/", "755"],
 ]
 
 [package.metadata.generate-rpm]
 assets = [
-  { source = "../target/release/pqfile", dest = "/usr/bin/pqfile", mode = "755" },
+  { source = "../target/x86_64-unknown-linux-gnu/release/pqfile", dest = "/usr/bin/pqfile", mode = "755" },
 ]

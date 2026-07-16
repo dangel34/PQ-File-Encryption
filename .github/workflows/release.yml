@@ -232,9 +232,11 @@ jobs:
           iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/icon.icns"
 
           brew install create-dmg
+          # create-dmg has no "don't sign" flag - it only signs when you
+          # explicitly pass --codesign <identity>, so omitting that flag
+          # entirely already produces the unsigned DMG we want.
           create-dmg \
             --volname "pqfile ${APP_VERSION}" \
-            --no-code-sign \
             "pqfile-${APP_VERSION}-${{ matrix.target }}.dmg" \
             "dist-app/" || true
           # create-dmg exits non-zero on the cosmetic AppleScript Finder-window
