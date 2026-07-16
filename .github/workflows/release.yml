@@ -193,13 +193,19 @@ jobs:
           # an executable named linuxdeploy-plugin-appimage.
           export PATH="$PWD:$PATH"
 
+          # linuxdeploy names the deployed icon after --icon-file's own
+          # basename, and then requires the .desktop file's Icon= to match
+          # that exact name - so the source icon must already be named
+          # pqfile-desktop.png, not the generic icon.png it's stored as.
+          cp pqfile-desktop/assets/icon.png pqfile-desktop.png
+
           # --appimage-extract-and-run: GitHub Actions runners have no FUSE,
           # so linuxdeploy (itself an AppImage) can't mount itself normally.
           ./linuxdeploy --appimage-extract-and-run \
             --appdir AppDir \
             --executable "target/${{ matrix.target }}/release/pqfile-desktop" \
             --desktop-file pqfile-desktop/packaging/pqfile-desktop.desktop \
-            --icon-file pqfile-desktop/assets/icon.png \
+            --icon-file pqfile-desktop.png \
             --output appimage
 
           mv pqfile-*.AppImage "pqfile-desktop-${APP_VERSION}-x86_64.AppImage"
