@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784213961565,
+  "lastUpdate": 1784214876778,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -3467,6 +3467,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48075,
             "range": "± 102",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "b4f857463d7c32ac6c6a6b5b78f84c9a527d6c32",
+          "message": "fix(release): use cargo-deb/generate-rpm's magic target/release prefix\n\nMy first fix hardcoded the target triple into the asset paths, guessing\nthat was needed since \"../target/release/pqfile\" failed. Wrong guess:\ncargo-deb's own Cargo.toml validator rejects both the \"../\" prefix AND\na hardcoded triple, explicitly stating \"target/release\" is a special\nprefix it substitutes internally (workspace- and --target-aware).\ncargo-generate-rpm documents the identical convention. The correct\nfix is the literal string \"target/release/pqfile\", full stop.",
+          "timestamp": "2026-07-16T11:10:36-04:00",
+          "tree_id": "51f7a2e5412223e7983257f6f4d4fd53baa687a5",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/b4f857463d7c32ac6c6a6b5b78f84c9a527d6c32"
+        },
+        "date": 1784214876156,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 72165,
+            "range": "± 1561",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1054105,
+            "range": "± 7787",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 114822446,
+            "range": "± 2700630",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 118291,
+            "range": "± 1453",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1074857,
+            "range": "± 6026",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 103967763,
+            "range": "± 174505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 74407,
+            "range": "± 420",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1100499,
+            "range": "± 10144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 111419995,
+            "range": "± 1588537",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 122979,
+            "range": "± 1591",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1151897,
+            "range": "± 15457",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 111106228,
+            "range": "± 161975",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 53382,
+            "range": "± 147",
             "unit": "ns/iter"
           }
         ]
