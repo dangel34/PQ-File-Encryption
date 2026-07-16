@@ -10,6 +10,7 @@ pub(crate) enum Tab {
     Decrypt,
     Sign,
     Signcrypt,
+    SealedSender,
     Archive,
     Shamir,
     Inspect,
@@ -22,9 +23,10 @@ pub(crate) enum Tab {
 pub(crate) const PRIMARY_TABS: [Tab; 4] = [Tab::Keys, Tab::Keygen, Tab::Encrypt, Tab::Decrypt];
 
 /// The specialized/PKI/multi-party tools tucked under the "More Tools" overflow menu.
-pub(crate) const ADVANCED_TABS: [Tab; 6] = [
+pub(crate) const ADVANCED_TABS: [Tab; 7] = [
     Tab::Sign,
     Tab::Signcrypt,
+    Tab::SealedSender,
     Tab::Archive,
     Tab::Shamir,
     Tab::Inspect,
@@ -41,6 +43,7 @@ pub(crate) fn tab_key(tab: Tab) -> &'static str {
         Tab::Decrypt => "decrypt",
         Tab::Sign => "sign",
         Tab::Signcrypt => "signcrypt",
+        Tab::SealedSender => "sealed-sender",
         Tab::Archive => "archive",
         Tab::Shamir => "shamir",
         Tab::Inspect => "inspect",
@@ -59,6 +62,7 @@ pub(crate) fn tab_label(tab: Tab) -> &'static str {
         Tab::Decrypt => "🔓 Decrypt",
         Tab::Sign => "✏ Sign",
         Tab::Signcrypt => "🔏 Sign & Encrypt",
+        Tab::SealedSender => "🕶 Sealed Sender",
         Tab::Archive => "📦 Archive",
         Tab::Shamir => "🔀 Split Key (Shamir)",
         Tab::Inspect => "🔍 Health Check",
@@ -76,6 +80,7 @@ pub(crate) fn tab_from_key(key: &str) -> Option<Tab> {
         "decrypt" => Some(Tab::Decrypt),
         "sign" => Some(Tab::Sign),
         "signcrypt" => Some(Tab::Signcrypt),
+        "sealed-sender" | "sealed_sender" => Some(Tab::SealedSender),
         "archive" => Some(Tab::Archive),
         "shamir" => Some(Tab::Shamir),
         "inspect" | "doctor" => Some(Tab::Inspect),
@@ -444,6 +449,7 @@ pub(crate) enum CertSubTab {
     #[default]
     Issue,
     Verify,
+    Revoke,
 }
 
 /// Which mode is active in the Signcrypt tab.
@@ -452,6 +458,15 @@ pub(crate) enum SigncryptSubTab {
     #[default]
     Encrypt,
     Decrypt,
+}
+
+/// Which mode is active in the Sealed Sender tab.
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum SealedSenderSubTab {
+    #[default]
+    Identity,
+    Seal,
+    Unseal,
 }
 
 /// Which mode is active in the Archive tab.

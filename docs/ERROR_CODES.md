@@ -49,3 +49,5 @@ Code `0` is a catch-all for errors that do not map to a known variant (should no
 | 32 | `TlockDecryptionFailed` | Beacon signature was fetched but tlock/AEAD decryption failed; ciphertext is likely corrupt or tampered |
 | 33 | `WebauthnPrfRequired` | v10 file was encrypted with a WebAuthn `prf` second factor; present the same enrolled passkey |
 | 34 | `WebauthnPrfNotRequired` | A WebAuthn PRF output was supplied but the file was not encrypted with one (or uses a different second factor); remove it and retry |
+| 35 | `SealedSenderAuthFailed` | Sealed-sender deniable-authentication tag did not verify against the claimed sender's identity key |
+| 36 | `CertRevoked` | Certificate appears in a verified revocation list the caller chose to consult |

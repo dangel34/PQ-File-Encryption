@@ -152,6 +152,91 @@ jobs:
         shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
+      # ── Linux native packages (.deb, .rpm, AppImage) ─────────────────────────
+      # Both packaging tools read the already-built binary at
+      # target/<triple>/release/... (see each Cargo.toml's package.metadata
+      # section) rather than rebuilding, so the PGO-optimized, cargo-auditable
+      # binary from the steps above is what actually ships.
+      - name: Install cargo-deb and cargo-generate-rpm
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        with:
+          tool: cargo-deb,cargo-generate-rpm
+
+      - name: Build .deb package
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo deb -p pqfile-cli --target ${{ matrix.target }} --no-build
+
+      - name: Build .rpm package
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo generate-rpm -p pqfile-cli --target ${{ matrix.target }}
+
+      - name: Build AppImage
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo apt-get install -y --no-install-recommends squashfs-tools
+
+          curl -sSL -o linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -sSL -o linuxdeploy-plugin-appimage \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          chmod +x linuxdeploy linuxdeploy-plugin-appimage
+
+          mkdir -p AppDir
+          # linuxdeploy discovers the appimage plugin by searching PATH for
+          # an executable named linuxdeploy-plugin-appimage.
+          export PATH="$PWD:$PATH"
+
+          # --appimage-extract-and-run: GitHub Actions runners have no FUSE,
+          # so linuxdeploy (itself an AppImage) can't mount itself normally.
+          ./linuxdeploy --appimage-extract-and-run \
+            --appdir AppDir \
+            --executable "target/${{ matrix.target }}/release/pqfile-desktop" \
+            --desktop-file pqfile-desktop/packaging/pqfile-desktop.desktop \
+            --icon-file pqfile-desktop/assets/icon.png \
+            --output appimage
+
+          mv pqfile-*.AppImage "pqfile-desktop-${{ steps.version.outputs.version }}-x86_64.AppImage"
+
+      # ── macOS .app bundle + DMG (unsigned) ───────────────────────────────────
+      # No code signing or notarization: Gatekeeper will warn on first launch
+      # (right-click, Open) until that's set up separately - see docs/ROADMAP.md.
+      - name: Build .app bundle and DMG
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          APP_DIR="dist-app/pqfile.app"
+          mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/pqfile-desktop" "$APP_DIR/Contents/MacOS/"
+          sed "s/@VERSION@/$APP_VERSION/g" pqfile-desktop/packaging/Info.plist.template \
+            > "$APP_DIR/Contents/Info.plist"
+
+          # Generate a multi-resolution .icns from the existing 512x512 PNG.
+          ICONSET="pqfile.iconset"
+          mkdir -p "$ICONSET"
+          for size in 16 32 128 256 512; do
+            sips -z "$size" "$size" pqfile-desktop/assets/icon.png \
+              --out "$ICONSET/icon_${size}x${size}.png" > /dev/null
+            double=$((size * 2))
+            sips -z "$double" "$double" pqfile-desktop/assets/icon.png \
+              --out "$ICONSET/icon_${size}x${size}@2x.png" > /dev/null
+          done
+          iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/icon.icns"
+
+          brew install create-dmg
+          create-dmg \
+            --volname "pqfile ${APP_VERSION}" \
+            --no-code-sign \
+            "pqfile-${APP_VERSION}-${{ matrix.target }}.dmg" \
+            "dist-app/" || true
+          # create-dmg exits non-zero on the cosmetic AppleScript Finder-window
+          # step (no GUI session on a CI runner) even after writing a valid
+          # DMG; verify the output actually exists rather than trusting $?.
+          test -f "pqfile-${APP_VERSION}-${{ matrix.target }}.dmg"
+
       # The version goes through env vars rather than ${{ }} interpolation into
       # scripts here and below (shell-injection vector, zizmor
       # template-injection); it derives from the pushed tag name.
@@ -182,6 +267,20 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           cp "pqfile-desktop/packaging/output/pqfile-setup-${APP_VERSION}.exe" dist/
+
+      - name: Stage Linux packages
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          cp target/debian/*.deb dist/
+          cp "target/${{ matrix.target }}/generate-rpm"/*.rpm dist/
+          cp pqfile-desktop-*.AppImage dist/
+
+      - name: Stage macOS DMG
+        if: matrix.os == 'macos-latest'
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: cp "pqfile-${APP_VERSION}-${{ matrix.target }}.dmg" dist/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

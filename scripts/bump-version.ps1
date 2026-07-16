@@ -40,15 +40,31 @@ cargo fmt --check
 if ($LASTEXITCODE -ne 0) { Write-Error "cargo fmt check failed - run 'cargo fmt' then re-check"; exit 1 }
 Write-Host "  fmt OK"
 
-Write-Host "Running clippy..."
-cargo clippy -q --workspace --all-targets -- --deny warnings
-if ($LASTEXITCODE -ne 0) { Write-Error "Clippy failed - fix warnings before releasing"; exit 1 }
-Write-Host "  clippy OK"
-
-Write-Host "Running tests..."
-cargo test --workspace -q
-if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed - aborting version bump"; exit 1 }
-Write-Host "  all tests passed"
+# Mirrors ci.yml's test-and-lint job plus every optional-feature job
+# (fido2 x2, kem-libcrux, tlock x2) exactly, so a feature-gated regression is
+# caught here instead of only after the tag is already pushed. Slower than a
+# single default-features pass, but that's the actual bar CI holds every
+# push to - a bump script that checks less than CI does is false confidence.
+$checks = @(
+    @{ Name = "clippy (workspace, async)";     Cmd = "cargo clippy --workspace --all-targets --features pqfile/async -- --deny warnings" }
+    @{ Name = "test (workspace, async)";       Cmd = "cargo test --workspace --features pqfile/async -q" }
+    @{ Name = "clippy (pqfile-cli, fido2)";    Cmd = "cargo clippy -p pqfile-cli --all-targets --features fido2 -- --deny warnings" }
+    @{ Name = "test (pqfile-cli, fido2)";      Cmd = "cargo test -p pqfile-cli --features fido2 -q" }
+    @{ Name = "clippy (pqfile-gui, fido2)";    Cmd = "cargo clippy -p pqfile-gui --all-targets --features fido2 -- --deny warnings" }
+    @{ Name = "test (pqfile-gui, fido2)";      Cmd = "cargo test -p pqfile-gui --features fido2 -q" }
+    @{ Name = "clippy (pqfile, kem-libcrux)";  Cmd = "cargo clippy -p pqfile --all-targets --features kem-libcrux -- --deny warnings" }
+    @{ Name = "test (pqfile, kem-libcrux)";    Cmd = "cargo test -p pqfile --features kem-libcrux -q" }
+    @{ Name = "clippy (pqfile, tlock)";        Cmd = "cargo clippy -p pqfile --all-targets --features tlock -- --deny warnings" }
+    @{ Name = "test (pqfile, tlock)";          Cmd = "cargo test -p pqfile --features tlock -q" }
+    @{ Name = "clippy (pqfile-cli, tlock)";    Cmd = "cargo clippy -p pqfile-cli --all-targets --features tlock -- --deny warnings" }
+    @{ Name = "test (pqfile-cli, tlock)";      Cmd = "cargo test -p pqfile-cli --features tlock -q" }
+)
+foreach ($check in $checks) {
+    Write-Host "Running $($check.Name)..."
+    Invoke-Expression $check.Cmd
+    if ($LASTEXITCODE -ne 0) { Write-Error "$($check.Name) failed - fix it before releasing"; exit 1 }
+    Write-Host "  $($check.Name) OK"
+}
 
 # ── Version replacements ───────────────────────────────────────────────────
 

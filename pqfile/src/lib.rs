@@ -120,6 +120,10 @@ pub mod sign;
 /// Signcrypt: sign-then-encrypt and decrypt-then-verify in a single step.
 pub mod signcrypt;
 
+/// Sealed sender: deniable sender authentication via a static X25519 identity
+/// keypair, distinct from the non-repudiable proof `signcrypt` provides.
+pub mod sealed_sender;
+
 /// Add a recipient to an existing multi-recipient file without re-encrypting.
 pub mod add_recipient;
 

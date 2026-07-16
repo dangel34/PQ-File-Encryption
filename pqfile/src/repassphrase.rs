@@ -3,6 +3,7 @@ use pem::Pem;
 use crate::error::PqfileError;
 use crate::keygen::{PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_512, PRIV_ENC_TAG_HYBRID_768};
 use crate::passphrase;
+use crate::sealed_sender::{IDENTITY_PRIV_ENC_TAG, IDENTITY_PRIV_TAG, IDENTITY_PUB_TAG};
 use crate::sign::{SK_ENC_TAG, SK_TAG, SLH_SK_ENC_TAG, SLH_SK_TAG, SLH_VK_TAG, VK_TAG};
 
 /// Result of a successful `repassphrase` operation.
@@ -25,9 +26,9 @@ pub struct RepassphraseResult {
 ///
 /// # Supported key types
 ///
-/// ML-KEM-512, ML-KEM-768, ML-KEM-1024, hybrid X25519+ML-KEM-768, and
-/// ML-DSA-65 signing keys. Passing an unencrypted or public key returns
-/// `PqfileError::InvalidPem`.
+/// ML-KEM-512, ML-KEM-768, ML-KEM-1024, hybrid X25519+ML-KEM-768, ML-DSA-65
+/// / SLH-DSA-SHAKE-192f signing keys, and sealed-sender X25519 identity keys.
+/// Passing an unencrypted or public key returns `PqfileError::InvalidPem`.
 ///
 /// # Errors
 ///
@@ -85,14 +86,27 @@ pub fn repassphrase(
             pem::encode(&Pem::new(t, new_body))
         }
 
+        // ── Sealed-sender X25519 identity key (32-byte seed) ─────────────────
+        // No legacy p=1 fallback: identity keys postdate the Argon2 migration.
+        t @ IDENTITY_PRIV_ENC_TAG => {
+            let seed = passphrase::decrypt_identity_seed(parsed.contents(), old_passphrase)?;
+            let new_body = passphrase::encrypt_identity_seed(&seed, new_passphrase)?;
+            pem::encode(&Pem::new(t, new_body))
+        }
+
         // ── Unencrypted or public keys ────────────────────────────────────────
         t @ (SK_TAG | SLH_SK_TAG) => Err(PqfileError::InvalidPem(format!(
             "'{t}' is not encrypted; use `pqfile sign-keygen --passphrase` to create \
              an encrypted signing key"
         )))?,
 
-        t @ (VK_TAG | SLH_VK_TAG) => Err(PqfileError::InvalidPem(format!(
-            "'{t}' is a public verifying key, not a private key"
+        t @ IDENTITY_PRIV_TAG => Err(PqfileError::InvalidPem(format!(
+            "'{t}' is not encrypted; use `pqfile identity-keygen --passphrase` to create \
+             an encrypted identity key"
+        )))?,
+
+        t @ (VK_TAG | SLH_VK_TAG | IDENTITY_PUB_TAG) => Err(PqfileError::InvalidPem(format!(
+            "'{t}' is a public key, not a private key"
         )))?,
 
         tag => Err(PqfileError::InvalidPem(format!(
@@ -239,6 +253,45 @@ mod tests {
         // Verify the new key signs and verifies correctly.
         let sig = crate::sign::sign_bytes(&r.privkey_pem, b"hello", Some("newsign")).unwrap();
         crate::sign::verify_bytes(&sk.vk_pem, b"hello", &sig).unwrap();
+    }
+
+    #[test]
+    fn repassphrase_identity_key_roundtrip() {
+        use crate::sealed_sender::{
+            identity_keygen_bytes, is_identity_key_encrypted, seal_bytes, unseal_bytes,
+        };
+
+        let sender_id = identity_keygen_bytes(Some("oldid")).unwrap();
+        let r = repassphrase(&sender_id.sk_pem, "oldid", "newid", false).unwrap();
+        assert!(is_identity_key_encrypted(&r.privkey_pem));
+
+        let (recipient_pub, recipient_priv) = keygen_bytes(768, None).unwrap();
+        let recipient_id = identity_keygen_bytes(None).unwrap();
+        let plaintext = b"repassphrased identity key";
+        let mut output = Vec::new();
+        seal_bytes(
+            &r.privkey_pem,
+            Some("newid"),
+            &recipient_id.pk_pem,
+            &recipient_pub,
+            plaintext,
+            &mut output,
+            crate::format::CHUNK_SIZE,
+        )
+        .unwrap();
+        let out = unseal_bytes(
+            &recipient_priv,
+            None,
+            &recipient_id.sk_pem,
+            None,
+            &sender_id.pk_pem,
+            output.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(out, plaintext);
+
+        // Old passphrase no longer works.
+        assert!(repassphrase(&r.privkey_pem, "oldid", "x", false).is_err());
     }
 
     #[test]

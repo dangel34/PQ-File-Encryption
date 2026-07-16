@@ -761,4 +761,118 @@ mod tests {
         assert!(matches!(app.encrypt_recipient_error, OpStatus::Err(_)));
         assert!(app.encrypt_recipients.is_empty());
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cert_revoke_via_gui_then_verify_reports_revoked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let now = crate::types::current_unix_secs();
+        let cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &subject_pub,
+            "x",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::ENCRYPT,
+        )
+        .unwrap();
+
+        let mut app = PqfileApp::default();
+        app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
+        app.cert_revoke_ca_key = loaded_input("ca_sk.pem", ca.sk_pem.into_bytes(), None);
+        app.cert_revoke_cert = loaded_input("subject.cert", cert_pem.clone().into_bytes(), None);
+        app.cert_revoke_reason = "compromised".to_owned();
+        app.do_revoke_cert();
+        let OpStatus::Ok(_) = &app.cert_revoke_status else {
+            panic!("revoke_cert failed: {:?}", app.cert_revoke_status);
+        };
+        let list_path = app
+            .cert_revoke_output_path
+            .clone()
+            .expect("output path set");
+        let list_pem = std::fs::read_to_string(&list_path).unwrap();
+
+        // Verifying the now-revoked cert with the list loaded reports it as revoked.
+        let mut verify_app = PqfileApp::default();
+        verify_app.cert_verify_ca_vk = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
+        verify_app.cert_verify_cert = loaded_input("subject.cert", cert_pem.into_bytes(), None);
+        verify_app.cert_verify_revocations =
+            loaded_input("revocations.pem", list_pem.into_bytes(), None);
+        verify_app.do_verify_cert();
+
+        assert!(matches!(verify_app.cert_verify_status, OpStatus::Err(_)));
+        assert!(verify_app.cert_verify_result.is_none());
+    }
+
+    #[test]
+    fn encrypt_certificate_recipient_revoked_sets_error() {
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let now = crate::types::current_unix_secs();
+        let cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &subject_pub,
+            "test recipient",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::ENCRYPT,
+        )
+        .unwrap();
+        let list_pem =
+            pqfile::cert::revoke_cert(&ca.sk_pem, None, None, &cert_pem, "leaked", now).unwrap();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_ca_key = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
+        app.encrypt_ca_revocations = loaded_input("revocations.pem", list_pem.into_bytes(), None);
+        app.encrypt_pubkey = loaded_input("recipient.cert", cert_pem.into_bytes(), None);
+        app.poll_files();
+
+        assert!(matches!(app.encrypt_recipient_error, OpStatus::Err(_)));
+        assert!(app.encrypt_recipients.is_empty());
+    }
+
+    #[test]
+    fn encrypt_certificate_recipient_unrevoked_still_accepted_with_revocations_loaded() {
+        let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let (revoked_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let now = crate::types::current_unix_secs();
+        let revoked_cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &revoked_pub,
+            "revoked",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::ENCRYPT,
+        )
+        .unwrap();
+        let cert_pem = pqfile::cert::issue_cert(
+            &ca.sk_pem,
+            None,
+            &subject_pub,
+            "untouched",
+            now,
+            now + 86_400,
+            pqfile::cert::cert_use::ENCRYPT,
+        )
+        .unwrap();
+        let list_pem =
+            pqfile::cert::revoke_cert(&ca.sk_pem, None, None, &revoked_cert_pem, "leaked", now)
+                .unwrap();
+
+        let mut app = PqfileApp::default();
+        app.encrypt_ca_key = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
+        app.encrypt_ca_revocations = loaded_input("revocations.pem", list_pem.into_bytes(), None);
+        app.encrypt_pubkey = loaded_input("recipient.cert", cert_pem.into_bytes(), None);
+        app.poll_files();
+
+        assert!(matches!(app.encrypt_recipient_error, OpStatus::None));
+        assert_eq!(app.encrypt_recipients.len(), 1);
+        assert_eq!(app.encrypt_recipients[0].pem, subject_pub);
+    }
 }

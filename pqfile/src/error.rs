@@ -192,6 +192,16 @@ pub enum PqfileError {
         allowed: u8,
     },
 
+    /// A certificate presented as a recipient or verifying key appears in a
+    /// verified [`crate::cert::RevocationList`] the caller chose to consult.
+    #[error("certificate has been revoked (id: {cert_id}): {reason}")]
+    CertRevoked {
+        /// Colon-separated hex prefix of the revoked certificate's [`crate::cert::cert_id`].
+        cert_id: String,
+        /// Human-readable reason supplied at revocation time.
+        reason: String,
+    },
+
     /// A tlock (`tlock` feature) file cannot be decrypted yet: the drand relay
     /// reports the target round has not fired. Not an error condition per se;
     /// retry after the round's expected time.
@@ -234,6 +244,18 @@ pub enum PqfileError {
     /// [`Fido2NotRequired`]: PqfileError::Fido2NotRequired
     #[error("file was not encrypted with a WebAuthn PRF second factor; remove it and retry")]
     WebauthnPrfNotRequired,
+
+    /// A [`crate::sealed_sender`] deniable-authentication tag did not verify
+    /// against the claimed sender's identity key. Unlike
+    /// [`SignatureVerificationFailed`], this only means the specific
+    /// recipient's own key material could not reproduce the tag - by design,
+    /// no third party (including one holding the sender's identity public
+    /// key) can distinguish "wrong sender" from "the true recipient forged
+    /// this" after the fact.
+    ///
+    /// [`SignatureVerificationFailed`]: PqfileError::SignatureVerificationFailed
+    #[error("sealed-sender authentication failed: the claimed sender's identity key did not produce a valid tag")]
+    SealedSenderAuthFailed,
 }
 
 impl PqfileError {
@@ -284,6 +306,8 @@ impl PqfileError {
             PqfileError::TlockDecryptionFailed => 32,
             PqfileError::WebauthnPrfRequired => 33,
             PqfileError::WebauthnPrfNotRequired => 34,
+            PqfileError::SealedSenderAuthFailed => 35,
+            PqfileError::CertRevoked { .. } => 36,
         }
     }
 }

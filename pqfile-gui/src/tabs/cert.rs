@@ -27,12 +27,14 @@ impl PqfileApp {
             &[
                 ("Issue Certificate", CertSubTab::Issue),
                 ("Verify Certificate", CertSubTab::Verify),
+                ("Revoke Certificate", CertSubTab::Revoke),
             ],
             dark,
         );
         match self.cert_sub_tab {
             CertSubTab::Issue => self.show_issue_cert_section(ui, dark),
             CertSubTab::Verify => self.show_verify_cert_section(ui, dark),
+            CertSubTab::Revoke => self.show_revoke_cert_section(ui, dark),
         }
     }
 
@@ -245,6 +247,15 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            ui.add_space(4.0);
+            file_row(
+                ui,
+                "CA revocation list (optional)",
+                &mut self.cert_verify_revocations,
+                "PEM",
+                &["pem"],
+                dark,
+            );
         });
         ui.add_space(8.0);
 
@@ -305,6 +316,14 @@ impl PqfileApp {
         };
         match cert::verify_cert(&ca_vk_pem, &cert_pem, current_unix_secs()) {
             Ok(c) => {
+                if let Err(e) = cert::check_cert_not_revoked_pem(
+                    &ca_vk_pem,
+                    self.cert_verify_revocations.as_str(),
+                    &cert_pem,
+                ) {
+                    self.cert_verify_status = OpStatus::Err(e.to_string());
+                    return;
+                }
                 self.cert_verify_status =
                     OpStatus::Ok(format!("Certificate is valid: {}", c.label));
                 self.cert_verify_result = Some(c);
@@ -313,6 +332,161 @@ impl PqfileApp {
                 self.cert_verify_status = OpStatus::Err(e.to_string());
             }
         }
+    }
+
+    // ── Revoke certificate ───────────────────────────────────────────────────
+
+    fn show_revoke_cert_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        section_label(ui, "REVOKE CERTIFICATE", dark);
+        ui.label(
+            RichText::new(
+                "Appends the certificate to a CA-signed revocation list and re-signs the \
+                 whole list. There is no way to un-revoke a certificate; issue a new one \
+                 instead.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(6.0);
+        let mut pp_submitted = false;
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            file_row(
+                ui,
+                "CA signing key (.pem)",
+                &mut self.cert_revoke_ca_key,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            pp_submitted = passphrase_row(
+                ui,
+                "CA key passphrase (if encrypted):",
+                &mut self.cert_revoke_ca_passphrase,
+                &mut self.cert_revoke_ca_passphrase_visible,
+                "Leave empty for an unencrypted key",
+                dark,
+            );
+            ui.add_space(4.0);
+            file_row(
+                ui,
+                "Certificate to revoke (.pem)",
+                &mut self.cert_revoke_cert,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            file_row(
+                ui,
+                "Existing revocation list (optional)",
+                &mut self.cert_revoke_existing,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(4.0);
+            let row_w = ui.available_width();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Reason:").size(13.0).color(c_subtext(dark)));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.cert_revoke_reason)
+                        .hint_text("e.g. private key compromised")
+                        .desired_width(row_w),
+                );
+            });
+        });
+        ui.add_space(8.0);
+
+        let ready = self.cert_revoke_ca_key.loaded() && self.cert_revoke_cert.loaded();
+        if ui
+            .add_enabled(
+                ready,
+                egui::Button::new(
+                    RichText::new("🚫  Revoke Certificate")
+                        .size(14.0)
+                        .color(c_chrome(dark))
+                        .strong(),
+                )
+                .fill(c_accent(dark))
+                .min_size(Vec2::new(180.0, 32.0)),
+            )
+            .on_disabled_hover_text("Load the CA signing key and the certificate to revoke.")
+            .clicked()
+            || (ready
+                && (pp_submitted
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
+        {
+            self.do_revoke_cert();
+        }
+
+        show_status(ui, &self.cert_revoke_status, dark);
+    }
+
+    pub(crate) fn do_revoke_cert(&mut self) {
+        let ca_sk_pem = match self.cert_revoke_ca_key.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.cert_revoke_status = OpStatus::Err("Load a CA signing key first.".to_owned());
+                return;
+            }
+        };
+        let cert_pem = match self.cert_revoke_cert.as_str().map(str::to_owned) {
+            Some(s) => s,
+            None => {
+                self.cert_revoke_status =
+                    OpStatus::Err("Load the certificate to revoke first.".to_owned());
+                return;
+            }
+        };
+        let existing_pem = self.cert_revoke_existing.as_str().map(str::to_owned);
+        let passphrase = if self.cert_revoke_ca_passphrase.is_empty() {
+            None
+        } else {
+            Some(zeroize::Zeroizing::new(
+                (*self.cert_revoke_ca_passphrase).clone(),
+            ))
+        };
+
+        let now = current_unix_secs();
+        match cert::revoke_cert(
+            &ca_sk_pem,
+            passphrase.as_deref().map(String::as_str),
+            existing_pem.as_deref(),
+            &cert_pem,
+            self.cert_revoke_reason.trim(),
+            now,
+        ) {
+            Ok(list_pem) => {
+                let filename = "revocations.pem";
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let native_path = if self.settings.output_dir.is_empty() {
+                        std::path::PathBuf::from(filename)
+                    } else {
+                        std::path::PathBuf::from(&self.settings.output_dir).join(filename)
+                    };
+                    self.cert_revoke_output_path = Some(native_path.to_string_lossy().into_owned());
+                    self.cert_revoke_status = save_result(
+                        filename,
+                        list_pem.as_bytes(),
+                        Some(native_path),
+                        self.settings.confirm_overwrite,
+                    );
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.cert_revoke_status =
+                        save_result(filename, list_pem.as_bytes(), None, false);
+                }
+            }
+            Err(e) => {
+                self.cert_revoke_status = OpStatus::Err(e.to_string());
+            }
+        }
+        // The passphrase's one-shot job (unlocking the CA key for this signature) is
+        // done either way; don't leave it sitting in memory for the rest of the session.
+        self.cert_revoke_ca_passphrase.zeroize();
     }
 }
 

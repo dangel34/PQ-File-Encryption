@@ -1,6 +1,6 @@
 # pqfile Format Specification
 
-This document is the authoritative byte-level description of all `.pqf` file format versions (v2 through v10), plus the stealth mode (§5.10) and Padmé padding (§5.11) that layer on top without a version bump. All multi-byte integers are little-endian unless stated otherwise.
+This document is the authoritative byte-level description of all `.pqf` file format versions (v2 through v11, the last gated behind the `tlock` Cargo feature), plus the stealth mode (§5.10) and Padmé padding (§5.11) that layer on top without a version bump. All multi-byte integers are little-endian unless stated otherwise.
 
 ---
 
@@ -588,10 +588,11 @@ Offset  Len  Field
 
 A certificate binds a subject key to a label, a validity window, and an allowed-use
 bitmask, signed by a CA signing key (ML-DSA-65 or SLH-DSA-SHAKE-192f, via the `sign`
-module - see 6.2). Certificates do not chain and carry no revocation mechanism beyond
-the validity window. Body layout (self-delimiting: every variable-length field carries
-its own length prefix, so the signed range is exactly `body`, with `SIG_LEN`/`SIG`
-appended afterward):
+module - see 6.2). Certificates do not chain; revocation before the validity window
+naturally expires is available via an optional revocation list (§6.5) rather than
+being built into the certificate itself. Body layout (self-delimiting: every
+variable-length field carries its own length prefix, so the signed range is exactly
+`body`, with `SIG_LEN`/`SIG` appended afterward):
 
 ```
 Offset  Len   Field
@@ -615,6 +616,59 @@ hands back a ready-to-use, self-describing PEM (`SUBJECT_TAG` + `SUBJECT_KEY`) w
 the caller needing to know the key type in advance - any current or future pqfile
 public key type can be certified without a format change here.
 
+### 6.5 Certificate revocation lists
+
+| PEM Label | Contents |
+|-----------|----------|
+| `PQFILE CERTIFICATE REVOCATION LIST` | CA-signed list of revoked certificate identifiers (see below) |
+
+A compact analogue of an X.509 CRL: a CA-signed list of revoked certificate
+identifiers, consulted optionally alongside `verify_cert` wherever a certificate is
+accepted. Body layout (self-delimiting, same pattern as §6.4):
+
+```
+Offset  Len   Field
+0       4     MAGIC ("PQRL")
+4       1     VERSION (0x01)
+5       8     ISSUED_AT (Unix seconds, LE)
+13      4     COUNT (LE; number of entries, ≤ 65536)
+17+     var   ENTRY * COUNT
+...     4     SIG_LEN (LE)
+...     var   SIG (CA signature over everything from MAGIC through the last entry)
+```
+
+Each entry:
+
+```
+Len   Field
+32    CERT_ID (SHA3-256 of the certificate's signed body, i.e. `body` in §6.4)
+8     REVOKED_AT (Unix seconds, LE)
+2     REASON_LEN (LE, ≤ 256)
+var   REASON (UTF-8)
+```
+
+`CERT_ID` is derived from the certificate's own signed body rather than a
+CA-assigned serial number, so two certificates issued with byte-identical fields
+(label, validity window, allowed use, subject key) share an identifier and a
+re-issued certificate with different parameters gets a new one. There is no way to
+remove an entry once appended (no un-revoke); a fresh list is produced by
+re-signing the previous entries plus the new one. A revocation list has no
+expiry of its own - staleness is a caller concern, addressed by fetching a fresh
+copy, not by a field in the format.
+
+### 6.6 Sealed-sender identity keys
+
+| PEM Label | Contents |
+|-----------|----------|
+| `X25519 IDENTITY PUBLIC KEY` | 32-byte X25519 public key |
+| `X25519 IDENTITY PRIVATE KEY` | 32-byte X25519 scalar (plaintext) |
+| `X25519 IDENTITY ENCRYPTED PRIVATE KEY` | 76-byte encrypted body (see Section 7) |
+
+Identity keys are a separate X25519 key pair from a recipient's ML-KEM encryption
+key and from any ML-DSA/SLH-DSA signing key; they exist solely to derive the
+deniable-authentication tag described in Section 9. Produced by
+`pqfile identity-keygen`.
+
 ---
 
 ## 7. Passphrase-Protected Private Key Format
@@ -634,6 +688,7 @@ Offset  Len   Field
 | Hybrid X25519+ML-KEM-768 | 96 bytes | 140 bytes |
 | ML-DSA-65 signing | 32 bytes | 76 bytes |
 | SLH-DSA-SHAKE-192f signing | 72 bytes | 116 bytes |
+| X25519 sealed-sender identity | 32 bytes | 76 bytes |
 
 KDF: **Argon2id** (RFC 9106), parameters m=65536 (64 MiB), t=3, p=4, output=32 bytes.
 
@@ -666,11 +721,37 @@ The signature covers `SHA3-256(original_plaintext)`, not the raw bytes, enabling
 
 ---
 
-## 9. Encrypted Archive Format (PQFA)
+## 9. Sealed Sender Layout
+
+A sealed-sender file is a standard v3 `.pqf` file, encrypted to the recipient's normal ML-KEM/hybrid encryption public key, whose plaintext payload is:
+
+```
+[tag: 32 bytes][original plaintext: N bytes]
+```
+
+Unlike Section 8's signature, the tag is not a non-repudiable proof: it is derived from a static-static X25519 Diffie-Hellman between the sender's and recipient's *identity* key pairs (Section 6.5), separate from any ML-KEM encryption key or ML-DSA/SLH-DSA signing key. Because either party's private key plus the other's public key reproduces the same shared secret, the recipient could have forged an identical tag themselves - so verification convinces the intended recipient but proves nothing to a third party, even one later holding the plaintext, the ciphertext, and the sender's identity public key.
+
+Derivation, given the sender's identity key pair `(sender_sk, sender_pk)` and the recipient's identity key pair `(recipient_sk, recipient_pk)`:
+
+```
+dh          = X25519(sender_sk, recipient_pk)         # == X25519(recipient_sk, sender_pk)
+auth_key    = HKDF-SHA256(salt=None, ikm=dh)
+                .expand(info = "pqfile-sealed-sender-auth-v1" || sender_pk || recipient_pk, len=32)
+plaintext_h = SHA3-256(original plaintext)
+tag         = SHA3-256("pqfile-sealed-sender-tag-v1" || auth_key || plaintext_h)
+```
+
+Both identity public keys are bound into the HKDF `info` string so the same DH shared secret can never be replayed across a different (sender, recipient) pairing. `ORIGINAL_SIZE` in the header stores `32 + N`. The tag is inside the AEAD ciphertext, so it cannot be stripped or observed without first breaking the ML-KEM/hybrid encryption layer.
+
+`unseal_bytes` buffers the entire plaintext internally and only returns it once the tag verifies (`PqfileError::SealedSenderAuthFailed`, code 35, otherwise) - unlike Section 8's `signdecrypt`, there is no streaming write-before-verify variant.
+
+---
+
+## 10. Encrypted Archive Format (PQFA)
 
 An encrypted archive is a standard v3 `.pqf` file. Its decrypted plaintext consists of two sections: a manifest header followed by all file data concatenated in manifest order.
 
-### 9.1 Manifest header
+### 10.1 Manifest header
 
 ```
 Offset  Len  Field
@@ -691,7 +772,7 @@ var    PATH (UTF-8, PATH_LEN bytes; no null terminator, no leading slash, no `..
 4      MODE (u32 LE; Unix permission bits; 0 on Windows)
 ```
 
-### 9.2 Data section
+### 10.2 Data section
 
 Immediately after the manifest, file data is written in the same order as the metadata entries:
 
@@ -704,7 +785,7 @@ FILE_SIZE[N-1] bytes  (data for entry N-1)
 
 There is no per-file delimiter; the reader uses `FILE_SIZE` from the manifest to know exactly how many bytes to consume for each entry.
 
-### 9.3 Path validation on extract
+### 10.3 Path validation on extract
 
 Decoders MUST reject archive entries whose path:
 - is absolute (starts with `/` or a drive letter on Windows),
@@ -715,7 +796,7 @@ Decoders MUST reject archives with COUNT greater than 65536.
 
 ---
 
-## 10. Bech32 Recipient Strings
+## 11. Bech32 Recipient Strings
 
 Public keys may be distributed as a compact, human-readable Bech32m string instead of a PEM file. This is purely a key-transport encoding; it has no effect on the `.pqf` wire format.
 
@@ -740,9 +821,9 @@ Offset  Len   Field
 
 ---
 
-## 11. Compliance Notes
+## 12. Compliance Notes
 
-- An implementation MUST accept v2 through v10 on read.
+- An implementation MUST accept v2 through v11 on read (v11 gated behind the `tlock` Cargo feature).
 - An implementation MAY refuse to write any deprecated version.
 - A decryptor for v4/v7 MUST iterate all recipient entries before returning `NoMatchingRecipient`; it MUST NOT short-circuit on a failed decapsulation for the correct variant.
 - A v7/v8/v9 decryptor MUST treat entry order as meaningless and MUST NOT assume any mapping between position and identity.
@@ -752,3 +833,4 @@ Offset  Len   Field
 - Decoders MUST reject v4/v7/v8/v9 files where `COUNT` is greater than 256. A crafted maximum value of 65535 would cause a large header allocation before any AEAD verification.
 - Decoders MUST enforce a ceiling on v10 `M_KIB`, `T_COST`, and `P_COST` before calling the KDF. These fields are attacker-controlled; exceeding the ceiling MUST return an error rather than attempting derivation.
 - `rekey` MUST NOT accept v2 files as input. v2 uses a single whole-file AEAD whose payload format is incompatible with the v4 STREAM chunk layout that rekey produces. A v2 file rekeyed to v4 format cannot be decrypted.
+- Decoders MUST reject certificate revocation lists (§6.5) where `COUNT` is greater than 65536. A crafted maximum value would cause a large allocation before the signature covering the list is verified.

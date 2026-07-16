@@ -7,6 +7,7 @@ pub(crate) mod encrypt;
 pub(crate) mod fido2_ui;
 pub(crate) mod keygen;
 pub(crate) mod keys;
+pub(crate) mod sealed_sender;
 pub(crate) mod settings;
 pub(crate) mod shamir;
 pub(crate) mod sign;

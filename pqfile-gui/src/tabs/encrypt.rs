@@ -744,6 +744,15 @@ impl PqfileApp {
                 dark,
             );
             ui.add_space(6.0);
+            file_row(
+                ui,
+                "CA revocation list (optional)",
+                &mut self.encrypt_ca_revocations,
+                "PEM",
+                &["pem"],
+                dark,
+            );
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let n = self.encrypt_recipients.len();
                 if n == 0 {

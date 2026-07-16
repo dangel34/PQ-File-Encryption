@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=pqfile
+Comment=Quantum-resistant file encryption
+Exec=pqfile-desktop
+Icon=pqfile-desktop
+Categories=Utility;Security;
+Terminal=false

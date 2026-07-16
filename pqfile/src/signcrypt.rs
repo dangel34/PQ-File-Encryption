@@ -181,7 +181,11 @@ pub fn signcrypt_bytes(
     encrypt::encrypt_stream(pubkey_pem, combined_size, chunk_size, &mut combined, writer)
 }
 
-fn hash_stream<R: Read>(reader: &mut R) -> Result<Vec<u8>, PqfileError> {
+/// Hashes `reader` to the end in `CHUNK_SIZE`-sized reads without buffering
+/// the whole stream in memory. Shared with [`crate::sealed_sender::seal`],
+/// which needs the same "hash a `Read + Seek` stream, then rewind and encrypt
+/// it" shape.
+pub(crate) fn hash_stream<R: Read>(reader: &mut R) -> Result<Vec<u8>, PqfileError> {
     let mut hasher = Sha3_256::new();
     let mut buf = vec![0u8; CHUNK_SIZE];
     loop {

@@ -5,7 +5,8 @@ use crate::theme::apply_theme;
 use crate::types::{
     pem_variant_name, tab_label, ArchiveSubTab, BatchPending, CertSubTab, DecryptMode,
     DecryptSubTab, EncryptMode, FileInput, KeygenAlgorithm, MultiFileEntry, OpStatus, PickedFile,
-    RecipientEntry, SecondFactorMode, Settings, ShamirSubTab, SignSubTab, SigncryptSubTab, Tab,
+    RecipientEntry, SealedSenderSubTab, SecondFactorMode, Settings, ShamirSubTab, SignSubTab,
+    SigncryptSubTab, Tab,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry};
@@ -53,6 +54,9 @@ pub struct PqfileApp {
     /// certificate (produced by the Keys tab's Issue Certificate panel or the CLI's
     /// `issue-cert`). Unused otherwise.
     pub(crate) encrypt_ca_key: FileInput,
+    /// CA-signed revocation list, consulted alongside `encrypt_ca_key` when set.
+    /// Optional: a staged certificate is accepted even without a matching entry.
+    pub(crate) encrypt_ca_revocations: FileInput,
     /// Surfaces certificate resolution failures (missing/wrong CA key, expired
     /// certificate, wrong allowed-use) from `promote_staged_pubkey`, distinct from any
     /// per-file encrypt status.
@@ -229,7 +233,7 @@ pub struct PqfileApp {
     pub(crate) revoke_reason: String,
     pub(crate) revoke_status: OpStatus,
 
-    // ── Keys tab: Issue / Verify Certificate panel ─────────────────────────
+    // ── Keys tab: Issue / Verify / Revoke Certificate panel ─────────────────
     pub(crate) cert_sub_tab: CertSubTab,
     pub(crate) cert_issue_ca_key: FileInput,
     pub(crate) cert_issue_ca_passphrase: Zeroizing<String>,
@@ -244,8 +248,48 @@ pub struct PqfileApp {
     pub(crate) cert_issue_output_path: Option<String>,
     pub(crate) cert_verify_ca_vk: FileInput,
     pub(crate) cert_verify_cert: FileInput,
+    /// Optional: when loaded, `do_verify_cert` also checks the certificate
+    /// against this CA-signed revocation list.
+    pub(crate) cert_verify_revocations: FileInput,
     pub(crate) cert_verify_status: OpStatus,
     pub(crate) cert_verify_result: Option<pqfile::cert::Certificate>,
+    pub(crate) cert_revoke_ca_key: FileInput,
+    pub(crate) cert_revoke_ca_passphrase: Zeroizing<String>,
+    pub(crate) cert_revoke_ca_passphrase_visible: bool,
+    pub(crate) cert_revoke_cert: FileInput,
+    /// Optional: entries carry forward into the newly signed list when loaded.
+    pub(crate) cert_revoke_existing: FileInput,
+    pub(crate) cert_revoke_reason: String,
+    pub(crate) cert_revoke_status: OpStatus,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) cert_revoke_output_path: Option<String>,
+
+    // ── Sealed Sender tab: Identity keygen + Seal + Unseal ──────────────────
+    pub(crate) sealed_sender_sub_tab: SealedSenderSubTab,
+    pub(crate) identity_keygen_use_passphrase: bool,
+    pub(crate) identity_keygen_passphrase: Zeroizing<String>,
+    pub(crate) identity_keygen_passphrase_confirm: Zeroizing<String>,
+    pub(crate) identity_keygen_status: OpStatus,
+    pub(crate) seal_sender_identity_key: FileInput,
+    pub(crate) seal_sender_identity_passphrase: Zeroizing<String>,
+    pub(crate) seal_sender_identity_passphrase_visible: bool,
+    pub(crate) seal_recipient_identity_pubkey: FileInput,
+    pub(crate) seal_recipient_pubkey: FileInput,
+    pub(crate) seal_input: FileInput,
+    pub(crate) seal_status: OpStatus,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) seal_output_path: Option<String>,
+    pub(crate) unseal_privkey: FileInput,
+    pub(crate) unseal_privkey_passphrase: Zeroizing<String>,
+    pub(crate) unseal_privkey_passphrase_visible: bool,
+    pub(crate) unseal_identity_key: FileInput,
+    pub(crate) unseal_identity_passphrase: Zeroizing<String>,
+    pub(crate) unseal_identity_passphrase_visible: bool,
+    pub(crate) unseal_sender_identity_pubkey: FileInput,
+    pub(crate) unseal_input: FileInput,
+    pub(crate) unseal_status: OpStatus,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) unseal_output_path: Option<String>,
 
     pub(crate) rekey_privkey: FileInput,
     pub(crate) rekey_privkey_passphrase: Zeroizing<String>,
@@ -343,6 +387,7 @@ impl Default for PqfileApp {
             encrypt_pubkey: FileInput::default(),
             encrypt_recipients: Vec::new(),
             encrypt_ca_key: FileInput::default(),
+            encrypt_ca_revocations: FileInput::default(),
             encrypt_recipient_error: OpStatus::None,
             encrypt_files: Vec::new(),
             encrypt_batch_pending: Arc::new(Mutex::new(None)),
@@ -473,8 +518,40 @@ impl Default for PqfileApp {
             cert_issue_output_path: None,
             cert_verify_ca_vk: FileInput::default(),
             cert_verify_cert: FileInput::default(),
+            cert_verify_revocations: FileInput::default(),
             cert_verify_status: OpStatus::None,
             cert_verify_result: None,
+            cert_revoke_ca_key: FileInput::default(),
+            cert_revoke_ca_passphrase: Zeroizing::new(String::new()),
+            cert_revoke_ca_passphrase_visible: false,
+            cert_revoke_cert: FileInput::default(),
+            cert_revoke_existing: FileInput::default(),
+            cert_revoke_reason: String::new(),
+            cert_revoke_status: OpStatus::None,
+            cert_revoke_output_path: None,
+            sealed_sender_sub_tab: SealedSenderSubTab::default(),
+            identity_keygen_use_passphrase: false,
+            identity_keygen_passphrase: Zeroizing::new(String::new()),
+            identity_keygen_passphrase_confirm: Zeroizing::new(String::new()),
+            identity_keygen_status: OpStatus::None,
+            seal_sender_identity_key: FileInput::default(),
+            seal_sender_identity_passphrase: Zeroizing::new(String::new()),
+            seal_sender_identity_passphrase_visible: false,
+            seal_recipient_identity_pubkey: FileInput::default(),
+            seal_recipient_pubkey: FileInput::default(),
+            seal_input: FileInput::default(),
+            seal_status: OpStatus::None,
+            seal_output_path: None,
+            unseal_privkey: FileInput::default(),
+            unseal_privkey_passphrase: Zeroizing::new(String::new()),
+            unseal_privkey_passphrase_visible: false,
+            unseal_identity_key: FileInput::default(),
+            unseal_identity_passphrase: Zeroizing::new(String::new()),
+            unseal_identity_passphrase_visible: false,
+            unseal_sender_identity_pubkey: FileInput::default(),
+            unseal_input: FileInput::default(),
+            unseal_status: OpStatus::None,
+            unseal_output_path: None,
             rekey_privkey: FileInput::default(),
             rekey_privkey_passphrase: Zeroizing::new(String::new()),
             rekey_privkey_passphrase_visible: false,
@@ -845,6 +922,7 @@ impl eframe::App for PqfileApp {
                                 Tab::Decrypt => self.show_decrypt(ui, dark),
                                 Tab::Sign => self.show_sign(ui, dark),
                                 Tab::Signcrypt => self.show_signcrypt(ui, dark),
+                                Tab::SealedSender => self.show_sealed_sender(ui, dark),
                                 Tab::Archive => self.show_archive(ui, dark),
                                 Tab::Shamir => self.show_shamir(ui, dark),
                                 Tab::Inspect => self.show_inspect(ui, dark),
@@ -1040,6 +1118,14 @@ impl PqfileApp {
         };
         match pqfile::cert::verify_cert(ca_vk_pem, cert_pem, crate::types::current_unix_secs()) {
             Ok(cert) if cert.permits(pqfile::cert::cert_use::ENCRYPT) => {
+                if let Err(e) = pqfile::cert::check_cert_not_revoked_pem(
+                    ca_vk_pem,
+                    self.encrypt_ca_revocations.as_str(),
+                    cert_pem,
+                ) {
+                    self.encrypt_recipient_error = OpStatus::Err(e.to_string());
+                    return;
+                }
                 let pem = cert.subject_pem;
                 if !self.encrypt_recipients.iter().any(|r| r.pem == pem) {
                     let variant_name = pem_variant_name(&pem);
@@ -1236,11 +1322,26 @@ impl PqfileApp {
         self.add_recipient_new_pubkey.poll();
         self.add_recipient_input.poll();
 
-        // Keys tab: Issue / Verify Certificate panel
+        // Keys tab: Issue / Verify / Revoke Certificate panel
         self.cert_issue_ca_key.poll();
         self.cert_issue_subject_key.poll();
         self.cert_verify_ca_vk.poll();
         self.cert_verify_cert.poll();
+        self.cert_verify_revocations.poll();
+        self.cert_revoke_ca_key.poll();
+        self.cert_revoke_cert.poll();
+        self.cert_revoke_existing.poll();
+        self.encrypt_ca_revocations.poll();
+
+        // Sealed Sender tab
+        self.seal_sender_identity_key.poll();
+        self.seal_recipient_identity_pubkey.poll();
+        self.seal_recipient_pubkey.poll();
+        self.seal_input.poll();
+        self.unseal_privkey.poll();
+        self.unseal_identity_key.poll();
+        self.unseal_sender_identity_pubkey.poll();
+        self.unseal_input.poll();
 
         let enc_batch = drain_batch_pending(&self.encrypt_batch_pending, &mut self.encrypt_files);
         let dec_batch = drain_batch_pending(&self.decrypt_batch_pending, &mut self.decrypt_files);
@@ -1889,6 +1990,30 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              the final signature check completes. If you are writing to a file or socket, \
              please be aware that the output should be treated as unverified until the \
              operation returns successfully.",
+        ]),
+        Tab::SealedSender => ("Sealed Sender", &[
+            "Sealed sender proves who sent a file to the specific recipient, without leaving \
+             behind proof a third party could ever check. It uses a separate X25519 identity \
+             key pair from your ML-KEM encryption key and any ML-DSA/SLH-DSA signing key.",
+            "## HOW IT DIFFERS FROM SIGN & ENCRYPT",
+            "Signcrypt embeds a real digital signature: anyone who later obtains your \
+             verifying key can prove mathematically that you signed the file, even the \
+             recipient showing it to someone else. Sealed sender instead derives an \
+             authentication tag from a Diffie-Hellman exchange between your identity key and \
+             the recipient's identity key. The recipient can confirm it really came from you, \
+             but so could they have forged the exact same tag themselves - so it proves \
+             nothing to anyone else. Use sealed sender when the existence of a communication \
+             relationship is itself sensitive.",
+            "## GENERATING AN IDENTITY KEY",
+            "Identity keys are separate from your encryption and signing keys and exist only \
+             for this feature. Generate one per counterparty relationship or reuse one across \
+             many, whichever suits your threat model, and share the public half with anyone \
+             who should be able to seal files to you or verify files you seal.",
+            "## SEALING AND UNSEALING",
+            "Sealing needs your identity private key, the recipient's identity public key, and \
+             the recipient's normal encryption public key. Unsealing needs your decryption \
+             private key, your own identity private key, and the sender's identity public key. \
+             No plaintext is released until the authentication tag verifies.",
         ]),
         Tab::Archive => ("Encrypted Archive", &[
             "The archive format packs multiple files into a single .pqf container. All files \

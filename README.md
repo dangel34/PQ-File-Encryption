@@ -86,6 +86,7 @@ PQ-File-Encryption/
 │   │   ├── shamir.rs             Shamir secret sharing for M-of-N key splitting
 │   │   ├── sign.rs               ML-DSA-65 / SLH-DSA-SHAKE-192f signing and verification
 │   │   ├── signcrypt.rs          Combined sign-then-encrypt and signdecrypt
+│   │   ├── sealed_sender.rs      Deniable sender authentication (identity keys, seal/unseal)
 │   │   ├── passphrase.rs         Argon2id wrapping for passphrase-protected keys
 │   │   ├── repassphrase.rs       Change or upgrade a private key's passphrase
 │   │   ├── inspect.rs            Header inspection without decryption
@@ -113,7 +114,7 @@ PQ-File-Encryption/
 │       ├── types.rs                Shared types (Tab, FileInput, Settings, ...)
 │       ├── widgets.rs              UI helper functions
 │       ├── fido2.rs                CTAP2 enroll/derive (native, feature "fido2")
-│       └── tabs/                   Keys, Keygen, Encrypt, Decrypt, Sign, Signcrypt, Archive, Shamir, Inspect, Clipboard, Settings, fido2_ui
+│       └── tabs/                   Keys, Keygen, Encrypt, Decrypt, Sign, Signcrypt, Sealed Sender, Archive, Shamir, Inspect, Clipboard, Settings, fido2_ui
 └── pqfile-desktop/               Native desktop binary
     ├── build.rs                   Embeds icon/metadata via winres (Windows)
     ├── packaging/                 Inno Setup installer script, .ico asset
@@ -447,6 +448,42 @@ Signatures default to ML-DSA-65 (NIST FIPS 204), 3309 bytes, stored in PEM forma
 
 `--algorithm slh-dsa-shake-192f` selects SLH-DSA-SHAKE-192f (NIST FIPS 205) instead: hash-based signatures resting on much more conservative security assumptions than lattices, at the cost of slower signing and 35664-byte signatures. Same NIST security category (3) as ML-DSA-65; best for very long-lived signatures such as archival or release signing. `sign`, `verify`, `signcrypt`, and `signdecrypt` detect the algorithm from the key automatically - no extra flags.
 
+### Certificates
+
+A minimal PKI layer over signing keys: a CA signing key attests to a subject public/verifying key's label, validity window, and permitted uses, so the certificate can be used in place of a raw key wherever pqfile accepts a recipient or verifying key.
+
+```bash
+# Issue a certificate: the CA vouches for a subject key
+pqfile issue-cert --ca-key ca_sign_privkey.pem --subject pubkey.pem \
+  --label "alice's laptop" --allow-encrypt --valid-days 365 -o alice.cert
+
+# Verify a certificate and print its contents
+pqfile verify-cert --ca-key ca_sign_pubkey.pem alice.cert
+
+# Use a certificate directly as an encrypt recipient - no need to extract the key first
+pqfile encrypt -r alice.cert --ca-key ca_sign_pubkey.pem document.pdf
+
+# Certificates also work in place of a raw key for verify/signcrypt/signdecrypt
+pqfile verify -k signer.cert --ca-key ca_sign_pubkey.pem -s document.pdf.sig document.pdf
+```
+
+Certificates do not chain and have no revocation mechanism beyond their own validity window, unless you also maintain a revocation list:
+
+```bash
+# Revoke a certificate before its validity window naturally expires
+pqfile revoke-cert --ca-key ca_sign_privkey.pem alice.cert --reason "laptop lost" -o revocations.pem
+
+# Revoking a second certificate appends to the same list and re-signs it
+pqfile revoke-cert --ca-key ca_sign_privkey.pem bob.cert --existing revocations.pem \
+  --reason "key rotated" -o revocations.pem
+
+# Any command that accepts --ca-key for a certificate can also check --revocations
+pqfile encrypt -r alice.cert --ca-key ca_sign_pubkey.pem --revocations revocations.pem document.pdf
+pqfile verify-cert --ca-key ca_sign_pubkey.pem --revocations revocations.pem alice.cert
+```
+
+`--revocations` is optional everywhere it appears (`encrypt`, `verify`, `signcrypt`, `signdecrypt`, `seal`, `verify-cert`) - a certificate is accepted even without a matching entry when it is omitted, the same way `.revoked` sidecar checking for raw keys only happens when the sidecar file exists. There is no way to un-revoke a certificate; issue a new one instead. Full validity-window enforcement, `allowed_use` checks, and revocation list verification all happen before any recipient key is trusted or any signature is accepted.
+
 ### Signcrypt
 
 ```bash
@@ -462,6 +499,29 @@ pqfile signdecrypt -k privkey.pem -v sign_pubkey.pem document.pdf.pqf
 ```
 
 Unlike `pqfile sign` followed by `pqfile encrypt`, the signature lives inside the AEAD-authenticated payload and cannot be stripped or substituted after encryption. A recipient cannot re-encrypt the plaintext to a third party while preserving the sender's signature. Stdin is not supported as input because two passes over the file are required (one to hash, one to encrypt).
+
+### Sealed sender
+
+```bash
+# One-time setup: each party generates a separate identity key pair
+# (distinct from their encryption and signing keys)
+pqfile identity-keygen --out ./alice-identity
+pqfile identity-keygen --out ./bob-identity
+
+# Alice seals a file for Bob: proves to Bob she sent it, without leaving
+# evidence anyone else could check
+pqfile seal -k alice-identity/identity_privkey.pem \
+  --recipient-identity bob-identity/identity_pubkey.pem \
+  -r bob-pubkey.pem document.pdf
+# Output: document.pdf.pqf
+
+# Bob unseals it: decrypts and verifies the sender in one step
+pqfile unseal -k bob-privkey.pem \
+  --identity-key bob-identity/identity_privkey.pem \
+  -s alice-identity/identity_pubkey.pem document.pdf.pqf
+```
+
+Unlike `signcrypt`, which embeds a non-repudiable ML-DSA/SLH-DSA signature, sealed sender proves the sender's identity only to the specific intended recipient. The authentication tag is derived from a static X25519 Diffie-Hellman between the sender's and recipient's identity keys, so computing it requires only one party's private key plus the other's public key - the recipient could have forged an identical tag themselves, and no third party can ever confirm who really sent the file. Useful when the existence of a communication relationship is itself sensitive. `unseal` buffers the plaintext internally and only releases it once the tag verifies; stdin is not supported for `seal` (two passes are required, as with `signcrypt`).
 
 ### Archive and extract
 
@@ -563,11 +623,12 @@ Errors go to stderr as `{"status":"error","code":N,"message":"..."}`. The numeri
 
 The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egui code and expose nearly everything the CLI does, each tab with built-in "?" help text:
 
-- **🗝 Keys**: a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only)
+- **🗝 Keys**: a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only), and an "Issue / Verify / Revoke Certificate" panel for the CA certificate workflow
 - **🔑 Keygen**: generates ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, ML-DSA-65, or SLH-DSA-SHAKE-192f signing key pairs, with optional passphrase or hardware-backed (OS credential store) protection, key expiry dates, and OpenSSH ed25519 key import (native only)
 - **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; checkboxes for Padme length padding and magic-free stealth mode (single recipient); a folder watcher that auto-encrypts new files (native only); drag-and-drop
 - **🔓 Decrypt**: loads any v2-v10 `.pqf` file, prompting for a passphrase only when the key requires one; a "Stealth mode" checkbox for files encrypted without a header; includes a **Rekey** sub-tab to re-wrap a file for a new recipient without decrypting the payload
 - **✏ Sign** / **🔏 Signcrypt**: sign and verify with ML-DSA-65 or SLH-DSA-SHAKE-192f (algorithm detected from the loaded key, shown inline), plus combined sign-then-encrypt and decrypt-then-verify
+- **🕶 Sealed Sender**: generate a separate X25519 identity key pair, then seal (encrypt with deniable sender authentication) and unseal files - proves the sender to the specific recipient without producing evidence a third party could ever check
 - **📦 Archive**: pack multiple files into one encrypted `.pqf` container and extract with path-traversal protection
 - **🔀 Shamir**: split a private key into M-of-N shares (with QR code export for air-gapped transfer) and reconstruct from shares
 - **🔍 Inspect**: header metadata for any `.pqf` file, or a key-file health check (passphrase/hardware status, expiry, legacy Argon2 detection, revocation sidecar), without decrypting
@@ -820,6 +881,25 @@ Signing keys can optionally be passphrase-protected (`pqfile sign-keygen --passp
 
 Passphrase-protected private keys derive their AES-256-GCM wrapping key via Argon2id (m=64 MiB, t=3, p=4, 16-byte random salt). The private key stores only the seed (64 bytes for ML-KEM, 96 bytes for hybrid, 32 bytes for ML-DSA-65, 72 bytes for SLH-DSA); the full key is re-derived on load. Keys encrypted with older p=1 parameters (pre-4.0) can be migrated with `pqfile repassphrase --from-legacy`.
 
+### Certificate and revocation list
+
+```
+-----BEGIN PQFILE CERTIFICATE-----                     (self-delimiting body + CA signature)
+-----BEGIN PQFILE CERTIFICATE REVOCATION LIST-----      (self-delimiting body + CA signature)
+```
+
+Produced by `pqfile issue-cert` / `pqfile revoke-cert` respectively (see [Certificates](#certificates) above). Both wrap an ML-DSA-65 or SLH-DSA-SHAKE-192f signature (whichever algorithm the CA signing key uses) over a self-delimiting body - a certificate's body embeds the subject key's own PEM tag and bytes verbatim, so a verified certificate hands back a ready-to-use PEM without the caller needing to know the key type in advance. A revocation list's body is a sequence of `(cert_id, revoked_at, reason)` entries, where `cert_id` is SHA3-256 of a certificate's signed body - two certificates issued with byte-identical fields share an identifier.
+
+### X25519 sealed-sender identity key
+
+```
+-----BEGIN X25519 IDENTITY PUBLIC KEY-----             (32 bytes raw)
+-----BEGIN X25519 IDENTITY PRIVATE KEY-----            (32-byte scalar)
+-----BEGIN X25519 IDENTITY ENCRYPTED PRIVATE KEY-----  (16-byte salt || 12-byte nonce || 48-byte AES ciphertext)
+```
+
+Generated by `pqfile identity-keygen`; consumed only by `pqfile seal`/`pqfile unseal` (see [Sealed sender](#sealed-sender) above). A separate key pair from every other key type on this page - never used for encryption or signing.
+
 ### Hardware key reference (stub)
 
 ```
@@ -877,7 +957,7 @@ The `#[non_exhaustive]` enum may gain new variants in minor releases; match with
 cargo test --workspace --all-features
 ```
 
-417 tests across all crates. Run benchmarks with:
+636 tests across all crates. Run benchmarks with:
 
 ```
 cargo bench -p pqfile
@@ -980,6 +1060,8 @@ All dependency versions and licenses are audited via `cargo deny check` and `car
 
 ## Packaging
 
+Every release (`vX.Y.Z` tag) automatically produces `.deb`, `.rpm`, and AppImage packages for Linux, an unsigned `.app`/DMG for macOS, and a Windows installer - see [docs/RELEASING.md](docs/RELEASING.md). **None of these are code-signed or notarized yet**: Windows SmartScreen and macOS Gatekeeper will both warn on first launch (macOS: right-click the app → Open once to bypass Gatekeeper). To build any of them locally instead of waiting for a release:
+
 ### Debian / Ubuntu
 
 ```
@@ -992,14 +1074,43 @@ Produces a `.deb` package installing the binary to `/usr/bin/pqfile`.
 ### Fedora / RHEL
 
 ```
+cargo install cargo-generate-rpm
 cargo build --release -p pqfile-cli
-cp target/release/pqfile ~/rpmbuild/BUILD/
-rpmbuild -bb pqfile-cli/packaging/pqfile.spec
+cargo generate-rpm -p pqfile-cli
+```
+
+Pure Rust, no `rpmbuild`/`rpm-build` package needed. A traditional spec-file build also works if you prefer it: `cp target/release/pqfile ~/rpmbuild/BUILD/ && rpmbuild -bb pqfile-cli/packaging/pqfile.spec` (uses `pqfile-cli/packaging/pqfile.spec`, kept in sync with the crate version by `scripts/bump-version.ps1`).
+
+### Linux AppImage
+
+Requires [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) and its [appimage plugin](https://github.com/linuxdeploy/linuxdeploy-plugin-appimage) on `PATH`, plus `squashfs-tools`:
+
+```
+cargo build --release -p pqfile-desktop
+linuxdeploy --appdir AppDir \
+  --executable target/release/pqfile-desktop \
+  --desktop-file pqfile-desktop/packaging/pqfile-desktop.desktop \
+  --icon-file pqfile-desktop/assets/icon.png \
+  --output appimage
+```
+
+### macOS
+
+```
+cargo build --release -p pqfile-desktop
+mkdir -p pqfile.app/Contents/MacOS pqfile.app/Contents/Resources
+cp target/release/pqfile-desktop pqfile.app/Contents/MacOS/
+sed "s/@VERSION@/$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-desktop/Cargo.toml)/" \
+  pqfile-desktop/packaging/Info.plist.template > pqfile.app/Contents/Info.plist
+# icon.icns: see the release workflow's "Build .app bundle and DMG" step for
+# the sips/iconutil commands that generate one from pqfile-desktop/assets/icon.png
+brew install create-dmg
+create-dmg --no-code-sign pqfile.dmg pqfile.app/
 ```
 
 ### Windows
 
-The release workflow builds a signed installer from `pqfile-desktop/packaging/setup.iss` via Inno Setup; see [docs/RELEASING.md](docs/RELEASING.md). To build locally (requires [Inno Setup](https://jrsoftware.org/isinfo.php) and `iscc` on `PATH`):
+Requires [Inno Setup](https://jrsoftware.org/isinfo.php) and `iscc` on `PATH`:
 
 ```
 cargo build --release -p pqfile-desktop

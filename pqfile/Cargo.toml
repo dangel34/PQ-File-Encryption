@@ -33,6 +33,8 @@ hkdf = "0.13"
 sha2 = "0.11"
 rayon = "1"
 bech32 = "0.12"
+# Constant-time MAC comparison in sealed_sender.rs.
+subtle = "2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # getrandom 0.4 needs the wasm_js feature to use globalThis.crypto in a browser/Node.js context.

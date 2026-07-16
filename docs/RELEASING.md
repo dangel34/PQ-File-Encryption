@@ -52,7 +52,7 @@ Triggered by the `vX.Y.Z` tag. Runs the following jobs in order:
 
 1. Version consistency check across all `Cargo.toml`, `.iss`, and `.spec` (no separate test job: CI already ran fmt, clippy, and the full suite on the same commit).
 2. Multi-platform builds: Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64 (CLI + desktop GUI), built with `cargo auditable` so the dependency tree is embedded in each binary (scannable via `cargo audit bin`).
-3. Windows installer via Inno Setup.
+3. Native OS packages, built from the already-built binaries above rather than rebuilding: a Windows installer via Inno Setup, a Linux `.deb` (`cargo-deb`) and `.rpm` (`cargo-generate-rpm`), a Linux AppImage (`linuxdeploy`) for the desktop GUI, and a macOS `.app` bundle + DMG (`create-dmg`) for the desktop GUI. **None of these are code-signed or notarized** - Windows SmartScreen and macOS Gatekeeper will both warn on first launch until that's set up separately (tracked in `docs/ROADMAP.md`); users on macOS need to right-click → Open once to bypass Gatekeeper.
 4. WASM web app build, archived as `pqfile-web.tar.gz`.
 5. SHA-256 checksums for all artifacts + CycloneDX SBOMs (`sbom-pqfile.cdx.json`, `sbom-pqfile-gui.cdx.json`, `sbom-pqfile-desktop.cdx.json`).
 6. SLSA build provenance attestations for all artifacts (verify with `gh attestation verify <file> --repo dangel34/PQ-File-Encryption`) and a keyless cosign signature over `checksums.txt`.
@@ -65,9 +65,10 @@ Monitor progress in the **Actions** tab on GitHub. Once complete, open the draft
 
 ## After the release
 
-- Verify the GitHub Release page shows the correct assets and tag (including `sbom-*.cdx.json`).
+- Verify the GitHub Release page shows the correct assets and tag (including `sbom-*.cdx.json`, `.deb`, `.rpm`, `.AppImage`, `.dmg`).
 - Verify `checksums.txt` lists all expected files and SHA-256 hashes are correct.
 - Smoke-test the downloaded binary: generate a key pair, encrypt a file, decrypt it.
+- The Linux `.deb`/`.rpm`/AppImage and macOS DMG are new as of the packaging automation added after 4.3.0 - the first release that builds them is worth a closer look than usual: install the `.deb`/`.rpm` in a clean container/VM, mount the DMG and launch the `.app` (right-click → Open on macOS), and extract-and-run the AppImage, since none of this has been exercised by a real release yet.
 
 ---
 

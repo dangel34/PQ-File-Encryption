@@ -4347,6 +4347,7 @@ dependencies = [
  "sha2 0.11.0",
  "sha3 0.12.0",
  "slh-dsa",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tlock",
