@@ -52,4 +52,10 @@ regexes = [
     # docs/ROADMAP.md prose describing the padme_768.pqf compat vector trips
     # `generic-api-key` on "private key" next to the backtick-quoted filename.
     '''private key, `padme_768\.pqf` \+ its own 37-byte''',
+    # README.md's PEM-tag reference table for the sealed-sender X25519
+    # identity key: the "-----BEGIN ... PRIVATE KEY-----" lines are tag
+    # *labels* documenting the format (immediately followed by a byte-length
+    # note, never actual key bytes), but still trip the default `private-key`
+    # rule's entropy heuristic.
+    '''-----BEGIN X25519 IDENTITY (ENCRYPTED )?PRIVATE KEY-----''',
 ]
