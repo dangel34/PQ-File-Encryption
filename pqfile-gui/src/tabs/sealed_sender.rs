@@ -254,25 +254,9 @@ impl PqfileApp {
             && self.seal_recipient_identity_pubkey.loaded()
             && self.seal_recipient_pubkey.loaded()
             && self.seal_input.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("🕶  Seal")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(180.0, 32.0)),
-            )
-            .clicked()
-            || (ready
-                && (pp_submitted
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
-        {
+        crate::widgets::action_button(ui, "🕶  Seal", 180.0, ready, pp_submitted, dark, || {
             self.do_seal();
-        }
+        });
 
         #[cfg(not(target_arch = "wasm32"))]
         crate::widgets::reveal_button_if_ok(ui, &self.seal_status, &self.seal_output_path, dark);
@@ -447,25 +431,9 @@ impl PqfileApp {
             && self.unseal_identity_key.loaded()
             && self.unseal_sender_identity_pubkey.loaded()
             && self.unseal_input.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("🔓  Unseal")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(180.0, 32.0)),
-            )
-            .clicked()
-            || (ready
-                && (pp_submitted
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
-        {
+        crate::widgets::action_button(ui, "🔓  Unseal", 180.0, ready, pp_submitted, dark, || {
             self.do_unseal();
-        }
+        });
 
         #[cfg(not(target_arch = "wasm32"))]
         crate::widgets::reveal_button_if_ok(

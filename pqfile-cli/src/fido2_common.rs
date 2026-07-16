@@ -36,7 +36,7 @@ use zeroize::Zeroizing;
 
 use pqfile::error::PqfileError;
 
-use crate::hex_lines::{from_hex, to_hex};
+use crate::hex_lines::{self, to_hex};
 
 /// Fixed relying-party ID for every pqfile FIDO2 credential. pqfile is not a
 /// web origin and enrollments are looked up by their stored credential ID
@@ -81,30 +81,10 @@ impl Enrollment {
             ))
         }
 
-        let mut credential_id = None;
-        let mut salt = None;
+        let (credential_id, salt, extra) = hex_lines::parse_enrollment_common(text, bad)?;
         let mut pin_required = None;
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let Some((key, value)) = line.split_once('=') else {
-                return Err(bad(&format!("expected 'key = value', got {line:?}")));
-            };
-            let (key, value) = (key.trim(), value.trim());
+        for (key, value) in extra {
             match key {
-                "credential_id" => {
-                    credential_id =
-                        Some(from_hex(value).ok_or_else(|| bad("credential_id is not valid hex"))?);
-                }
-                "salt" => {
-                    let bytes = from_hex(value).ok_or_else(|| bad("salt is not valid hex"))?;
-                    let arr: [u8; 32] = bytes
-                        .try_into()
-                        .map_err(|_| bad("salt must be exactly 32 bytes"))?;
-                    salt = Some(arr);
-                }
                 "pin_required" => {
                     pin_required = Some(match value {
                         "true" => true,
@@ -116,8 +96,8 @@ impl Enrollment {
             }
         }
         Ok(Enrollment {
-            credential_id: credential_id.ok_or_else(|| bad("missing credential_id"))?,
-            salt: salt.ok_or_else(|| bad("missing salt"))?,
+            credential_id,
+            salt,
             pin_required: pin_required.ok_or_else(|| bad("missing pin_required"))?,
         })
     }

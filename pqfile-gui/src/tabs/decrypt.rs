@@ -1019,25 +1019,17 @@ impl PqfileApp {
         let ready = self.rekey_privkey.loaded()
             && self.rekey_new_pubkey.loaded()
             && self.rekey_input.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("🔄  Rekey File")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(160.0, 32.0)),
-            )
-            .clicked()
-            || (ready
-                && (pp_submitted
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
-        {
-            self.do_rekey();
-        }
+        crate::widgets::action_button(
+            ui,
+            "🔄  Rekey File",
+            160.0,
+            ready,
+            pp_submitted,
+            dark,
+            || {
+                self.do_rekey();
+            },
+        );
 
         show_status(ui, &self.rekey_status, dark);
     }
@@ -1166,25 +1158,17 @@ impl PqfileApp {
         let ready = self.add_recipient_privkey.loaded()
             && self.add_recipient_new_pubkey.loaded()
             && self.add_recipient_input.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("➕  Add Recipient")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(160.0, 32.0)),
-            )
-            .clicked()
-            || (ready
-                && (pp_submitted
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
-        {
-            self.do_add_recipient();
-        }
+        crate::widgets::action_button(
+            ui,
+            "➕  Add Recipient",
+            160.0,
+            ready,
+            pp_submitted,
+            dark,
+            || {
+                self.do_add_recipient();
+            },
+        );
 
         show_status(ui, &self.add_recipient_status, dark);
     }

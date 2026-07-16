@@ -1,12 +1,12 @@
 use crate::app::PqfileApp;
-use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
+use crate::colors::{c_card, c_subtext, c_surface1};
 use crate::types::SigncryptSubTab;
 use crate::types::{OpStatus, Tab};
 use crate::widgets::{
     card, file_row, passphrase_row, save_result, section_label, seg_tabs, show_status,
     sig_algorithm_hint, tab_heading_help,
 };
-use eframe::egui::{self, RichText, Vec2};
+use eframe::egui::{self, RichText};
 use pqfile::signcrypt;
 use std::io::Cursor;
 
@@ -91,25 +91,15 @@ impl PqfileApp {
         let ready = self.signcrypt_sk.loaded()
             && self.signcrypt_pubkey.loaded()
             && self.signcrypt_input.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("🔏  Sign and Encrypt")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(180.0, 32.0)),
-            )
-            .clicked()
-            || (ready
-                && (pp_submitted
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
-        {
-            self.do_signcrypt();
-        }
+        crate::widgets::action_button(
+            ui,
+            "🔏  Sign and Encrypt",
+            180.0,
+            ready,
+            pp_submitted,
+            dark,
+            || self.do_signcrypt(),
+        );
 
         show_status(ui, &self.signcrypt_status, dark);
     }
@@ -245,25 +235,15 @@ impl PqfileApp {
         let ready = self.signdecrypt_privkey.loaded()
             && self.signdecrypt_vk.loaded()
             && self.signdecrypt_input.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("🔓  Decrypt and Verify")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(180.0, 32.0)),
-            )
-            .clicked()
-            || (ready
-                && (pp_submitted
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
-        {
-            self.do_signdecrypt();
-        }
+        crate::widgets::action_button(
+            ui,
+            "🔓  Decrypt and Verify",
+            180.0,
+            ready,
+            pp_submitted,
+            dark,
+            || self.do_signdecrypt(),
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         crate::widgets::reveal_button_if_ok(

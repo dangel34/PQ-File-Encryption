@@ -3660,6 +3660,31 @@ fn resolve_decrypt_out_path(
     Ok((to_stdout, out_path))
 }
 
+/// Resolves the output path for an in-place-rewrite command (rekey,
+/// add-recipient): defaults to overwriting `input`, or honors an explicit
+/// `-o` (including `-` for stdout). An output that resolves back to `input`
+/// is always allowed to already exist - that's the whole point of the
+/// in-place default; only a *different* existing path is guarded by `force`.
+fn resolve_in_place_out_path(
+    input: &str,
+    output: Option<&str>,
+    force: bool,
+) -> Result<(bool, PathBuf), PqfileError> {
+    let out = output.unwrap_or("");
+    let to_stdout = out == "-" || (out.is_empty() && input == "-");
+    let out_path: PathBuf = if to_stdout {
+        PathBuf::new()
+    } else if out.is_empty() {
+        PathBuf::from(input)
+    } else {
+        PathBuf::from(out)
+    };
+    if out_path.as_path() != Path::new(input) {
+        ensure_overwrite_allowed(&out_path, to_stdout, force)?;
+    }
+    Ok((to_stdout, out_path))
+}
+
 fn run_verify(
     key: PathBuf,
     ca_key: Option<PathBuf>,
@@ -3732,23 +3757,7 @@ fn run_rekey(
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
     revoke::check_not_revoked(&recipient, &pubkey_pem)?;
 
-    let out = output.as_deref().unwrap_or("");
-    let to_stdout = out == "-" || (out.is_empty() && input == "-");
-
-    let out_path: PathBuf = if to_stdout {
-        PathBuf::new()
-    } else if out.is_empty() {
-        PathBuf::from(&input)
-    } else {
-        PathBuf::from(out)
-    };
-
-    // Rekey defaults to rewriting the input file in place, so an existing output that
-    // equals the input is expected and always allowed. Only guard an explicit -o that
-    // points at a *different* existing file.
-    if out_path.as_path() != Path::new(&input) {
-        ensure_overwrite_allowed(&out_path, to_stdout, force)?;
-    }
+    let (to_stdout, out_path) = resolve_in_place_out_path(&input, output.as_deref(), force)?;
 
     let mut reader = open_reader(&input)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
@@ -3773,23 +3782,7 @@ fn run_add_recipient(
     let pubkey_pem = std::fs::read_to_string(&recipient)?;
     revoke::check_not_revoked(&recipient, &pubkey_pem)?;
 
-    let out = output.as_deref().unwrap_or("");
-    let to_stdout = out == "-" || (out.is_empty() && input == "-");
-
-    let out_path: PathBuf = if to_stdout {
-        PathBuf::new()
-    } else if out.is_empty() {
-        PathBuf::from(&input)
-    } else {
-        PathBuf::from(out)
-    };
-
-    // add-recipient defaults to rewriting the input file in place, so an existing output
-    // that equals the input is expected and always allowed. Only guard an explicit -o that
-    // points at a *different* existing file.
-    if out_path.as_path() != Path::new(&input) {
-        ensure_overwrite_allowed(&out_path, to_stdout, force)?;
-    }
+    let (to_stdout, out_path) = resolve_in_place_out_path(&input, output.as_deref(), force)?;
 
     let mut reader = open_reader(&input)?;
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
@@ -4010,6 +4003,70 @@ fn run_extract(
     Ok(())
 }
 
+/// Resolves the output path for an "encrypt a sibling `.pqf` file" command
+/// (signcrypt, seal): defaults to `<input>.pqf` next to the input, or honors
+/// an explicit `-o`. Shared by [`run_signcrypt`] and [`run_seal`].
+fn resolve_pqf_sibling_out_path(
+    input: &Path,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<PathBuf, PqfileError> {
+    let out_path = output.unwrap_or_else(|| {
+        let mut s = input.as_os_str().to_owned();
+        s.push(".pqf");
+        PathBuf::from(s)
+    });
+    ensure_overwrite_allowed(&out_path, false, force)?;
+    Ok(out_path)
+}
+
+/// Prints the final status line for a decrypt-with-verification command
+/// (signdecrypt, unseal) that may write plaintext to stdout or to a file: a
+/// JSON object (to stderr when the plaintext itself went to stdout, so the
+/// two never interleave) or a human-readable "<verb> Decrypted to: <path>"
+/// line. `status_key`/`status_val` name the extra JSON field describing what
+/// was verified (e.g. `"signature"`/`"valid"`, `"authentication"`/`"valid"`).
+fn emit_decrypt_verified_status(
+    json: bool,
+    to_stdout: bool,
+    out_path: &Path,
+    status_key: &str,
+    status_val: &str,
+    human_verb: &str,
+) -> Result<(), PqfileError> {
+    if json {
+        let out_val = if to_stdout {
+            "-"
+        } else {
+            &out_path.to_string_lossy()
+        };
+        let target: &mut dyn io::Write = if to_stdout {
+            &mut io::stderr()
+        } else {
+            &mut io::stdout()
+        };
+        writeln!(
+            target,
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("output", out_val),
+                kv_str(status_key, status_val)
+            ])
+        )?;
+    } else {
+        println!(
+            "{human_verb} Decrypted to: {}",
+            if to_stdout {
+                "-".to_owned()
+            } else {
+                out_path.to_string_lossy().into_owned()
+            }
+        );
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_signcrypt(
     key: PathBuf,
@@ -4034,12 +4091,7 @@ fn run_signcrypt(
     )?;
 
     let input_len = std::fs::metadata(&input)?.len();
-    let out_path = output.unwrap_or_else(|| {
-        let mut s = input.as_os_str().to_owned();
-        s.push(".pqf");
-        PathBuf::from(s)
-    });
-    ensure_overwrite_allowed(&out_path, false, force)?;
+    let out_path = resolve_pqf_sibling_out_path(&input, output, force)?;
 
     let mut file = std::io::BufReader::new(std::fs::File::open(&input)?);
     let mut writer = AtomicOutput::new(&out_path)?;
@@ -4111,37 +4163,14 @@ fn run_signdecrypt(
         writer.commit()?;
     }
 
-    if json {
-        let out_val = if to_stdout {
-            "-"
-        } else {
-            &out_path.to_string_lossy()
-        };
-        let target: &mut dyn io::Write = if to_stdout {
-            &mut io::stderr()
-        } else {
-            &mut io::stdout()
-        };
-        writeln!(
-            target,
-            "{}",
-            json_object(&[
-                kv_str("status", "ok"),
-                kv_str("output", out_val),
-                kv_str("signature", "valid")
-            ])
-        )?;
-    } else {
-        println!(
-            "Signature valid. Decrypted to: {}",
-            if to_stdout {
-                "-".to_owned()
-            } else {
-                out_path.to_string_lossy().into_owned()
-            }
-        );
-    }
-    Ok(())
+    emit_decrypt_verified_status(
+        json,
+        to_stdout,
+        &out_path,
+        "signature",
+        "valid",
+        "Signature valid.",
+    )
 }
 
 fn run_identity_keygen(
@@ -4210,12 +4239,7 @@ fn run_seal(
     )?;
 
     let input_len = std::fs::metadata(&input)?.len();
-    let out_path = output.unwrap_or_else(|| {
-        let mut s = input.as_os_str().to_owned();
-        s.push(".pqf");
-        PathBuf::from(s)
-    });
-    ensure_overwrite_allowed(&out_path, false, force)?;
+    let out_path = resolve_pqf_sibling_out_path(&input, output, force)?;
 
     let mut file = std::io::BufReader::new(std::fs::File::open(&input)?);
     let mut writer = AtomicOutput::new(&out_path)?;
@@ -4289,37 +4313,14 @@ fn run_unseal(
         writer.commit()?;
     }
 
-    if json {
-        let out_val = if to_stdout {
-            "-"
-        } else {
-            &out_path.to_string_lossy()
-        };
-        let target: &mut dyn io::Write = if to_stdout {
-            &mut io::stderr()
-        } else {
-            &mut io::stdout()
-        };
-        writeln!(
-            target,
-            "{}",
-            json_object(&[
-                kv_str("status", "ok"),
-                kv_str("output", out_val),
-                kv_str("authentication", "valid")
-            ])
-        )?;
-    } else {
-        println!(
-            "Sender authenticated. Decrypted to: {}",
-            if to_stdout {
-                "-".to_owned()
-            } else {
-                out_path.to_string_lossy().into_owned()
-            }
-        );
-    }
-    Ok(())
+    emit_decrypt_verified_status(
+        json,
+        to_stdout,
+        &out_path,
+        "authentication",
+        "valid",
+        "Sender authenticated.",
+    )
 }
 
 fn run_split_key(

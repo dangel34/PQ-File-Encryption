@@ -28,7 +28,7 @@
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-use crate::hex_lines::{from_hex, to_hex};
+use crate::hex_lines::{self, to_hex};
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(inline_js = "
@@ -143,35 +143,13 @@ impl Enrollment {
             format!("malformed WebAuthn enrollment file: {msg}")
         }
 
-        let mut credential_id = None;
-        let mut salt = None;
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let Some((key, value)) = line.split_once('=') else {
-                return Err(bad(&format!("expected 'key = value', got {line:?}")));
-            };
-            let (key, value) = (key.trim(), value.trim());
-            match key {
-                "credential_id" => {
-                    credential_id =
-                        Some(from_hex(value).ok_or_else(|| bad("credential_id is not valid hex"))?);
-                }
-                "salt" => {
-                    let bytes = from_hex(value).ok_or_else(|| bad("salt is not valid hex"))?;
-                    let arr: [u8; 32] = bytes
-                        .try_into()
-                        .map_err(|_| bad("salt must be exactly 32 bytes"))?;
-                    salt = Some(arr);
-                }
-                other => return Err(bad(&format!("unknown key '{other}'"))),
-            }
+        let (credential_id, salt, extra) = hex_lines::parse_enrollment_common(text, bad)?;
+        if let Some((key, _)) = extra.first() {
+            return Err(bad(&format!("unknown key '{key}'")));
         }
         Ok(Enrollment {
-            credential_id: credential_id.ok_or_else(|| bad("missing credential_id"))?,
-            salt: salt.ok_or_else(|| bad("missing salt"))?,
+            credential_id,
+            salt,
         })
     }
 }

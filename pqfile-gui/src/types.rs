@@ -33,42 +33,37 @@ pub(crate) const ADVANCED_TABS: [Tab; 7] = [
     Tab::Clipboard,
 ];
 
+/// Stable string key (for URL-hash deep-linking and persisted last-tab) and
+/// display label (icon + text, for the nav row and "More Tools" menu) for a
+/// tab. [`tab_key`]/[`tab_label`] are thin accessors over this single match
+/// so the two never drift out of sync with each other.
+fn tab_key_and_label(tab: Tab) -> (&'static str, &'static str) {
+    match tab {
+        Tab::Keys => ("keys", "🗝 Keys"),
+        Tab::Keygen => ("keygen", "🔑 Keygen"),
+        Tab::Encrypt => ("encrypt", "🔒 Encrypt"),
+        Tab::Decrypt => ("decrypt", "🔓 Decrypt"),
+        Tab::Sign => ("sign", "✏ Sign"),
+        Tab::Signcrypt => ("signcrypt", "🔏 Sign & Encrypt"),
+        Tab::SealedSender => ("sealed-sender", "🕶 Sealed Sender"),
+        Tab::Archive => ("archive", "📦 Archive"),
+        Tab::Shamir => ("shamir", "🔀 Split Key (Shamir)"),
+        Tab::Inspect => ("inspect", "🔍 Health Check"),
+        Tab::Clipboard => ("clipboard", "📋 Clipboard"),
+        Tab::Settings => ("settings", "⚙ Settings"),
+    }
+}
+
 /// Stable string key for a tab, used for both URL-hash deep-linking (WASM) and
 /// persisting the last-visited tab across sessions (native).
 pub(crate) fn tab_key(tab: Tab) -> &'static str {
-    match tab {
-        Tab::Keys => "keys",
-        Tab::Keygen => "keygen",
-        Tab::Encrypt => "encrypt",
-        Tab::Decrypt => "decrypt",
-        Tab::Sign => "sign",
-        Tab::Signcrypt => "signcrypt",
-        Tab::SealedSender => "sealed-sender",
-        Tab::Archive => "archive",
-        Tab::Shamir => "shamir",
-        Tab::Inspect => "inspect",
-        Tab::Clipboard => "clipboard",
-        Tab::Settings => "settings",
-    }
+    tab_key_and_label(tab).0
 }
 
 /// Display label (icon + text) for a tab, shared by the primary nav row and
 /// the "More Tools" overflow menu.
 pub(crate) fn tab_label(tab: Tab) -> &'static str {
-    match tab {
-        Tab::Keys => "🗝 Keys",
-        Tab::Keygen => "🔑 Keygen",
-        Tab::Encrypt => "🔒 Encrypt",
-        Tab::Decrypt => "🔓 Decrypt",
-        Tab::Sign => "✏ Sign",
-        Tab::Signcrypt => "🔏 Sign & Encrypt",
-        Tab::SealedSender => "🕶 Sealed Sender",
-        Tab::Archive => "📦 Archive",
-        Tab::Shamir => "🔀 Split Key (Shamir)",
-        Tab::Inspect => "🔍 Health Check",
-        Tab::Clipboard => "📋 Clipboard",
-        Tab::Settings => "⚙ Settings",
-    }
+    tab_key_and_label(tab).1
 }
 
 /// Inverse of [`tab_key`], plus a couple of legacy/alias spellings.

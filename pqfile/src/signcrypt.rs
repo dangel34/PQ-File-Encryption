@@ -89,18 +89,7 @@ pub fn signdecrypt_bytes<R: Read>(
         }
     })?;
 
-    let mut hasher = Sha3_256::new();
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut plaintext: Vec<u8> = Vec::new();
-    loop {
-        let n = pqf.read(&mut buf).map_err(PqfileError::Io)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        plaintext.extend_from_slice(&buf[..n]);
-    }
-    let hash = hasher.finalize();
+    let (plaintext, hash) = read_all_hashing(&mut pqf)?;
     sign::verify_bytes(vk_pem, &hash, &sig_buf)?;
     Ok(plaintext)
 }
@@ -196,6 +185,26 @@ pub(crate) fn hash_stream<R: Read>(reader: &mut R) -> Result<Vec<u8>, PqfileErro
         hasher.update(&buf[..n]);
     }
     Ok(hasher.finalize().to_vec())
+}
+
+/// Reads `reader` to the end in `CHUNK_SIZE`-sized chunks, buffering every
+/// byte while also SHA3-256 hashing them, and returns `(data, hash)`. Shared
+/// by [`signdecrypt_bytes`] and [`crate::sealed_sender::unseal_bytes`], which
+/// both need the full plaintext plus its hash before verifying a trailing
+/// signature/tag over that hash.
+pub(crate) fn read_all_hashing<R: Read>(reader: &mut R) -> Result<(Vec<u8>, Vec<u8>), PqfileError> {
+    let mut hasher = Sha3_256::new();
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut data = Vec::new();
+    loop {
+        let n = reader.read(&mut buf).map_err(PqfileError::Io)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        data.extend_from_slice(&buf[..n]);
+    }
+    Ok((data, hasher.finalize().to_vec()))
 }
 
 #[cfg(test)]

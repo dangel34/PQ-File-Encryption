@@ -34,6 +34,7 @@ use zeroize::Zeroizing;
 
 use crate::encrypt;
 use crate::error::PqfileError;
+#[cfg(test)]
 use crate::format::CHUNK_SIZE;
 use crate::passphrase;
 use crate::reader::PqfReader;
@@ -347,18 +348,7 @@ pub fn unseal_bytes<R: Read>(
         }
     })?;
 
-    let mut hasher = Sha3_256::new();
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut plaintext: Vec<u8> = Vec::new();
-    loop {
-        let n = pqf.read(&mut buf).map_err(PqfileError::Io)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        plaintext.extend_from_slice(&buf[..n]);
-    }
-    let hash = hasher.finalize();
+    let (plaintext, hash) = crate::signcrypt::read_all_hashing(&mut pqf)?;
 
     let dh = recipient_identity_sk.diffie_hellman(&sender_pk);
     let auth_key = derive_auth_key(dh.as_bytes(), &sender_pk, &recipient_identity_pk)?;

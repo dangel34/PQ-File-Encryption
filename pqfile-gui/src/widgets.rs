@@ -1,5 +1,5 @@
 use crate::colors::{
-    c_accent, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text,
+    c_accent, c_chrome, c_green, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text,
 };
 use crate::types::{BatchPending, FileInput, OpStatus, Pending, PickedFile};
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
@@ -879,6 +879,42 @@ pub(crate) fn copy_text_btn(ui: &mut egui::Ui, text: &str, dark: bool) -> bool {
         ui.ctx().copy_text(text.to_owned());
     })
     .is_some()
+}
+
+/// Shows a primary action button (bold label, accent fill) that's
+/// `add_enabled` on `ready`, and runs `action` when it's clicked, when
+/// `pp_submitted` is true (an Enter keypress in a passphrase field further up
+/// the form), or on a global Cmd/Ctrl+Enter - whichever fires first. Shared
+/// by every tab whose primary action is a single big styled button with this
+/// three-way trigger.
+pub(crate) fn action_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    min_width: f32,
+    ready: bool,
+    pp_submitted: bool,
+    dark: bool,
+    action: impl FnOnce(),
+) {
+    if ui
+        .add_enabled(
+            ready,
+            egui::Button::new(
+                RichText::new(label)
+                    .size(14.0)
+                    .color(c_chrome(dark))
+                    .strong(),
+            )
+            .fill(c_accent(dark))
+            .min_size(Vec2::new(min_width, 32.0)),
+        )
+        .clicked()
+        || (ready
+            && (pp_submitted
+                || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
+    {
+        action();
+    }
 }
 
 pub(crate) fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {

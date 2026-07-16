@@ -1,11 +1,7 @@
 use crate::app::PqfileApp;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::colors::{c_surface0, c_text};
 use crate::types::SignSubTab;
 use crate::types::{OpStatus, Tab};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::widgets::reveal_in_explorer;
 use crate::widgets::{
     card, file_row, passphrase_row, save_result, section_label, seg_tabs, show_status,
     sig_algorithm_hint, tab_heading_help,
@@ -82,45 +78,25 @@ impl PqfileApp {
         ui.add_space(8.0);
 
         let ready = self.sign_sk.loaded() && self.sign_input_file.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("✏  Sign File")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(120.0, 32.0)),
-            )
-            .clicked()
-            || (ready
-                && (pp_submitted
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
-        {
-            self.do_sign_file();
-        }
+        crate::widgets::action_button(
+            ui,
+            "✏  Sign File",
+            120.0,
+            ready,
+            pp_submitted,
+            dark,
+            || {
+                self.do_sign_file();
+            },
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            if matches!(&self.sign_status, OpStatus::Ok(_)) {
-                if let Some(path) = self.sign_sig_output_path.clone() {
-                    ui.add_space(4.0);
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("📂  Reveal").size(12.0).color(c_text(dark)),
-                            )
-                            .fill(c_surface0(dark)),
-                        )
-                        .clicked()
-                    {
-                        reveal_in_explorer(&path);
-                    }
-                }
-            }
-        }
+        crate::widgets::reveal_button_if_ok(
+            ui,
+            &self.sign_status,
+            &self.sign_sig_output_path,
+            dark,
+        );
 
         show_status(ui, &self.sign_status, dark);
     }

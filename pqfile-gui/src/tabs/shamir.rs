@@ -109,25 +109,17 @@ impl PqfileApp {
         ui.add_space(8.0);
 
         let ready = self.shamir_split_privkey.loaded();
-        if ui
-            .add_enabled(
-                ready,
-                egui::Button::new(
-                    RichText::new("🔀  Split Key")
-                        .size(14.0)
-                        .color(c_chrome(dark))
-                        .strong(),
-                )
-                .fill(c_accent(dark))
-                .min_size(Vec2::new(160.0, 32.0)),
-            )
-            .clicked()
-            || (ready
-                && (pp_submitted
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))))
-        {
-            self.do_shamir_split();
-        }
+        crate::widgets::action_button(
+            ui,
+            "🔀  Split Key",
+            160.0,
+            ready,
+            pp_submitted,
+            dark,
+            || {
+                self.do_shamir_split();
+            },
+        );
 
         show_status(ui, &self.shamir_split_status, dark);
 
