@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784128582233,
+  "lastUpdate": 1784208722643,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -3059,6 +3059,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48345,
             "range": "± 262",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "d3c160b5429e2a1ef42b9e9e1d9cce3d7375378b",
+          "message": "refactor(cert): streamline certificate signing and verification processes\n\n- Refactored the `issue_cert` and `revoke_cert` functions to utilize a shared `sign_and_frame` function, reducing code duplication.\n- Introduced `verify_signed_body` to handle signature verification for both certificates and revocation lists, enhancing maintainability.\n- Updated the `encrypt_seed` and `decrypt_seed` functions to use a generic `encrypt_fixed_secret` and `try_decrypt_fixed_secret` for improved code clarity and reusability.\n- Added a new `hex_lines` module for hex encoding/decoding, shared across FIDO2 and WebAuthn functionalities, improving code organization.\n- Enhanced error handling and documentation throughout the affected modules.",
+          "timestamp": "2026-07-16T09:27:22-04:00",
+          "tree_id": "d2f7108198d3fe119e538e55f4e9614048db307b",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/d3c160b5429e2a1ef42b9e9e1d9cce3d7375378b"
+        },
+        "date": 1784208721851,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67915,
+            "range": "± 844",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 966251,
+            "range": "± 7830",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 107409572,
+            "range": "± 733179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 109493,
+            "range": "± 436",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 976502,
+            "range": "± 8000",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93426816,
+            "range": "± 2514091",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68666,
+            "range": "± 995",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 968763,
+            "range": "± 5120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99344113,
+            "range": "± 799517",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 111848,
+            "range": "± 780",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1015675,
+            "range": "± 12958",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99221369,
+            "range": "± 780733",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 47943,
+            "range": "± 104",
             "unit": "ns/iter"
           }
         ]
