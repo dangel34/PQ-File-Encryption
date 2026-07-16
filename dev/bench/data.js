@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784208722643,
+  "lastUpdate": 1784211660350,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -3161,6 +3161,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 47943,
             "range": "± 104",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "2dda0cc7e98398f857d56175321e6d0854c7858e",
+          "message": "refactor(tabs): streamline button creation in GUI tabs\n\n- Replaced repetitive button creation code in various tabs with a shared `action_button` function for improved readability and maintainability.\n- Updated the `resolve_in_place_out_path` and `resolve_pqf_sibling_out_path` functions to centralize output path resolution logic, enhancing code clarity.\n- Refactored the `parse_enrollment_common` function in the `hex_lines` module to simplify parsing logic and improve error handling.\n- Enhanced the `read_all_hashing` function in `signcrypt.rs` for better code reuse between `signdecrypt_bytes` and `unseal_bytes`.\n- Improved documentation and comments throughout the affected modules for better understanding and maintainability.",
+          "timestamp": "2026-07-16T10:17:21-04:00",
+          "tree_id": "768c2fff99bc7f1aca0e3b88afca2954905549c3",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/2dda0cc7e98398f857d56175321e6d0854c7858e"
+        },
+        "date": 1784211660015,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 73175,
+            "range": "± 408",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1057480,
+            "range": "± 113901",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 115707961,
+            "range": "± 407620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 119257,
+            "range": "± 816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1076276,
+            "range": "± 14698",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 104262798,
+            "range": "± 1419654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 74276,
+            "range": "± 1328",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1102240,
+            "range": "± 9257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 111704683,
+            "range": "± 252618",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 119852,
+            "range": "± 1310",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1147692,
+            "range": "± 54208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 111913321,
+            "range": "± 360265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 53215,
+            "range": "± 1051",
             "unit": "ns/iter"
           }
         ]
