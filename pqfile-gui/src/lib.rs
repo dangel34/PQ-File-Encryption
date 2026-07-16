@@ -2,6 +2,8 @@ mod app;
 mod colors;
 #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
 mod fido2;
+#[path = "../../pqfile-cli/src/hex_lines.rs"]
+mod hex_lines;
 mod tabs;
 mod theme;
 mod types;
@@ -115,6 +117,22 @@ mod tests {
             path,
             status: OpStatus::None,
         }
+    }
+
+    /// Issues a certificate for `subject_pem` under `ca_sk_pem`, valid from
+    /// now for one day. Used by the cert-as-GUI-recipient test suite below.
+    fn issue_test_cert(ca_sk_pem: &str, subject_pem: &str, label: &str, allowed_use: u8) -> String {
+        let now = crate::types::current_unix_secs();
+        pqfile::cert::issue_cert(
+            ca_sk_pem,
+            None,
+            subject_pem,
+            label,
+            now,
+            now + 86_400,
+            allowed_use,
+        )
+        .unwrap()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -636,17 +654,12 @@ mod tests {
     fn cert_verify_via_gui_accepts_valid_certificate() {
         let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
-        let now = crate::types::current_unix_secs();
-        let cert_pem = pqfile::cert::issue_cert(
+        let cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &subject_pub,
             "alice's laptop",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::ENCRYPT,
-        )
-        .unwrap();
+        );
 
         let mut app = PqfileApp::default();
         app.cert_verify_ca_vk = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
@@ -664,17 +677,12 @@ mod tests {
         let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let other_ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
-        let now = crate::types::current_unix_secs();
-        let cert_pem = pqfile::cert::issue_cert(
+        let cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &subject_pub,
             "x",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::ENCRYPT,
-        )
-        .unwrap();
+        );
 
         let mut app = PqfileApp::default();
         app.cert_verify_ca_vk = loaded_input("ca_vk.pem", other_ca.vk_pem.into_bytes(), None);
@@ -689,17 +697,12 @@ mod tests {
     fn encrypt_promotes_certificate_recipient_when_ca_key_loaded() {
         let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
-        let now = crate::types::current_unix_secs();
-        let cert_pem = pqfile::cert::issue_cert(
+        let cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &subject_pub,
             "test recipient",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::ENCRYPT,
-        )
-        .unwrap();
+        );
 
         let mut app = PqfileApp::default();
         app.encrypt_ca_key = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
@@ -716,17 +719,12 @@ mod tests {
     fn encrypt_certificate_recipient_without_ca_key_sets_error() {
         let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
-        let now = crate::types::current_unix_secs();
-        let cert_pem = pqfile::cert::issue_cert(
+        let cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &subject_pub,
             "test recipient",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::ENCRYPT,
-        )
-        .unwrap();
+        );
 
         let mut app = PqfileApp::default();
         app.encrypt_pubkey = loaded_input("recipient.cert", cert_pem.into_bytes(), None);
@@ -740,18 +738,13 @@ mod tests {
     fn encrypt_certificate_recipient_wrong_use_sets_error() {
         let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let subject_signer = pqfile::sign::sign_keygen_bytes(None).unwrap();
-        let now = crate::types::current_unix_secs();
         // Certified for SIGN only, then presented as an Encrypt recipient.
-        let cert_pem = pqfile::cert::issue_cert(
+        let cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &subject_signer.vk_pem,
             "sign-only cert",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::SIGN,
-        )
-        .unwrap();
+        );
 
         let mut app = PqfileApp::default();
         app.encrypt_ca_key = loaded_input("ca_vk.pem", ca.vk_pem.into_bytes(), None);
@@ -768,17 +761,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
-        let now = crate::types::current_unix_secs();
-        let cert_pem = pqfile::cert::issue_cert(
+        let cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &subject_pub,
             "x",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::ENCRYPT,
-        )
-        .unwrap();
+        );
 
         let mut app = PqfileApp::default();
         app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
@@ -811,17 +799,13 @@ mod tests {
     fn encrypt_certificate_recipient_revoked_sets_error() {
         let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
-        let now = crate::types::current_unix_secs();
-        let cert_pem = pqfile::cert::issue_cert(
+        let cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &subject_pub,
             "test recipient",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::ENCRYPT,
-        )
-        .unwrap();
+        );
+        let now = crate::types::current_unix_secs();
         let list_pem =
             pqfile::cert::revoke_cert(&ca.sk_pem, None, None, &cert_pem, "leaked", now).unwrap();
 
@@ -840,27 +824,19 @@ mod tests {
         let ca = pqfile::sign::sign_keygen_bytes(None).unwrap();
         let (revoked_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
         let (subject_pub, _) = pqfile::keygen::keygen_bytes(768, None).unwrap();
-        let now = crate::types::current_unix_secs();
-        let revoked_cert_pem = pqfile::cert::issue_cert(
+        let revoked_cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &revoked_pub,
             "revoked",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::ENCRYPT,
-        )
-        .unwrap();
-        let cert_pem = pqfile::cert::issue_cert(
+        );
+        let cert_pem = issue_test_cert(
             &ca.sk_pem,
-            None,
             &subject_pub,
             "untouched",
-            now,
-            now + 86_400,
             pqfile::cert::cert_use::ENCRYPT,
-        )
-        .unwrap();
+        );
+        let now = crate::types::current_unix_secs();
         let list_pem =
             pqfile::cert::revoke_cert(&ca.sk_pem, None, None, &revoked_cert_pem, "leaked", now)
                 .unwrap();

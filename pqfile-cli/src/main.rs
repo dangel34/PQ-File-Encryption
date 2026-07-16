@@ -14,6 +14,8 @@ use pqfile::{
 
 #[cfg(feature = "fido2")]
 mod fido2;
+#[cfg(feature = "fido2")]
+mod hex_lines;
 
 #[derive(Parser)]
 #[command(
@@ -3611,6 +3613,53 @@ fn resolve_cert_with_ca(
     Ok(Some(cert.subject_pem))
 }
 
+/// Resolves `path`'s already-read `pem` to the key that should actually be
+/// used for `required_use`: a certificate's verified, revocation-checked
+/// subject key if `pem` is a certificate, otherwise `pem` itself after
+/// checking the raw-key `.revoked` sidecar. Shared by every single-recipient
+/// command that reads exactly one key/cert from `path` and resolves it via
+/// [`resolve_cert`] (`encrypt`'s multi-recipient loop instead calls
+/// [`resolve_cert_with_ca`] directly, since it resolves the CA key and
+/// revocation list once for the whole batch rather than once per call).
+fn resolve_single_recipient(
+    pem: String,
+    path: &Path,
+    ca_key: Option<&Path>,
+    revocations: Option<&Path>,
+    required_use: u8,
+) -> Result<String, PqfileError> {
+    match resolve_cert(&pem, path, ca_key, revocations, required_use)? {
+        Some(subject_pem) => Ok(subject_pem),
+        None => {
+            revoke::check_not_revoked(path, &pem)?;
+            Ok(pem)
+        }
+    }
+}
+
+/// Computes the output path (or a stdout sentinel) for a decrypt-shaped
+/// command: `output` may be `-` (stdout), empty (defaults to `input` with
+/// its extension stripped), or an explicit path; `input` may itself be `-`
+/// (stdin), which also defaults to stdout when `output` is unset. Also runs
+/// the overwrite check. Returns `(to_stdout, out_path)`.
+fn resolve_decrypt_out_path(
+    input: &str,
+    output: Option<&str>,
+    force: bool,
+) -> Result<(bool, PathBuf), PqfileError> {
+    let out = output.unwrap_or("");
+    let to_stdout = out == "-" || (out.is_empty() && input == "-");
+    let out_path: PathBuf = if to_stdout {
+        PathBuf::new()
+    } else if out.is_empty() {
+        PathBuf::from(input).with_extension("")
+    } else {
+        PathBuf::from(out)
+    };
+    ensure_overwrite_allowed(&out_path, to_stdout, force)?;
+    Ok((to_stdout, out_path))
+}
+
 fn run_verify(
     key: PathBuf,
     ca_key: Option<PathBuf>,
@@ -3976,19 +4025,13 @@ fn run_signcrypt(
     let pp = maybe_prompt_passphrase(&sk_pem, "Enter passphrase for signing key: ")?;
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let pem = std::fs::read_to_string(&recipient)?;
-    let pubkey_pem = match resolve_cert(
-        &pem,
+    let pubkey_pem = resolve_single_recipient(
+        pem,
         &recipient,
         ca_key.as_deref(),
         revocations.as_deref(),
         pqfile::cert::cert_use::ENCRYPT,
-    )? {
-        Some(subject_pem) => subject_pem,
-        None => {
-            revoke::check_not_revoked(&recipient, &pem)?;
-            pem
-        }
-    };
+    )?;
 
     let input_len = std::fs::metadata(&input)?.len();
     let out_path = output.unwrap_or_else(|| {
@@ -4050,17 +4093,7 @@ fn run_signdecrypt(
     )?
     .unwrap_or(pem);
 
-    let out = output.as_deref().unwrap_or("");
-    let to_stdout = out == "-" || (out.is_empty() && input == "-");
-    let out_path: PathBuf = if to_stdout {
-        PathBuf::new()
-    } else if out.is_empty() {
-        PathBuf::from(&input).with_extension("")
-    } else {
-        PathBuf::from(out)
-    };
-
-    ensure_overwrite_allowed(&out_path, to_stdout, force)?;
+    let (to_stdout, out_path) = resolve_decrypt_out_path(&input, output.as_deref(), force)?;
     let reader = open_reader(&input)?;
 
     if to_stdout {
@@ -4168,19 +4201,13 @@ fn run_seal(
     let pp_str = pp.as_deref().map(|z| z.as_str());
     let recipient_identity_pk_pem = std::fs::read_to_string(&recipient_identity)?;
     let pem = std::fs::read_to_string(&recipient)?;
-    let pubkey_pem = match resolve_cert(
-        &pem,
+    let pubkey_pem = resolve_single_recipient(
+        pem,
         &recipient,
         ca_key.as_deref(),
         revocations.as_deref(),
         pqfile::cert::cert_use::ENCRYPT,
-    )? {
-        Some(subject_pem) => subject_pem,
-        None => {
-            revoke::check_not_revoked(&recipient, &pem)?;
-            pem
-        }
-    };
+    )?;
 
     let input_len = std::fs::metadata(&input)?.len();
     let out_path = output.unwrap_or_else(|| {
@@ -4237,17 +4264,7 @@ fn run_unseal(
     let identity_pp_str = identity_pp.as_deref().map(|z| z.as_str());
     let sender_identity_pk_pem = std::fs::read_to_string(&sender_identity)?;
 
-    let out = output.as_deref().unwrap_or("");
-    let to_stdout = out == "-" || (out.is_empty() && input == "-");
-    let out_path: PathBuf = if to_stdout {
-        PathBuf::new()
-    } else if out.is_empty() {
-        PathBuf::from(&input).with_extension("")
-    } else {
-        PathBuf::from(out)
-    };
-
-    ensure_overwrite_allowed(&out_path, to_stdout, force)?;
+    let (to_stdout, out_path) = resolve_decrypt_out_path(&input, output.as_deref(), force)?;
     let reader = open_reader(&input)?;
 
     // unseal_bytes always buffers internally and only returns plaintext once the

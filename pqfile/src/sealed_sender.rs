@@ -208,6 +208,22 @@ fn derive_auth_key(
     Ok(okm)
 }
 
+/// Parses the sender's identity key and the recipient's identity public key,
+/// then derives the shared authentication key between them. Shared by
+/// [`seal`] and [`seal_bytes`], which otherwise differ only in how they
+/// stream/hash the plaintext.
+fn sender_auth_key(
+    sender_identity_sk_pem: &str,
+    sender_identity_passphrase: Option<&str>,
+    recipient_identity_pk_pem: &str,
+) -> Result<LockedSecret<32>, PqfileError> {
+    let sender_sk = parse_identity_sk(sender_identity_sk_pem, sender_identity_passphrase)?;
+    let sender_pk = X25519PublicKey::from(&sender_sk);
+    let recipient_identity_pk = parse_identity_pk(recipient_identity_pk_pem)?;
+    let dh = sender_sk.diffie_hellman(&recipient_identity_pk);
+    derive_auth_key(dh.as_bytes(), &sender_pk, &recipient_identity_pk)
+}
+
 fn compute_tag(auth_key: &[u8], plaintext_hash: &[u8]) -> [u8; TAG_LEN] {
     let mut h = Sha3_256::new();
     h.update(TAG_CTX);
@@ -235,12 +251,11 @@ pub fn seal<R: Read + io::Seek>(
     writer: &mut dyn Write,
     chunk_size: usize,
 ) -> Result<(), PqfileError> {
-    let sender_sk = parse_identity_sk(sender_identity_sk_pem, sender_identity_passphrase)?;
-    let sender_pk = X25519PublicKey::from(&sender_sk);
-    let recipient_identity_pk = parse_identity_pk(recipient_identity_pk_pem)?;
-
-    let dh = sender_sk.diffie_hellman(&recipient_identity_pk);
-    let auth_key = derive_auth_key(dh.as_bytes(), &sender_pk, &recipient_identity_pk)?;
+    let auth_key = sender_auth_key(
+        sender_identity_sk_pem,
+        sender_identity_passphrase,
+        recipient_identity_pk_pem,
+    )?;
 
     let hash = crate::signcrypt::hash_stream(input)?;
     let tag = compute_tag(auth_key.as_ref(), &hash);
@@ -274,12 +289,11 @@ pub fn seal_bytes(
     writer: &mut dyn Write,
     chunk_size: usize,
 ) -> Result<(), PqfileError> {
-    let sender_sk = parse_identity_sk(sender_identity_sk_pem, sender_identity_passphrase)?;
-    let sender_pk = X25519PublicKey::from(&sender_sk);
-    let recipient_identity_pk = parse_identity_pk(recipient_identity_pk_pem)?;
-
-    let dh = sender_sk.diffie_hellman(&recipient_identity_pk);
-    let auth_key = derive_auth_key(dh.as_bytes(), &sender_pk, &recipient_identity_pk)?;
+    let auth_key = sender_auth_key(
+        sender_identity_sk_pem,
+        sender_identity_passphrase,
+        recipient_identity_pk_pem,
+    )?;
 
     let hash: [u8; 32] = Sha3_256::digest(data).into();
     let tag = compute_tag(auth_key.as_ref(), &hash);

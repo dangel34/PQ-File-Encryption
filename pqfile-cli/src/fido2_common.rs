@@ -36,6 +36,8 @@ use zeroize::Zeroizing;
 
 use pqfile::error::PqfileError;
 
+use crate::hex_lines::{from_hex, to_hex};
+
 /// Fixed relying-party ID for every pqfile FIDO2 credential. pqfile is not a
 /// web origin and enrollments are looked up by their stored credential ID
 /// rather than enumerated per RP, so any constant string works here.
@@ -46,28 +48,6 @@ pub(crate) fn ctap_err(context: &str, e: impl std::fmt::Display) -> PqfileError 
         "FIDO2 {context} failed: {e}. Is a compatible security key plugged in \
          (and touched, if it is waiting for a touch)?"
     )))
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn from_hex(s: &str) -> Option<Vec<u8>> {
-    let bytes = s.as_bytes();
-    if !bytes.len().is_multiple_of(2) {
-        return None;
-    }
-    // Byte-oriented on purpose: indexing the original `&str` by offset would
-    // panic if a multi-byte UTF-8 character straddled an odd boundary.
-    // `from_utf8` on each 2-byte pair fails cleanly (`None`) instead. This
-    // matters here more than most parsers: the GUI's `enrollment_requires_pin`
-    // re-reads and re-parses the enrollment file every UI frame it's on
-    // screen, so a panic here would crash the whole egui event loop, not just
-    // one operation.
-    bytes
-        .chunks_exact(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-        .collect()
 }
 
 pub(crate) struct Enrollment {
@@ -240,27 +220,6 @@ pub(crate) fn derive_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hex_roundtrip() {
-        let bytes = [0x00, 0x01, 0x0a, 0xff, 0x42];
-        assert_eq!(from_hex(&to_hex(&bytes)).unwrap(), bytes);
-    }
-
-    #[test]
-    fn from_hex_rejects_odd_length() {
-        assert!(from_hex("abc").is_none());
-    }
-
-    #[test]
-    fn from_hex_rejects_non_hex_chars() {
-        assert!(from_hex("zz").is_none());
-    }
-
-    #[test]
-    fn from_hex_rejects_multibyte_utf8_without_panicking() {
-        assert!(from_hex("a€bc").is_none());
-    }
 
     #[test]
     fn enrollment_roundtrip_without_pin() {

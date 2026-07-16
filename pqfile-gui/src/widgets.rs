@@ -612,6 +612,59 @@ pub(crate) fn reveal_in_explorer(path: &str) {
     }
 }
 
+/// Computes the native output path for a single-file save-result operation
+/// whose default location sits next to `input_path` (transformed by
+/// `sibling_name`, e.g. adding or stripping a `.pqf` extension) rather than
+/// in the current directory, and is relocated into `output_dir` (if set),
+/// preserving only the filename. Falls back to `out_name` in the current
+/// directory when `input_path` is `None` (e.g. a drag-and-drop file with no
+/// path on wasm). Shared by every native single-file operation whose output
+/// belongs next to its input: signcrypt, signdecrypt, seal, unseal.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn resolve_sibling_output_path(
+    input_path: Option<&std::path::Path>,
+    out_name: &str,
+    output_dir: &str,
+    sibling_name: impl FnOnce(&std::path::Path) -> std::path::PathBuf,
+) -> std::path::PathBuf {
+    let base = input_path
+        .map(sibling_name)
+        .unwrap_or_else(|| std::path::PathBuf::from(out_name));
+    if output_dir.is_empty() {
+        base
+    } else {
+        std::path::PathBuf::from(output_dir).join(base.file_name().unwrap_or_default())
+    }
+}
+
+/// Shows a "Reveal" button that opens `output_path`'s containing folder,
+/// only once `status` is `OpStatus::Ok`. Shared by every native single-file
+/// operation that offers to reveal its output: signdecrypt, seal, unseal.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn reveal_button_if_ok(
+    ui: &mut egui::Ui,
+    status: &OpStatus,
+    output_path: &Option<String>,
+    dark: bool,
+) {
+    if !matches!(status, OpStatus::Ok(_)) {
+        return;
+    }
+    let Some(path) = output_path else {
+        return;
+    };
+    ui.add_space(4.0);
+    if ui
+        .add(
+            egui::Button::new(RichText::new("📂  Reveal").size(12.0).color(c_text(dark)))
+                .fill(c_surface0(dark)),
+        )
+        .clicked()
+    {
+        reveal_in_explorer(path);
+    }
+}
+
 /// Writes `data` to `path` atomically via a temp file in the same directory,
 /// synced and renamed into place, so a crash or full disk mid-write can never
 /// leave `path` truncated or corrupted (mirrors the CLI's `AtomicOutput`).

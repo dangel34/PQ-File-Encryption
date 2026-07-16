@@ -28,6 +28,8 @@
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+use crate::hex_lines::{from_hex, to_hex};
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(inline_js = "
 export async function webauthnRegister() {
@@ -118,24 +120,6 @@ pub(crate) struct Enrollment {
     pub(crate) credential_id: Vec<u8>,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) salt: [u8; 32],
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn from_hex(s: &str) -> Option<Vec<u8>> {
-    let bytes = s.as_bytes();
-    if !bytes.len().is_multiple_of(2) {
-        return None;
-    }
-    // Byte-oriented on purpose: indexing the original `&str` by offset would
-    // panic if a multi-byte UTF-8 character straddled an odd boundary.
-    bytes
-        .chunks_exact(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-        .collect()
 }
 
 impl Enrollment {

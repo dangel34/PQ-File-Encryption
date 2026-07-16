@@ -1086,20 +1086,12 @@ impl PqfileApp {
             Ok(()) => {
                 let out_name = self.rekey_input.name.clone();
                 #[cfg(not(target_arch = "wasm32"))]
-                let native_path = {
-                    let base = self
-                        .rekey_input
-                        .path
-                        .clone()
-                        .unwrap_or_else(|| PathBuf::from(&out_name));
-                    let path = if self.settings.output_dir.is_empty() {
-                        base
-                    } else {
-                        PathBuf::from(&self.settings.output_dir)
-                            .join(base.file_name().unwrap_or_default())
-                    };
-                    Some(path)
-                };
+                let native_path = Some(crate::widgets::resolve_sibling_output_path(
+                    self.rekey_input.path.as_deref(),
+                    &out_name,
+                    &self.settings.output_dir,
+                    |p| p.to_path_buf(),
+                ));
                 #[cfg(target_arch = "wasm32")]
                 let native_path: Option<PathBuf> = None;
                 self.rekey_status = save_result(
@@ -1242,20 +1234,12 @@ impl PqfileApp {
             Ok(_info) => {
                 let out_name = self.add_recipient_input.name.clone();
                 #[cfg(not(target_arch = "wasm32"))]
-                let native_path = {
-                    let base = self
-                        .add_recipient_input
-                        .path
-                        .clone()
-                        .unwrap_or_else(|| PathBuf::from(&out_name));
-                    let path = if self.settings.output_dir.is_empty() {
-                        base
-                    } else {
-                        PathBuf::from(&self.settings.output_dir)
-                            .join(base.file_name().unwrap_or_default())
-                    };
-                    Some(path)
-                };
+                let native_path = Some(crate::widgets::resolve_sibling_output_path(
+                    self.add_recipient_input.path.as_deref(),
+                    &out_name,
+                    &self.settings.output_dir,
+                    |p| p.to_path_buf(),
+                ));
                 #[cfg(target_arch = "wasm32")]
                 let native_path: Option<PathBuf> = None;
                 self.add_recipient_status = save_result(

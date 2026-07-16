@@ -522,20 +522,20 @@ impl Default for Settings {
     }
 }
 
+/// Reads `key` from storage and parses it, falling back to `default` if the
+/// key is absent or fails to parse.
+fn get_or<T: std::str::FromStr>(storage: &dyn eframe::Storage, key: &str, default: T) -> T {
+    storage
+        .get_string(key)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
 impl Settings {
     pub(crate) fn load(storage: &dyn eframe::Storage) -> Self {
-        let dark_mode = storage
-            .get_string("dark_mode")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(true);
-        let auto_clear = storage
-            .get_string("auto_clear")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(false);
-        let confirm_overwrite = storage
-            .get_string("confirm_overwrite")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(false);
+        let dark_mode = get_or(storage, "dark_mode", true);
+        let auto_clear = get_or(storage, "auto_clear", false);
+        let confirm_overwrite = get_or(storage, "confirm_overwrite", false);
         let default_algorithm = match storage
             .get_string("default_algorithm")
             .as_deref()
@@ -548,18 +548,9 @@ impl Settings {
             "slh192f" => KeygenAlgorithm::SlhDsa192f,
             _ => KeygenAlgorithm::MlKem768,
         };
-        let default_expiry_days = storage
-            .get_string("default_expiry_days")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0u32);
-        let clipboard_auto_clear = storage
-            .get_string("clipboard_auto_clear")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(false);
-        let clipboard_clear_secs = storage
-            .get_string("clipboard_clear_secs")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(60u32);
+        let default_expiry_days = get_or(storage, "default_expiry_days", 0u32);
+        let clipboard_auto_clear = get_or(storage, "clipboard_auto_clear", false);
+        let clipboard_clear_secs = get_or(storage, "clipboard_clear_secs", 60u32);
         #[cfg(not(target_arch = "wasm32"))]
         let output_dir = storage.get_string("output_dir").unwrap_or_default();
         let last_tab = storage

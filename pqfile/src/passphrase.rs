@@ -39,105 +39,22 @@ pub const ENCRYPTED_BODY_LEN: usize = SALT_LEN + NONCE_LEN + SEED_LEN + 16;
 /// Byte length of an encrypted hybrid X25519+ML-KEM-768 private key PEM body (140 bytes).
 pub const ENCRYPTED_HYBRID_BODY_LEN: usize = SALT_LEN + NONCE_LEN + HYBRID_SEED_LEN + 16;
 
-/// Encrypts a 64-byte ML-KEM seed under `passphrase`. Returns the 108-byte
-/// payload that is stored as the PEM body of an encrypted private key.
-pub fn encrypt_seed(seed: &[u8; SEED_LEN], passphrase: &str) -> Result<Vec<u8>, PqfileError> {
-    let mut salt = [0u8; SALT_LEN];
-    getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
+// ── Shared core: every encrypted-seed PEM body (regardless of key type) is
+// salt || nonce || AES-256-GCM(seed), so the actual crypto lives here once,
+// parameterized by the seed length N. Each public encrypt_*/decrypt_* below
+// is a thin, differently-documented wrapper naming its own seed length -
+// the wrapper split exists for the public API/doc-comment surface per key
+// type, not because the underlying operation differs.
 
-    let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
-    let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
-
-    let ciphertext = cipher
-        .encrypt(nonce, seed.as_slice())
-        .map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let mut out = Vec::with_capacity(ENCRYPTED_BODY_LEN);
-    out.extend_from_slice(&salt);
-    out.extend_from_slice(&nonce_bytes);
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
-}
-
-/// Decrypts the 108-byte payload from an encrypted private key PEM body using
-/// current (p=4) Argon2id parameters.
-///
-/// Returns `LegacyKeyFormat` if the body decrypts correctly only with the old
-/// p=1 parameters (pqfile < 4.0 key). Use `pqfile repassphrase --from-legacy`
-/// to upgrade such keys before use.
-pub fn decrypt_seed(
-    body: &[u8],
+/// Encrypts an N-byte secret under `passphrase`. `body_len` is the caller's
+/// own named `ENCRYPTED_*_BODY_LEN` constant (`SALT_LEN + NONCE_LEN + N +
+/// 16`, restated by every key type's own constant rather than recomputed
+/// here, so those constants stay the single documented source of truth for
+/// each PEM body's on-disk size).
+fn encrypt_fixed_secret<const N: usize>(
+    secret: &[u8; N],
     passphrase: &str,
-) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
-    if body.len() != ENCRYPTED_BODY_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: ENCRYPTED_BODY_LEN,
-            got: body.len(),
-        });
-    }
-    // Try current params first.
-    if let Ok(seed) = try_decrypt_seed(body, passphrase, ARGON2_P_COST) {
-        return Ok(seed);
-    }
-    // If p=1 succeeds, the key is valid but needs migration.
-    if try_decrypt_seed(body, passphrase, ARGON2_P_COST_LEGACY).is_ok() {
-        return Err(PqfileError::LegacyKeyFormat);
-    }
-    Err(PqfileError::WrongPassphrase)
-}
-
-/// Decrypts a 108-byte body using the legacy p=1 Argon2id parameters.
-/// Only called by the `repassphrase --from-legacy` migration path.
-pub(crate) fn decrypt_seed_legacy(
-    body: &[u8],
-    passphrase: &str,
-) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
-    if body.len() != ENCRYPTED_BODY_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: ENCRYPTED_BODY_LEN,
-            got: body.len(),
-        });
-    }
-    try_decrypt_seed(body, passphrase, ARGON2_P_COST_LEGACY)
-        .map_err(|_| PqfileError::WrongPassphrase)
-}
-
-fn try_decrypt_seed(
-    body: &[u8],
-    passphrase: &str,
-    p_cost: u32,
-) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
-    let salt = &body[..SALT_LEN];
-    let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
-    let ciphertext = &body[SALT_LEN + NONCE_LEN..];
-
-    let key = derive_key_with_pcost(passphrase, salt, p_cost)?;
-    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-    let nonce = nonce_bytes.try_into().expect("12-byte nonce");
-
-    let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| PqfileError::WrongPassphrase)?,
-    );
-
-    if plaintext.len() != SEED_LEN {
-        return Err(PqfileError::WrongPassphrase);
-    }
-
-    let mut seed = Zeroizing::new([0u8; SEED_LEN]);
-    seed.copy_from_slice(&plaintext);
-    Ok(seed)
-}
-
-/// Encrypts a 96-byte hybrid seed (X25519 scalar || ML-KEM seed) under `passphrase`.
-pub fn encrypt_hybrid_seed(
-    seed: &[u8; HYBRID_SEED_LEN],
-    passphrase: &str,
+    body_len: usize,
 ) -> Result<Vec<u8>, PqfileError> {
     let mut salt = [0u8; SALT_LEN];
     getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
@@ -150,59 +67,24 @@ pub fn encrypt_hybrid_seed(
     let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
 
     let ciphertext = cipher
-        .encrypt(nonce, seed.as_slice())
+        .encrypt(nonce, secret.as_slice())
         .map_err(|_| PqfileError::EncryptionFailure)?;
 
-    let mut out = Vec::with_capacity(ENCRYPTED_HYBRID_BODY_LEN);
+    let mut out = Vec::with_capacity(body_len);
     out.extend_from_slice(&salt);
     out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
-/// Decrypts the 140-byte payload from an encrypted hybrid private key PEM body.
-///
-/// Returns `LegacyKeyFormat` if the body was encrypted with legacy p=1 parameters.
-pub fn decrypt_hybrid_seed(
-    body: &[u8],
-    passphrase: &str,
-) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
-    if body.len() != ENCRYPTED_HYBRID_BODY_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: ENCRYPTED_HYBRID_BODY_LEN,
-            got: body.len(),
-        });
-    }
-    if let Ok(seed) = try_decrypt_hybrid_seed(body, passphrase, ARGON2_P_COST) {
-        return Ok(seed);
-    }
-    if try_decrypt_hybrid_seed(body, passphrase, ARGON2_P_COST_LEGACY).is_ok() {
-        return Err(PqfileError::LegacyKeyFormat);
-    }
-    Err(PqfileError::WrongPassphrase)
-}
-
-/// Decrypts a 140-byte hybrid body using legacy p=1 parameters.
-/// Only called by the `repassphrase --from-legacy` migration path.
-pub(crate) fn decrypt_hybrid_seed_legacy(
-    body: &[u8],
-    passphrase: &str,
-) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
-    if body.len() != ENCRYPTED_HYBRID_BODY_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: ENCRYPTED_HYBRID_BODY_LEN,
-            got: body.len(),
-        });
-    }
-    try_decrypt_hybrid_seed(body, passphrase, ARGON2_P_COST_LEGACY)
-        .map_err(|_| PqfileError::WrongPassphrase)
-}
-
-fn try_decrypt_hybrid_seed(
+/// Decrypts an already-length-checked body at a specific Argon2 `p_cost`,
+/// without deciding what a failure or a length mismatch means - callers
+/// layer the current-vs-legacy retry policy and the length check on top.
+fn try_decrypt_fixed_secret<const N: usize>(
     body: &[u8],
     passphrase: &str,
     p_cost: u32,
-) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
+) -> Result<Zeroizing<[u8; N]>, PqfileError> {
     let salt = &body[..SALT_LEN];
     let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
     let ciphertext = &body[SALT_LEN + NONCE_LEN..];
@@ -217,13 +99,127 @@ fn try_decrypt_hybrid_seed(
             .map_err(|_| PqfileError::WrongPassphrase)?,
     );
 
-    if plaintext.len() != HYBRID_SEED_LEN {
+    if plaintext.len() != N {
         return Err(PqfileError::WrongPassphrase);
     }
 
-    let mut seed = Zeroizing::new([0u8; HYBRID_SEED_LEN]);
-    seed.copy_from_slice(&plaintext);
-    Ok(seed)
+    let mut secret = Zeroizing::new([0u8; N]);
+    secret.copy_from_slice(&plaintext);
+    Ok(secret)
+}
+
+/// Decrypts a body of a key type that still supports the legacy p=1
+/// fallback: tries current (p=4) parameters first, then p=1 to distinguish
+/// "wrong passphrase" from "valid but needs `repassphrase --from-legacy`".
+/// `body_len` is the caller's own named `ENCRYPTED_*_BODY_LEN` constant.
+fn decrypt_fixed_secret_with_legacy<const N: usize>(
+    body: &[u8],
+    passphrase: &str,
+    body_len: usize,
+) -> Result<Zeroizing<[u8; N]>, PqfileError> {
+    if body.len() != body_len {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: body_len,
+            got: body.len(),
+        });
+    }
+    if let Ok(secret) = try_decrypt_fixed_secret::<N>(body, passphrase, ARGON2_P_COST) {
+        return Ok(secret);
+    }
+    if try_decrypt_fixed_secret::<N>(body, passphrase, ARGON2_P_COST_LEGACY).is_ok() {
+        return Err(PqfileError::LegacyKeyFormat);
+    }
+    Err(PqfileError::WrongPassphrase)
+}
+
+/// Decrypts a body using only the legacy p=1 parameters. Only called by the
+/// `repassphrase --from-legacy` migration path. `body_len` is the caller's
+/// own named `ENCRYPTED_*_BODY_LEN` constant.
+fn decrypt_fixed_secret_legacy<const N: usize>(
+    body: &[u8],
+    passphrase: &str,
+    body_len: usize,
+) -> Result<Zeroizing<[u8; N]>, PqfileError> {
+    if body.len() != body_len {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: body_len,
+            got: body.len(),
+        });
+    }
+    try_decrypt_fixed_secret::<N>(body, passphrase, ARGON2_P_COST_LEGACY)
+        .map_err(|_| PqfileError::WrongPassphrase)
+}
+
+/// Decrypts a body of a key type that postdates the Argon2 p=4 migration and
+/// so never had a legacy p=1 form: only current parameters are ever tried.
+/// `body_len` is the caller's own named `ENCRYPTED_*_BODY_LEN` constant.
+fn decrypt_fixed_secret_no_legacy<const N: usize>(
+    body: &[u8],
+    passphrase: &str,
+    body_len: usize,
+) -> Result<Zeroizing<[u8; N]>, PqfileError> {
+    if body.len() != body_len {
+        return Err(PqfileError::InvalidKeyLength {
+            expected: body_len,
+            got: body.len(),
+        });
+    }
+    try_decrypt_fixed_secret::<N>(body, passphrase, ARGON2_P_COST)
+}
+
+/// Encrypts a 64-byte ML-KEM seed under `passphrase`. Returns the 108-byte
+/// payload that is stored as the PEM body of an encrypted private key.
+pub fn encrypt_seed(seed: &[u8; SEED_LEN], passphrase: &str) -> Result<Vec<u8>, PqfileError> {
+    encrypt_fixed_secret(seed, passphrase, ENCRYPTED_BODY_LEN)
+}
+
+/// Decrypts the 108-byte payload from an encrypted private key PEM body using
+/// current (p=4) Argon2id parameters.
+///
+/// Returns `LegacyKeyFormat` if the body decrypts correctly only with the old
+/// p=1 parameters (pqfile < 4.0 key). Use `pqfile repassphrase --from-legacy`
+/// to upgrade such keys before use.
+pub fn decrypt_seed(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
+    decrypt_fixed_secret_with_legacy(body, passphrase, ENCRYPTED_BODY_LEN)
+}
+
+/// Decrypts a 108-byte body using the legacy p=1 Argon2id parameters.
+/// Only called by the `repassphrase --from-legacy` migration path.
+pub(crate) fn decrypt_seed_legacy(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; SEED_LEN]>, PqfileError> {
+    decrypt_fixed_secret_legacy(body, passphrase, ENCRYPTED_BODY_LEN)
+}
+
+/// Encrypts a 96-byte hybrid seed (X25519 scalar || ML-KEM seed) under `passphrase`.
+pub fn encrypt_hybrid_seed(
+    seed: &[u8; HYBRID_SEED_LEN],
+    passphrase: &str,
+) -> Result<Vec<u8>, PqfileError> {
+    encrypt_fixed_secret(seed, passphrase, ENCRYPTED_HYBRID_BODY_LEN)
+}
+
+/// Decrypts the 140-byte payload from an encrypted hybrid private key PEM body.
+///
+/// Returns `LegacyKeyFormat` if the body was encrypted with legacy p=1 parameters.
+pub fn decrypt_hybrid_seed(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
+    decrypt_fixed_secret_with_legacy(body, passphrase, ENCRYPTED_HYBRID_BODY_LEN)
+}
+
+/// Decrypts a 140-byte hybrid body using legacy p=1 parameters.
+/// Only called by the `repassphrase --from-legacy` migration path.
+pub(crate) fn decrypt_hybrid_seed_legacy(
+    body: &[u8],
+    passphrase: &str,
+) -> Result<Zeroizing<[u8; HYBRID_SEED_LEN]>, PqfileError> {
+    decrypt_fixed_secret_legacy(body, passphrase, ENCRYPTED_HYBRID_BODY_LEN)
 }
 
 const SIGNING_SEED_LEN: usize = 32;
@@ -240,25 +236,7 @@ pub fn encrypt_signing_seed(
     seed: &[u8; SIGNING_SEED_LEN],
     passphrase: &str,
 ) -> Result<Vec<u8>, PqfileError> {
-    let mut salt = [0u8; SALT_LEN];
-    getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
-    let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
-
-    let ciphertext = cipher
-        .encrypt(nonce, seed.as_slice())
-        .map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let mut out = Vec::with_capacity(ENCRYPTED_SIGNING_BODY_LEN);
-    out.extend_from_slice(&salt);
-    out.extend_from_slice(&nonce_bytes);
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
+    encrypt_fixed_secret(seed, passphrase, ENCRYPTED_SIGNING_BODY_LEN)
 }
 
 /// Decrypts the 76-byte payload from an encrypted ML-DSA-65 signing key PEM body.
@@ -268,19 +246,7 @@ pub fn decrypt_signing_seed(
     body: &[u8],
     passphrase: &str,
 ) -> Result<Zeroizing<[u8; SIGNING_SEED_LEN]>, PqfileError> {
-    if body.len() != ENCRYPTED_SIGNING_BODY_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: ENCRYPTED_SIGNING_BODY_LEN,
-            got: body.len(),
-        });
-    }
-    if let Ok(seed) = try_decrypt_signing_seed(body, passphrase, ARGON2_P_COST) {
-        return Ok(seed);
-    }
-    if try_decrypt_signing_seed(body, passphrase, ARGON2_P_COST_LEGACY).is_ok() {
-        return Err(PqfileError::LegacyKeyFormat);
-    }
-    Err(PqfileError::WrongPassphrase)
+    decrypt_fixed_secret_with_legacy(body, passphrase, ENCRYPTED_SIGNING_BODY_LEN)
 }
 
 /// Decrypts a 76-byte signing body using legacy p=1 parameters.
@@ -289,42 +255,7 @@ pub(crate) fn decrypt_signing_seed_legacy(
     body: &[u8],
     passphrase: &str,
 ) -> Result<Zeroizing<[u8; SIGNING_SEED_LEN]>, PqfileError> {
-    if body.len() != ENCRYPTED_SIGNING_BODY_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: ENCRYPTED_SIGNING_BODY_LEN,
-            got: body.len(),
-        });
-    }
-    try_decrypt_signing_seed(body, passphrase, ARGON2_P_COST_LEGACY)
-        .map_err(|_| PqfileError::WrongPassphrase)
-}
-
-fn try_decrypt_signing_seed(
-    body: &[u8],
-    passphrase: &str,
-    p_cost: u32,
-) -> Result<Zeroizing<[u8; SIGNING_SEED_LEN]>, PqfileError> {
-    let salt = &body[..SALT_LEN];
-    let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
-    let ciphertext = &body[SALT_LEN + NONCE_LEN..];
-
-    let key = derive_key_with_pcost(passphrase, salt, p_cost)?;
-    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-    let nonce = nonce_bytes.try_into().expect("12-byte nonce");
-
-    let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| PqfileError::WrongPassphrase)?,
-    );
-
-    if plaintext.len() != SIGNING_SEED_LEN {
-        return Err(PqfileError::WrongPassphrase);
-    }
-
-    let mut seed = Zeroizing::new([0u8; SIGNING_SEED_LEN]);
-    seed.copy_from_slice(&plaintext);
-    Ok(seed)
+    decrypt_fixed_secret_legacy(body, passphrase, ENCRYPTED_SIGNING_BODY_LEN)
 }
 
 const SLH_SIGNING_SEED_LEN: usize = 72;
@@ -341,25 +272,7 @@ pub fn encrypt_slh_signing_seed(
     seed: &[u8; SLH_SIGNING_SEED_LEN],
     passphrase: &str,
 ) -> Result<Vec<u8>, PqfileError> {
-    let mut salt = [0u8; SALT_LEN];
-    getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
-    let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
-
-    let ciphertext = cipher
-        .encrypt(nonce, seed.as_slice())
-        .map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let mut out = Vec::with_capacity(ENCRYPTED_SLH_SIGNING_BODY_LEN);
-    out.extend_from_slice(&salt);
-    out.extend_from_slice(&nonce_bytes);
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
+    encrypt_fixed_secret(seed, passphrase, ENCRYPTED_SLH_SIGNING_BODY_LEN)
 }
 
 /// Decrypts the 116-byte payload from an encrypted SLH-DSA-SHAKE-192f signing key
@@ -369,33 +282,7 @@ pub fn decrypt_slh_signing_seed(
     body: &[u8],
     passphrase: &str,
 ) -> Result<Zeroizing<[u8; SLH_SIGNING_SEED_LEN]>, PqfileError> {
-    if body.len() != ENCRYPTED_SLH_SIGNING_BODY_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: ENCRYPTED_SLH_SIGNING_BODY_LEN,
-            got: body.len(),
-        });
-    }
-    let salt = &body[..SALT_LEN];
-    let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
-    let ciphertext = &body[SALT_LEN + NONCE_LEN..];
-
-    let key = derive_key(passphrase, salt)?;
-    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-    let nonce = nonce_bytes.try_into().expect("12-byte nonce");
-
-    let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| PqfileError::WrongPassphrase)?,
-    );
-
-    if plaintext.len() != SLH_SIGNING_SEED_LEN {
-        return Err(PqfileError::WrongPassphrase);
-    }
-
-    let mut seed = Zeroizing::new([0u8; SLH_SIGNING_SEED_LEN]);
-    seed.copy_from_slice(&plaintext);
-    Ok(seed)
+    decrypt_fixed_secret_no_legacy(body, passphrase, ENCRYPTED_SLH_SIGNING_BODY_LEN)
 }
 
 const IDENTITY_SEED_LEN: usize = 32;
@@ -412,25 +299,7 @@ pub fn encrypt_identity_seed(
     seed: &[u8; IDENTITY_SEED_LEN],
     passphrase: &str,
 ) -> Result<Vec<u8>, PqfileError> {
-    let mut salt = [0u8; SALT_LEN];
-    getrandom::fill(&mut salt).map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce_bytes).map_err(|_| PqfileError::EncryptionFailure)?;
-    let nonce = nonce_bytes.as_slice().try_into().expect("12-byte nonce");
-
-    let ciphertext = cipher
-        .encrypt(nonce, seed.as_slice())
-        .map_err(|_| PqfileError::EncryptionFailure)?;
-
-    let mut out = Vec::with_capacity(ENCRYPTED_IDENTITY_BODY_LEN);
-    out.extend_from_slice(&salt);
-    out.extend_from_slice(&nonce_bytes);
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
+    encrypt_fixed_secret(seed, passphrase, ENCRYPTED_IDENTITY_BODY_LEN)
 }
 
 /// Decrypts the 76-byte payload from an encrypted sealed-sender identity private key
@@ -440,33 +309,7 @@ pub fn decrypt_identity_seed(
     body: &[u8],
     passphrase: &str,
 ) -> Result<Zeroizing<[u8; IDENTITY_SEED_LEN]>, PqfileError> {
-    if body.len() != ENCRYPTED_IDENTITY_BODY_LEN {
-        return Err(PqfileError::InvalidKeyLength {
-            expected: ENCRYPTED_IDENTITY_BODY_LEN,
-            got: body.len(),
-        });
-    }
-    let salt = &body[..SALT_LEN];
-    let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
-    let ciphertext = &body[SALT_LEN + NONCE_LEN..];
-
-    let key = derive_key(passphrase, salt)?;
-    let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-    let nonce = nonce_bytes.try_into().expect("12-byte nonce");
-
-    let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| PqfileError::WrongPassphrase)?,
-    );
-
-    if plaintext.len() != IDENTITY_SEED_LEN {
-        return Err(PqfileError::WrongPassphrase);
-    }
-
-    let mut seed = Zeroizing::new([0u8; IDENTITY_SEED_LEN]);
-    seed.copy_from_slice(&plaintext);
-    Ok(seed)
+    decrypt_fixed_secret_no_legacy(body, passphrase, ENCRYPTED_IDENTITY_BODY_LEN)
 }
 
 fn derive_key(passphrase: &str, salt: &[u8]) -> Result<LockedSecret<32>, PqfileError> {
@@ -673,7 +516,7 @@ mod tests {
 
     // ── Helpers that produce legacy (p=1) bodies for migration tests ──────────
 
-    fn encrypt_seed_legacy(seed: &[u8; SEED_LEN], passphrase: &str) -> Vec<u8> {
+    fn encrypt_fixed_secret_legacy<const N: usize>(secret: &[u8; N], passphrase: &str) -> Vec<u8> {
         let mut salt = [0u8; SALT_LEN];
         getrandom::fill(&mut salt).unwrap();
         let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
@@ -683,7 +526,7 @@ mod tests {
         let ct = cipher
             .encrypt(
                 nonce_bytes.as_slice().try_into().expect("12-byte nonce"),
-                seed.as_slice(),
+                secret.as_slice(),
             )
             .unwrap();
         let mut out = Vec::new();
@@ -691,46 +534,18 @@ mod tests {
         out.extend_from_slice(&nonce_bytes);
         out.extend_from_slice(&ct);
         out
+    }
+
+    fn encrypt_seed_legacy(seed: &[u8; SEED_LEN], passphrase: &str) -> Vec<u8> {
+        encrypt_fixed_secret_legacy(seed, passphrase)
     }
 
     fn encrypt_signing_seed_legacy(seed: &[u8; SIGNING_SEED_LEN], passphrase: &str) -> Vec<u8> {
-        let mut salt = [0u8; SALT_LEN];
-        getrandom::fill(&mut salt).unwrap();
-        let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
-        let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-        let mut nonce_bytes = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce_bytes).unwrap();
-        let ct = cipher
-            .encrypt(
-                nonce_bytes.as_slice().try_into().expect("12-byte nonce"),
-                seed.as_slice(),
-            )
-            .unwrap();
-        let mut out = Vec::new();
-        out.extend_from_slice(&salt);
-        out.extend_from_slice(&nonce_bytes);
-        out.extend_from_slice(&ct);
-        out
+        encrypt_fixed_secret_legacy(seed, passphrase)
     }
 
     fn encrypt_hybrid_seed_legacy(seed: &[u8; HYBRID_SEED_LEN], passphrase: &str) -> Vec<u8> {
-        let mut salt = [0u8; SALT_LEN];
-        getrandom::fill(&mut salt).unwrap();
-        let key = derive_key_with_pcost(passphrase, &salt, ARGON2_P_COST_LEGACY).unwrap();
-        let cipher = Aes256Gcm::new(key.as_ref().try_into().expect("32-byte key"));
-        let mut nonce_bytes = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce_bytes).unwrap();
-        let ct = cipher
-            .encrypt(
-                nonce_bytes.as_slice().try_into().expect("12-byte nonce"),
-                seed.as_slice(),
-            )
-            .unwrap();
-        let mut out = Vec::new();
-        out.extend_from_slice(&salt);
-        out.extend_from_slice(&nonce_bytes);
-        out.extend_from_slice(&ct);
-        out
+        encrypt_fixed_secret_legacy(seed, passphrase)
     }
 
     // ── Current (p=4) round-trips ─────────────────────────────────────────────
@@ -918,6 +733,35 @@ mod tests {
         let legacy_body = encrypt_signing_seed_legacy(&seed, "migrate-me");
         let recovered = decrypt_signing_seed_legacy(&legacy_body, "migrate-me").unwrap();
         assert_eq!(*recovered, seed);
+    }
+
+    // ── Identity (p=4, no legacy form) ────────────────────────────────────────
+
+    #[test]
+    fn identity_roundtrip_correct_passphrase() {
+        let seed = [0x77u8; IDENTITY_SEED_LEN];
+        let body = encrypt_identity_seed(&seed, "identitypass").unwrap();
+        assert_eq!(body.len(), ENCRYPTED_IDENTITY_BODY_LEN);
+        let recovered = decrypt_identity_seed(&body, "identitypass").unwrap();
+        assert_eq!(*recovered, seed);
+    }
+
+    #[test]
+    fn identity_wrong_passphrase_returns_error() {
+        let seed = [0x88u8; IDENTITY_SEED_LEN];
+        let body = encrypt_identity_seed(&seed, "correct").unwrap();
+        assert!(matches!(
+            decrypt_identity_seed(&body, "wrong"),
+            Err(PqfileError::WrongPassphrase)
+        ));
+    }
+
+    #[test]
+    fn identity_wrong_body_length_returns_error() {
+        assert!(matches!(
+            decrypt_identity_seed(&[0u8; 10], "pass"),
+            Err(PqfileError::InvalidKeyLength { .. })
+        ));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

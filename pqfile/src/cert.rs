@@ -147,13 +147,7 @@ pub fn issue_cert(
         subject.tag(),
         subject.contents(),
     );
-    let sig = sign::sign_bytes(ca_sk_pem, &body, ca_passphrase)?;
-
-    let mut out = body;
-    out.extend_from_slice(&(sig.len() as u32).to_le_bytes());
-    out.extend_from_slice(&sig);
-
-    Ok(pem::encode(&Pem::new(CERT_TAG, out)))
+    sign_and_frame(body, ca_sk_pem, ca_passphrase, CERT_TAG)
 }
 
 /// Verifies `cert_pem`'s signature against the CA verifying key `ca_vk_pem`
@@ -174,16 +168,12 @@ pub fn verify_cert(ca_vk_pem: &str, cert_pem: &str, now: u64) -> Result<Certific
 
     let data = p.contents();
     let (cert, body_end) = parse_fields(data)?;
-    let body = &data[..body_end];
-    let mut pos = body_end;
-    let sig_len = u32::from_le_bytes(take(data, &mut pos, 4)?.try_into().unwrap()) as usize;
-    let sig = take(data, &mut pos, sig_len)?;
-    if pos != data.len() {
-        return Err(PqfileError::InvalidPem(
-            "certificate has trailing bytes after signature".into(),
-        ));
-    }
-    sign::verify_bytes(ca_vk_pem, body, sig)?;
+    verify_signed_body(
+        ca_vk_pem,
+        data,
+        body_end,
+        "certificate has trailing bytes after signature",
+    )?;
 
     if !cert.is_valid_at(now) {
         return Err(PqfileError::CertNotValid {
@@ -301,13 +291,7 @@ pub fn revoke_cert(
     });
 
     let body = encode_revocation_body(now, &entries);
-    let sig = sign::sign_bytes(ca_sk_pem, &body, ca_passphrase)?;
-
-    let mut out = body;
-    out.extend_from_slice(&(sig.len() as u32).to_le_bytes());
-    out.extend_from_slice(&sig);
-
-    Ok(pem::encode(&Pem::new(REVOCATION_TAG, out)))
+    sign_and_frame(body, ca_sk_pem, ca_passphrase, REVOCATION_TAG)
 }
 
 /// Verifies `list_pem`'s signature against the CA verifying key `ca_vk_pem`.
@@ -328,16 +312,12 @@ pub fn verify_revocation_list(
     }
     let data = p.contents();
     let (issued_at, entries, body_end) = parse_revocation_fields(data)?;
-    let body = &data[..body_end];
-    let mut pos = body_end;
-    let sig_len = u32::from_le_bytes(take(data, &mut pos, 4)?.try_into().unwrap()) as usize;
-    let sig = take(data, &mut pos, sig_len)?;
-    if pos != data.len() {
-        return Err(PqfileError::InvalidPem(
-            "revocation list has trailing bytes after signature".into(),
-        ));
-    }
-    sign::verify_bytes(ca_vk_pem, body, sig)?;
+    verify_signed_body(
+        ca_vk_pem,
+        data,
+        body_end,
+        "revocation list has trailing bytes after signature",
+    )?;
 
     Ok(RevocationList { issued_at, entries })
 }
@@ -506,6 +486,43 @@ fn take<'a>(data: &'a [u8], pos: &mut usize, len: usize) -> Result<&'a [u8], Pqf
     let slice = &data[*pos..*pos + len];
     *pos += len;
     Ok(slice)
+}
+
+/// Signs `body` with `sk_pem`, appends `SIG_LEN(4 LE) || SIG`, and PEM-encodes
+/// the result under `tag`. Shared tail of [`issue_cert`] and [`revoke_cert`],
+/// which otherwise differ only in how `body` itself is built.
+fn sign_and_frame(
+    body: Vec<u8>,
+    sk_pem: &str,
+    passphrase: Option<&str>,
+    tag: &str,
+) -> Result<String, PqfileError> {
+    let sig = sign::sign_bytes(sk_pem, &body, passphrase)?;
+    let mut out = body;
+    out.extend_from_slice(&(sig.len() as u32).to_le_bytes());
+    out.extend_from_slice(&sig);
+    Ok(pem::encode(&Pem::new(tag, out)))
+}
+
+/// Parses the trailing `SIG_LEN(4 LE) || SIG` following the self-delimiting
+/// body at `data[..body_end]`, verifies it against `vk_pem`, and returns the
+/// body slice. Shared tail of [`verify_cert`] and [`verify_revocation_list`],
+/// which otherwise differ only in how the body's own fields are parsed.
+fn verify_signed_body<'a>(
+    vk_pem: &str,
+    data: &'a [u8],
+    body_end: usize,
+    trailing_bytes_msg: &str,
+) -> Result<&'a [u8], PqfileError> {
+    let body = &data[..body_end];
+    let mut pos = body_end;
+    let sig_len = u32::from_le_bytes(take(data, &mut pos, 4)?.try_into().unwrap()) as usize;
+    let sig = take(data, &mut pos, sig_len)?;
+    if pos != data.len() {
+        return Err(PqfileError::InvalidPem(trailing_bytes_msg.into()));
+    }
+    sign::verify_bytes(vk_pem, body, sig)?;
+    Ok(body)
 }
 
 // ── revocation list binary framing ──────────────────────────────────────────

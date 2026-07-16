@@ -1,10 +1,8 @@
 use crate::app::PqfileApp;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::colors::c_text;
 use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1, c_yellow};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::colors::{c_surface0, c_text};
 use crate::types::{OpStatus, SealedSenderSubTab, Tab};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::widgets::reveal_in_explorer;
 use crate::widgets::{
     card, file_row, passphrase_row, save_result, section_label, seg_tabs, show_status,
     tab_heading_help,
@@ -277,22 +275,7 @@ impl PqfileApp {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        if matches!(&self.seal_status, OpStatus::Ok(_)) {
-            if let Some(ref path) = self.seal_output_path.clone() {
-                ui.add_space(4.0);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("📂  Reveal").size(12.0).color(c_text(dark)),
-                        )
-                        .fill(c_surface0(dark)),
-                    )
-                    .clicked()
-                {
-                    reveal_in_explorer(path);
-                }
-            }
-        }
+        crate::widgets::reveal_button_if_ok(ui, &self.seal_status, &self.seal_output_path, dark);
 
         show_status(ui, &self.seal_status, dark);
     }
@@ -354,26 +337,16 @@ impl PqfileApp {
             Ok(()) => {
                 let out_name = format!("{}.pqf", self.seal_input.name);
                 #[cfg(not(target_arch = "wasm32"))]
-                let native_path = {
-                    use std::path::PathBuf;
-                    let base = self
-                        .seal_input
-                        .path
-                        .as_ref()
-                        .map(|p| {
-                            let mut q = p.clone();
-                            q.set_extension("pqf");
-                            q
-                        })
-                        .unwrap_or_else(|| PathBuf::from(&out_name));
-                    let path = if self.settings.output_dir.is_empty() {
-                        base
-                    } else {
-                        PathBuf::from(&self.settings.output_dir)
-                            .join(base.file_name().unwrap_or_default())
-                    };
-                    Some(path)
-                };
+                let native_path = Some(crate::widgets::resolve_sibling_output_path(
+                    self.seal_input.path.as_deref(),
+                    &out_name,
+                    &self.settings.output_dir,
+                    |p| {
+                        let mut q = p.to_path_buf();
+                        q.set_extension("pqf");
+                        q
+                    },
+                ));
                 #[cfg(target_arch = "wasm32")]
                 let native_path: Option<std::path::PathBuf> = None;
                 #[cfg(not(target_arch = "wasm32"))]
@@ -495,22 +468,12 @@ impl PqfileApp {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        if matches!(&self.unseal_status, OpStatus::Ok(_)) {
-            if let Some(ref path) = self.unseal_output_path.clone() {
-                ui.add_space(4.0);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("📂  Reveal").size(12.0).color(c_text(dark)),
-                        )
-                        .fill(c_surface0(dark)),
-                    )
-                    .clicked()
-                {
-                    reveal_in_explorer(path);
-                }
-            }
-        }
+        crate::widgets::reveal_button_if_ok(
+            ui,
+            &self.unseal_status,
+            &self.unseal_output_path,
+            dark,
+        );
 
         if let OpStatus::Err(m) = &self.unseal_status {
             if m.contains("authentication failed") {
@@ -596,22 +559,12 @@ impl PqfileApp {
                     .unwrap_or(&self.unseal_input.name)
                     .to_owned();
                 #[cfg(not(target_arch = "wasm32"))]
-                let native_path = {
-                    use std::path::PathBuf;
-                    let base = self
-                        .unseal_input
-                        .path
-                        .as_ref()
-                        .map(|p| p.with_extension(""))
-                        .unwrap_or_else(|| PathBuf::from(&out_name));
-                    let path = if self.settings.output_dir.is_empty() {
-                        base
-                    } else {
-                        PathBuf::from(&self.settings.output_dir)
-                            .join(base.file_name().unwrap_or_default())
-                    };
-                    Some(path)
-                };
+                let native_path = Some(crate::widgets::resolve_sibling_output_path(
+                    self.unseal_input.path.as_deref(),
+                    &out_name,
+                    &self.settings.output_dir,
+                    |p| p.with_extension(""),
+                ));
                 #[cfg(target_arch = "wasm32")]
                 let native_path: Option<std::path::PathBuf> = None;
                 #[cfg(not(target_arch = "wasm32"))]
