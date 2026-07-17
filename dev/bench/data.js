@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784215785281,
+  "lastUpdate": 1784313334597,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -3671,6 +3671,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48494,
             "range": "± 319",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "a32fd1440cc0eabb3524de4e5dcae00620a80f49",
+          "message": "chore(workflows): update rust-toolchain version and adjust supply-chain policies\n\n- Updated the `rust-toolchain` action to version `4cda84d5c5c54efe2404f9d843567869ab1699d4` across multiple workflow files, suppressing version mismatch warnings where necessary.\n- Modified `supply-chain/config.toml` to change `audit-as-crates-io` policy from `true` to `false` for both `pqfile` and `pqfile-cli`, reflecting updated auditing requirements.\n- Updated `supply-chain/imports.lock` to bump the version of `pqfile` and `pqfile-cli` to `4.3.1`, with new expiration dates.",
+          "timestamp": "2026-07-17T14:31:41-04:00",
+          "tree_id": "6a2a9b15b0533948daaf94675db15bbf14d03c29",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/a32fd1440cc0eabb3524de4e5dcae00620a80f49"
+        },
+        "date": 1784313333702,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66381,
+            "range": "± 835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 971277,
+            "range": "± 5397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 105916780,
+            "range": "± 249570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 111590,
+            "range": "± 766",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 992506,
+            "range": "± 6889",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93383111,
+            "range": "± 317473",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 70105,
+            "range": "± 300",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 974643,
+            "range": "± 2060",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 115441895,
+            "range": "± 269620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 111891,
+            "range": "± 2041",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1029065,
+            "range": "± 3964",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99825759,
+            "range": "± 196616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48369,
+            "range": "± 125",
             "unit": "ns/iter"
           }
         ]
