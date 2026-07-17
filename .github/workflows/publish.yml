@@ -22,7 +22,7 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # v1 (pinned for 1.96.0)
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # v1 (pinned for 1.96.0) # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: 1.96.0
 

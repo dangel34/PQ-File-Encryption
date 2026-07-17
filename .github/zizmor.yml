@@ -1,3 +1,12 @@
+# ref-version-mismatch is NOT globally disabled here on purpose: it still
+# guards every other pinned action, where a wrong version comment can signal a
+# supply-chain problem. It is suppressed inline (# zizmor: ignore[ref-version-mismatch])
+# on the dtolnay/rust-toolchain pins only. That action publishes no immutable
+# release tags - `stable`, `master`, and even `v1` are all rolling refs it
+# force-pushes - so any SHA pin necessarily "mismatches" its channel comment
+# and drifts back into a finding every time upstream moves the ref (this is
+# what broke CI once the deps update re-pinned it). The SHA still provides
+# supply-chain pinning; the actual toolchain is chosen by `with: toolchain:`.
 rules:
   use-trusted-publishing:
     # crates.io Trusted Publishing (OIDC) would replace the long-lived
