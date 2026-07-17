@@ -11,7 +11,9 @@ use crate::types::{
     SigncryptSubTab, Tab,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry, WatchLogEntry, WatchLogLevel};
+use crate::types::{
+    DecryptBatchJobHandle, EncryptJobHandle, KeyEntry, WatchLogEntry, WatchLogLevel,
+};
 use crate::widgets::{bullet, card, kv_row, section_label, tab_btn};
 use crate::APP_VERSION;
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
