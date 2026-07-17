@@ -1,15 +1,18 @@
 //! Time-locked encryption (V11 format) over the drand beacon.
 //!
-//! [`encrypt_stream_tlock`] is fully offline: given a target round number (and
-//! optionally a non-default drand chain) it never touches the network.
-//! [`decrypt_stream_tlock`] is the only function that fetches secret-relevant
-//! material over the network: it fetches the target round's threshold BLS
-//! signature from a drand HTTP relay, uses it to unlock the tlock IBE
-//! ciphertext, and only then derives the session key. Decrypting before the
-//! round has fired returns [`PqfileError::TlockRoundNotReached`].
-//! [`round_for_target_time`] also touches the network (fetching only public
-//! chain parameters, never a round's beacon), as a convenience for turning a
-//! human time expression into a round number for [`encrypt_stream_tlock`].
+//! [`encrypt_stream_tlock`](crate::tlock::encrypt_stream_tlock) is fully
+//! offline: given a target round number (and optionally a non-default drand
+//! chain) it never touches the network.
+//! [`decrypt_stream_tlock`](crate::tlock::decrypt_stream_tlock) is the only
+//! function that fetches secret-relevant material over the network: it fetches
+//! the target round's threshold BLS signature from a drand HTTP relay, uses it
+//! to unlock the tlock IBE ciphertext, and only then derives the session key.
+//! Decrypting before the round has fired returns
+//! [`PqfileError::TlockRoundNotReached`].
+//! [`round_for_target_time`](crate::tlock::round_for_target_time) also touches
+//! the network (fetching only public chain parameters, never a round's
+//! beacon), as a convenience for turning a human time expression into a round
+//! number for [`encrypt_stream_tlock`](crate::tlock::encrypt_stream_tlock).
 //!
 //! Time-lock is *not* a post-quantum guarantee: drand's tlock scheme is
 //! BLS12-381 pairing-based (classical). It is layered on top of pqfile's usual

@@ -12,6 +12,8 @@ pub(crate) mod settings;
 pub(crate) mod shamir;
 pub(crate) mod sign;
 pub(crate) mod signcrypt;
+#[cfg(feature = "stego")]
+pub(crate) mod stego;
 pub(crate) mod tools;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod webauthn_ui;

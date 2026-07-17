@@ -44,6 +44,7 @@ surface.
 | `pqfile::hardware::stub` | `BACKEND_CREDENTIAL_STORE`, `BACKEND_PKCS11` |
 | `pqfile::async_io` *(feature = "async")* | `encrypt_stream_async`, `decrypt_stream_async`, `AsyncPqfWriter` |
 | `pqfile::tlock` *(feature = "tlock")* | `encrypt_stream_tlock`, `decrypt_stream_tlock`, `round_for_target_time`, `quicknet`, `TlockChain` |
+| `pqfile::stego` *(feature = "stego")* | `bury`, `exhume`, `capacity` |
 | `pqfile::archive` | `create`, `extract`, `list`, `create_from_memory`, `extract_to_memory`, `ArchiveEntry` |
 | `pqfile::shamir` | `split_key`, `reconstruct_key`, `write_shares`, `SplitResult` |
 | `pqfile::rekey` | `rekey_stream` |

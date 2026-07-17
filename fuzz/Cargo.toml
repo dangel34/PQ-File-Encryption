@@ -9,7 +9,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-pqfile = { path = "../pqfile" }
+# `stego` enabled here so fuzz_exhume can exercise it; the other targets are
+# unaffected by the extra feature.
+pqfile = { path = "../pqfile", features = ["stego"] }
 
 [[bin]]
 name = "fuzz_header_read"
@@ -26,5 +28,11 @@ doc = false
 [[bin]]
 name = "fuzz_pem_parsing"
 path = "fuzz_targets/fuzz_pem_parsing.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_exhume"
+path = "fuzz_targets/fuzz_exhume.rs"
 test = false
 doc = false

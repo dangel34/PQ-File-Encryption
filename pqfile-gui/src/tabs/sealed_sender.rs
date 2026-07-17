@@ -361,7 +361,7 @@ impl PqfileApp {
             ui.label(
                 RichText::new(
                     "No plaintext is released until the deniable-authentication tag verifies: \
-                     unlike Signdecrypt, this is fully buffered internally.",
+                     this is fully buffered internally, same as Signdecrypt.",
                 )
                 .size(12.0)
                 .color(c_subtext(dark)),

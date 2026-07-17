@@ -2,6 +2,8 @@ use crate::colors::{
     c_accent, c_bg, c_card, c_chrome, c_overlay, c_subtext, c_surface0, c_surface1, c_text,
 };
 use crate::theme::apply_theme;
+#[cfg(feature = "stego")]
+use crate::types::StegoSubTab;
 use crate::types::{
     pem_variant_name, tab_label, ArchiveSubTab, BatchPending, CertSubTab, DecryptMode,
     DecryptSubTab, EncryptMode, FileInput, KeygenAlgorithm, MultiFileEntry, OpStatus, PickedFile,
@@ -9,7 +11,7 @@ use crate::types::{
     SigncryptSubTab, Tab,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry};
+use crate::types::{DecryptBatchJobHandle, EncryptJobHandle, KeyEntry, WatchLogEntry, WatchLogLevel};
 use crate::widgets::{bullet, card, kv_row, section_label, tab_btn};
 use crate::APP_VERSION;
 use eframe::egui::{self, Color32, CornerRadius, Margin, RichText, Stroke, Vec2};
@@ -20,7 +22,7 @@ use zeroize::{Zeroize, Zeroizing};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct WatchHandle {
     /// New encrypted-file paths written by the watcher (populated by the bg thread).
-    pub(crate) log_rx: std::sync::mpsc::Receiver<String>,
+    pub(crate) log_rx: std::sync::mpsc::Receiver<WatchLogEntry>,
     /// Set to `true` by the UI thread to request the watcher stop.
     pub(crate) stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -220,17 +222,31 @@ pub struct PqfileApp {
     pub(crate) keygen_hardware_label: String,
 
     // ── Tools tab (Revoke + Rekey + Repassphrase) ─────────────────────────
+    // The Change Passphrase and Revoke Key sections are native-only (they
+    // live behind the Keys tab's native show fn), so their state is dead
+    // code on wasm; `revoke_pubkey` stays un-annotated because the shared
+    // poll/pending machinery reads it on every target.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) repassphrase_key: FileInput,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) repassphrase_old_passphrase: Zeroizing<String>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) repassphrase_old_passphrase_visible: bool,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) repassphrase_new_passphrase: Zeroizing<String>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) repassphrase_new_passphrase_confirm: Zeroizing<String>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) repassphrase_new_passphrase_visible: bool,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) repassphrase_from_legacy: bool,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) repassphrase_status: OpStatus,
 
     pub(crate) revoke_pubkey: FileInput,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) revoke_reason: String,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) revoke_status: OpStatus,
 
     // ── Keys tab: Issue / Verify / Revoke Certificate panel ─────────────────
@@ -291,6 +307,38 @@ pub struct PqfileApp {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) unseal_output_path: Option<String>,
 
+    // ── Keys tab: Steganographic Key Backup panel (Bury / Exhume) ───────────
+    #[cfg(feature = "stego")]
+    pub(crate) stego_sub_tab: StegoSubTab,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_bury_cover: FileInput,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_bury_payload: FileInput,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_bury_passphrase: Zeroizing<String>,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_bury_passphrase_confirm: Zeroizing<String>,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_bury_passphrase_visible: bool,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_bury_status: OpStatus,
+    #[cfg(feature = "stego")]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) stego_bury_output_path: Option<String>,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_exhume_image: FileInput,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_exhume_filename: String,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_exhume_passphrase: Zeroizing<String>,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_exhume_passphrase_visible: bool,
+    #[cfg(feature = "stego")]
+    pub(crate) stego_exhume_status: OpStatus,
+    #[cfg(feature = "stego")]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) stego_exhume_output_path: Option<String>,
+
     pub(crate) rekey_privkey: FileInput,
     pub(crate) rekey_privkey_passphrase: Zeroizing<String>,
     pub(crate) rekey_privkey_passphrase_visible: bool,
@@ -346,7 +394,7 @@ pub struct PqfileApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) watch_handle: Option<WatchHandle>,
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) watch_log: Vec<String>,
+    pub(crate) watch_log: Vec<WatchLogEntry>,
 
     // ── QR code modal ────────────────────────────────────────────────────
     /// When Some, a QR window is open showing the encoded PEM data.
@@ -552,6 +600,34 @@ impl Default for PqfileApp {
             unseal_input: FileInput::default(),
             unseal_status: OpStatus::None,
             unseal_output_path: None,
+            #[cfg(feature = "stego")]
+            stego_sub_tab: StegoSubTab::default(),
+            #[cfg(feature = "stego")]
+            stego_bury_cover: FileInput::default(),
+            #[cfg(feature = "stego")]
+            stego_bury_payload: FileInput::default(),
+            #[cfg(feature = "stego")]
+            stego_bury_passphrase: Zeroizing::new(String::new()),
+            #[cfg(feature = "stego")]
+            stego_bury_passphrase_confirm: Zeroizing::new(String::new()),
+            #[cfg(feature = "stego")]
+            stego_bury_passphrase_visible: false,
+            #[cfg(feature = "stego")]
+            stego_bury_status: OpStatus::None,
+            #[cfg(feature = "stego")]
+            stego_bury_output_path: None,
+            #[cfg(feature = "stego")]
+            stego_exhume_image: FileInput::default(),
+            #[cfg(feature = "stego")]
+            stego_exhume_filename: "recovered".to_owned(),
+            #[cfg(feature = "stego")]
+            stego_exhume_passphrase: Zeroizing::new(String::new()),
+            #[cfg(feature = "stego")]
+            stego_exhume_passphrase_visible: false,
+            #[cfg(feature = "stego")]
+            stego_exhume_status: OpStatus::None,
+            #[cfg(feature = "stego")]
+            stego_exhume_output_path: None,
             rekey_privkey: FileInput::default(),
             rekey_privkey_passphrase: Zeroizing::new(String::new()),
             rekey_privkey_passphrase_visible: false,
@@ -1342,6 +1418,12 @@ impl PqfileApp {
         self.unseal_identity_key.poll();
         self.unseal_sender_identity_pubkey.poll();
         self.unseal_input.poll();
+        #[cfg(feature = "stego")]
+        {
+            self.stego_bury_cover.poll();
+            self.stego_bury_payload.poll();
+            self.stego_exhume_image.poll();
+        }
 
         let enc_batch = drain_batch_pending(&self.encrypt_batch_pending, &mut self.encrypt_files);
         let dec_batch = drain_batch_pending(&self.decrypt_batch_pending, &mut self.decrypt_files);
@@ -1844,7 +1926,7 @@ impl PqfileApp {
 
 fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
     match tab {
-        Tab::Keygen => ("Key Pair Generation", &[
+        Tab::Keygen => ("Generate Key Pair", &[
             "This tab generates the cryptographic key pair that makes everything in pqfile work. \
              You create a public key that anyone can use to encrypt files for you, and a private \
              key that only you can use to decrypt them.",
@@ -1946,7 +2028,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
             "✔ = pass, ⚠ = warning (action recommended), ✖ = fail (action required), \
              · = informational or not applicable.",
         ]),
-        Tab::Sign => ("Digital Signatures", &[
+        Tab::Sign => ("Digital Signatures  (ML-DSA-65 / SLH-DSA)", &[
             "Signing lets you prove that a file came from you and has not been modified. \
              pqfile supports two post-quantum signature algorithms: ML-DSA-65 (NIST FIPS 204, \
              the default - fast, 3.3 KB signatures) and SLH-DSA-SHAKE-192f (NIST FIPS 205 - \
@@ -1986,10 +2068,12 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              pqfile decrypts the file and then confirms the signature before reporting success. \
              If the signature does not match, the operation fails even if decryption succeeds.",
             "## A NOTE ON OUTPUT",
-            "During signdecrypt, plaintext is written to the output as it is decrypted, before \
-             the final signature check completes. If you are writing to a file or socket, \
-             please be aware that the output should be treated as unverified until the \
-             operation returns successfully.",
+            "In this application, signdecrypt buffers the decrypted plaintext in memory and \
+             only writes it to disk after the signature check succeeds - nothing unverified \
+             ever reaches your filesystem. (If you call pqfile's signdecrypt directly from \
+             your own code with a streaming writer such as a file handle or socket, the \
+             library writes as it decrypts, so that caller is responsible for treating the \
+             output as unverified until the call returns successfully.)",
         ]),
         Tab::SealedSender => ("Sealed Sender", &[
             "Sealed sender proves who sent a file to the specific recipient, without leaving \
@@ -2015,7 +2099,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              private key, your own identity private key, and the sender's identity public key. \
              No plaintext is released until the authentication tag verifies.",
         ]),
-        Tab::Archive => ("Encrypted Archive", &[
+        Tab::Archive => ("Encrypted Archive  (PQFA)", &[
             "The archive format packs multiple files into a single .pqf container. All files \
              are authenticated together, so the recipient can be confident that the entire \
              collection is intact and unmodified.",
@@ -2054,8 +2138,22 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              key - including the Encrypt tab's recipient list - as long as the matching CA \
              verifying key is also supplied. Certificates do not chain and have no revocation \
              mechanism beyond their validity window.",
+            "## STEGANOGRAPHIC KEY BACKUP",
+            "The Steganographic Key Backup panel hides a file (typically a passphrase-encrypted \
+             private key) inside the pixel data of a cover image using Bury, and recovers it \
+             with Exhume. Both take a passphrase, and the passphrase keys detection itself: \
+             everything embedded after a random salt is encrypted with a key derived from the \
+             passphrase (Argon2id + BLAKE3), so nothing in the image - no magic bytes, no \
+             length, no checksum - reveals that a payload is present, and running Exhume with \
+             the wrong passphrase looks exactly like running it on a plain photo. Output is \
+             always a lossless PNG, since LSB embedding cannot survive a JPEG re-encode.",
+            "This is still not a steganalysis-hardened scheme: a statistical analysis of the \
+             image's least-significant-bit noise can flag that *something* is embedded, even \
+             though it cannot confirm or recover *what*. Treat it as a way to hide a backup in \
+             plain sight, keep the payload itself encrypted, and remember that a lost \
+             passphrase makes the hidden file unrecoverable.",
         ]),
-        Tab::Shamir => ("Split Key  (Shamir)", &[
+        Tab::Shamir => ("Split Key  (Shamir, M-of-N)", &[
             "Shamir's Secret Sharing lets you split a private key into N shares such that \
              any M of them can reconstruct the original key, but fewer than M reveal \
              nothing. This is useful for secure key backup, team key custody, and \
@@ -2427,14 +2525,26 @@ impl PqfileApp {
                                         Ok(ct) => {
                                             if !confirm || !out_path.exists() {
                                                 match crate::widgets::atomic_write(&out_path, &ct) {
-                                                    Ok(()) => format!("✔ {out_name}"),
-                                                    Err(e) => format!("✖ {name}: {e}"),
+                                                    Ok(()) => WatchLogEntry {
+                                                        level: WatchLogLevel::Ok,
+                                                        text: out_name,
+                                                    },
+                                                    Err(e) => WatchLogEntry {
+                                                        level: WatchLogLevel::Err,
+                                                        text: format!("{name}: {e}"),
+                                                    },
                                                 }
                                             } else {
-                                                format!("⚠ skipped {name} (output exists)")
+                                                WatchLogEntry {
+                                                    level: WatchLogLevel::Warn,
+                                                    text: format!("skipped {name} (output exists)"),
+                                                }
                                             }
                                         }
-                                        Err(e) => format!("✖ {name}: {e}"),
+                                        Err(e) => WatchLogEntry {
+                                            level: WatchLogLevel::Err,
+                                            text: format!("{name}: {e}"),
+                                        },
                                     };
                                     let _ = tx.send(msg);
                                     ctx.request_repaint();

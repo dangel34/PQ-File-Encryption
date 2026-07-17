@@ -38,7 +38,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
           # advisories: block on known RustSec vulnerabilities
@@ -60,7 +60,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
 
@@ -69,7 +69,7 @@ jobs:
           key-suffix: vet
 
       - name: Install cargo-vet
-        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
           # Pinned: no GitHub release binary exists past v0.10.0, so an
           # unpinned "latest" silently resolves to that stale binary. Pinning
@@ -100,7 +100,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
 
@@ -109,7 +109,7 @@ jobs:
           key-suffix: semver
 
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
           tool: cargo-semver-checks
 
@@ -163,7 +163,7 @@ jobs:
       # benchmark history to it.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0 # zizmor: ignore[artipacked]
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
 
@@ -217,7 +217,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
 
@@ -225,7 +225,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y valgrind
 
       - name: Install iai-callgrind-runner
-        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
           # Must exactly match the iai-callgrind version in pqfile/Cargo.toml
           # (dev-dependency) - a mismatch is a hard error at bench-run time.
@@ -267,7 +267,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
           components: rustfmt, clippy
@@ -307,7 +307,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
           components: clippy
@@ -355,7 +355,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
           components: clippy
@@ -389,7 +389,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
           components: clippy
@@ -411,6 +411,44 @@ jobs:
       - name: Test (pqfile-cli, tlock feature)
         run: cargo test -p pqfile-cli --features tlock
 
+  # ── Optional-feature compile check (stego) ────────────────────────────────
+  # Steganographic key backup (`bury`/`exhume`) pulls in an image-codec
+  # dependency tree (PNG + JPEG decode/encode); off by default so a normal
+  # build never pays for it. This job compiles and runs the feature's own
+  # unit tests (LSB embed/extract round-trips, capacity, tamper detection)
+  # for both the library and the CLI.
+  stego-check:
+    name: stego feature check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: stego
+          cache-target: "true"
+
+      - name: Clippy (pqfile, stego feature)
+        run: cargo clippy -p pqfile --all-targets --features stego -- --deny warnings
+
+      - name: Test (pqfile, stego feature)
+        run: cargo test -p pqfile --features stego
+
+      - name: Clippy (pqfile-cli, stego feature)
+        run: cargo clippy -p pqfile-cli --all-targets --features stego -- --deny warnings
+
+      - name: Test (pqfile-cli, stego feature)
+        run: cargo test -p pqfile-cli --features stego
+
   # ── WASM smoke test ────────────────────────────────────────────────────────
   wasm-test:
     name: WASM smoke test
@@ -422,13 +460,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
           tool: wasm-pack
 

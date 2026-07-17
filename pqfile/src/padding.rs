@@ -6,12 +6,12 @@
 //! so it cannot be tampered with independently of the payload. These two
 //! adapters use that existing field rather than changing the wire format:
 //!
-//! - [`PadmeReader`] wraps a plaintext reader so it emits extra zero bytes up
+//! - [`PadmeReader`](crate::padding::PadmeReader) wraps a plaintext reader so it emits extra zero bytes up
 //!   to a Padmé-rounded length before EOF. Encrypt with the *real* length
 //!   passed as `original_size` (as normal) and the wrapped reader in place of
 //!   the real one; the header keeps recording the true size, but the
 //!   authenticated ciphertext is now the size of the padded bucket instead.
-//! - [`TruncatingWriter`] wraps a decrypt destination so at most
+//! - [`TruncatingWriter`](crate::padding::TruncatingWriter) wraps a decrypt destination so at most
 //!   `original_size` bytes are ever forwarded to it, silently dropping the
 //!   padding tail. Because non-padded files already decrypt to exactly
 //!   `original_size` bytes, wrapping every decrypt destination with this

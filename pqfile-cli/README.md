@@ -17,3 +17,7 @@ and `pqfile <subcommand> --help` are also authoritative. `pqfile completions <sh
 The `fido2` Cargo feature (off by default) adds `fido2-enroll` / `--fido2` support for
 FIDO2 hardware security keys as a v10 passphrase second factor; it pulls in `libudev-dev`
 on Linux, so it stays opt-in.
+
+The `stego` Cargo feature (off by default) adds `bury` / `exhume` support for hiding a
+file inside a cover image's pixel data under a passphrase that keys detection itself;
+it pulls in the `image` crate's PNG/JPEG codecs plus `blake3`, so it stays opt-in.

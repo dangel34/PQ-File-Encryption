@@ -202,6 +202,16 @@ impl PqfileApp {
 
     fn show_archive_extract_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "EXTRACT / LIST ARCHIVE", dark);
+        ui.label(
+            RichText::new(
+                "Every path inside the archive is checked against the output directory; \
+                 paths containing traversal components such as .. are rejected before any \
+                 file is written.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(6.0);
         let mut pp_submitted = false;
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             file_row(

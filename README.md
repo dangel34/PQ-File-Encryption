@@ -50,7 +50,7 @@ The optional **hybrid mode** (`--hybrid`) adds X25519 Diffie-Hellman to the key 
 | Digital signatures                | ML-DSA-65 (FIPS 204); optional SLH-DSA-SHAKE-192f (FIPS 205) |
 | Key fingerprints                  | SHA3-256 (first 8 bytes, colon-separated hex)            |
 | Threshold key splitting           | Shamir's Secret Sharing over GF(256)                     |
-| Hardware-backed key storage       | OS credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service) |
+| Hardware-backed key storage       | OS credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service) - unrelated to the FIDO2 hardware token second factor below, which is a physical USB security key |
 
 ---
 
@@ -523,6 +523,22 @@ pqfile unseal -k bob-privkey.pem \
 
 Unlike `signcrypt`, which embeds a non-repudiable ML-DSA/SLH-DSA signature, sealed sender proves the sender's identity only to the specific intended recipient. The authentication tag is derived from a static X25519 Diffie-Hellman between the sender's and recipient's identity keys, so computing it requires only one party's private key plus the other's public key - the recipient could have forged an identical tag themselves, and no third party can ever confirm who really sent the file. Useful when the existence of a communication relationship is itself sensitive. `unseal` buffers the plaintext internally and only releases it once the tag verifies; stdin is not supported for `seal` (two passes are required, as with `signcrypt`).
 
+### Steganographic key backup (`stego` cargo feature)
+
+```bash
+# Hide a (ideally passphrase-encrypted) private key inside a cover photo.
+# Prompts for a passphrase that keys both detection and recovery. The cover
+# can be PNG or JPEG; the output is always a lossless PNG, since LSB
+# embedding cannot survive a JPEG re-encode.
+pqfile bury --image vacation.jpg privkey.pem -o vacation-with-key.png
+
+# Recover it later (prompts for the same passphrase; the recovered file is
+# written atomically with owner-only permissions).
+pqfile exhume vacation-with-key.png -o recovered-privkey.pem
+```
+
+`bury` embeds the file's bytes one bit per color-channel byte into the cover image's pixel data (least-significant-bit steganography). The passphrase keys *detection*, not just recovery: everything embedded after a random salt is encrypted with a keystream derived from the passphrase (Argon2id, then BLAKE3 subkeys for the keystream and a payload MAC), so there is no plaintext magic, length, or checksum an image scanner could look for, and `exhume` with the wrong passphrase fails identically to `exhume` on an ordinary photo. Useful as an offline backup that doesn't look like a key backup, e.g. among ordinary photos on a drive. This is a plausible-deniability mechanism, not a steganalysis-hardened one: bits are placed sequentially rather than scattered, so a dedicated statistical attack on the image's LSB noise could in principle flag that *something* is embedded, even though it cannot confirm or recover *what*. Requires building with `--features stego` (off by default, since it pulls in an image-codec dependency tree a normal build doesn't need).
+
 ### Archive and extract
 
 ```bash
@@ -623,10 +639,10 @@ Errors go to stderr as `{"status":"error","code":N,"message":"..."}`. The numeri
 
 The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egui code and expose nearly everything the CLI does, each tab with built-in "?" help text:
 
-- **🗝 Keys**: a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only), and an "Issue / Verify / Revoke Certificate" panel for the CA certificate workflow
+- **🗝 Keys**: a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only), an "Issue / Verify / Revoke Certificate" panel for the CA certificate workflow, and a "Steganographic Key Backup" panel (Bury/Exhume, `stego` cargo feature, on by default) for hiding a file inside a cover image under a passphrase that keys detection itself
 - **🔑 Keygen**: generates ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, ML-DSA-65, or SLH-DSA-SHAKE-192f signing key pairs, with optional passphrase or hardware-backed (OS credential store) protection, key expiry dates, and OpenSSH ed25519 key import (native only)
-- **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; checkboxes for Padme length padding and magic-free stealth mode (single recipient); a folder watcher that auto-encrypts new files (native only); drag-and-drop
-- **🔓 Decrypt**: loads any v2-v10 `.pqf` file, prompting for a passphrase only when the key requires one; a "Stealth mode" checkbox for files encrypted without a header; includes a **Rekey** sub-tab to re-wrap a file for a new recipient without decrypting the payload
+- **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; checkboxes for Padme length padding and magic-free stealth mode (single recipient); a folder watcher that auto-encrypts new files (native only); drag-and-drop; a **Passphrase** mode (no key pair required, v10 format) with a Second Factor selector - Keyfile (both builds), FIDO2 hardware token (`pqfile-desktop` only), or Passkey/WebAuthn PRF (web build only, currently disabled pending browser support)
+- **🔓 Decrypt**: loads any v2-v10 `.pqf` file, prompting for a passphrase only when the key requires one; the same **Passphrase** mode and Second Factor selector as Encrypt for v10 files; a "Stealth mode" checkbox for files encrypted without a header; includes **Rekey** (re-wrap a file for a new recipient without decrypting the payload) and **Add Recipient** (append a recipient to an existing v4/v7/v8 multi-recipient file) sub-tabs
 - **✏ Sign** / **🔏 Signcrypt**: sign and verify with ML-DSA-65 or SLH-DSA-SHAKE-192f (algorithm detected from the loaded key, shown inline), plus combined sign-then-encrypt and decrypt-then-verify
 - **🕶 Sealed Sender**: generate a separate X25519 identity key pair, then seal (encrypt with deniable sender authentication) and unseal files - proves the sender to the specific recipient without producing evidence a third party could ever check
 - **📦 Archive**: pack multiple files into one encrypted `.pqf` container and extract with path-traversal protection
@@ -926,7 +942,7 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 |------------------------|---------------------------------------------------------------------------|
 | `Io`                   | File system or I/O failure                                                |
 | `InvalidMagic`         | File does not start with "PQFL"                                           |
-| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x0A)                         |
+| `UnsupportedVersion`   | Version byte is not a supported value (0x02-0x0A, any of which may also carry the authenticated-header bit, e.g. 0x83; or 0x8B for v11 time-locked files, which always carries that bit, with the `tlock` feature) |
 | `UnsupportedKem`       | KEM variant field is not a recognised value                               |
 | `KemVariantMismatch`   | Private key KEM variant does not match the variant in the file header     |
 | `EncryptionFailure`    | AEAD encryption or nonce generation failed                                |
@@ -946,6 +962,23 @@ All errors are reported to stderr with a descriptive message; exit code is 1. Th
 | `ShareVerificationFailed` | Reconstructed Shamir key fingerprint does not match the share fingerprint |
 | `Truncated`            | Stream ended without a final authenticated chunk; file was truncated      |
 | `KdfLimitExceeded`     | v10 file's Argon2 parameters exceed the configured ceiling (memory or time cost) |
+| `KeyfileRequired`      | v10 file was encrypted with a keyfile second factor; pass `--keyfile <PATH>` |
+| `KeyfileNotRequired`   | `--keyfile` was passed but the file was not encrypted with one            |
+| `UnsupportedHeaderFlags` | v10 header carries flag bits this build does not understand; upgrade pqfile |
+| `Fido2Required`        | v10 file was encrypted with a FIDO2 hardware token second factor; pass `--fido2 <ENROLLMENT_FILE>` |
+| `Fido2NotRequired`     | `--fido2` was passed but the file was not encrypted with one              |
+| `CertNotValid`         | Certificate signature verified, but the check time falls outside its validity window |
+| `CertUseNotPermitted`  | Certificate does not authorize the requested use (encrypt or sign)        |
+| `TlockRoundNotReached` | Time-locked (v11) file's target drand round has not fired yet             |
+| `TlockBeaconFetchFailed` | Fetching the drand beacon failed for a reason other than "not yet reached" |
+| `TlockDecryptionFailed` | Beacon signature was fetched but tlock/AEAD decryption failed            |
+| `WebauthnPrfRequired`  | v10 file was encrypted with a WebAuthn `prf` second factor                |
+| `WebauthnPrfNotRequired` | A WebAuthn PRF output was supplied but the file uses a different second factor |
+| `SealedSenderAuthFailed` | Sealed-sender deniable-authentication tag did not verify                |
+| `CertRevoked`          | Certificate appears in a verified revocation list the caller chose to consult |
+| `StegoCapacityExceeded` | `bury`'s cover image is too small to hold the payload                    |
+| `StegoPayloadNotFound` | `exhume` found no valid embedded payload (wrong passphrase, wrong image, or edited/corrupted since burying) |
+| `StegoInvalidImage`    | Cover or stego image could not be decoded/encoded (unsupported or corrupt format) |
 
 The `#[non_exhaustive]` enum may gain new variants in minor releases; match with a wildcard arm. See [docs/ERROR_CODES.md](docs/ERROR_CODES.md) for the stable numeric code each variant maps to in `--json` output.
 

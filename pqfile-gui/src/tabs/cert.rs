@@ -3,6 +3,7 @@ use crate::colors::{c_accent, c_card, c_chrome, c_subtext, c_surface1};
 use crate::types::{current_unix_secs, unix_secs_to_ymd, CertSubTab, OpStatus};
 use crate::widgets::{
     card, file_row, kv_row, passphrase_row, save_result, section_label, seg_tabs, show_status,
+    sig_algorithm_hint,
 };
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::cert;
@@ -52,6 +53,7 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            sig_algorithm_hint(ui, self.cert_issue_ca_key.as_str(), dark);
             ui.add_space(4.0);
             pp_submitted = passphrase_row(
                 ui,
@@ -70,6 +72,7 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            sig_algorithm_hint(ui, self.cert_issue_subject_key.as_str(), dark);
             ui.add_space(4.0);
             let row_w = ui.available_width();
             ui.horizontal(|ui| {
@@ -238,6 +241,7 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            sig_algorithm_hint(ui, self.cert_verify_ca_vk.as_str(), dark);
             ui.add_space(4.0);
             file_row(
                 ui,
@@ -358,6 +362,7 @@ impl PqfileApp {
                 &["pem"],
                 dark,
             );
+            sig_algorithm_hint(ui, self.cert_revoke_ca_key.as_str(), dark);
             ui.add_space(4.0);
             pp_submitted = passphrase_row(
                 ui,

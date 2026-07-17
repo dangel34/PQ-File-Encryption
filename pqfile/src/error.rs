@@ -128,8 +128,9 @@ pub enum PqfileError {
 
     /// The `.pqf` stream ended without a terminal chunk (is_last flag never seen).
     /// The file was most likely truncated during download or transfer; re-downloading
-    /// is the appropriate recovery action. Distinguished from [`DecryptionFailure`]
-    /// which indicates bytes are present but the authentication tag is wrong.
+    /// is the appropriate recovery action. Distinguished from
+    /// [`DecryptionFailure`](PqfileError::DecryptionFailure) which indicates
+    /// bytes are present but the authentication tag is wrong.
     #[error("stream truncated: file ended before the final authenticated chunk was seen; re-download and try again")]
     Truncated,
 
@@ -256,6 +257,39 @@ pub enum PqfileError {
     /// [`SignatureVerificationFailed`]: PqfileError::SignatureVerificationFailed
     #[error("sealed-sender authentication failed: the claimed sender's identity key did not produce a valid tag")]
     SealedSenderAuthFailed,
+
+    /// The cover image's pixel data could not hold the framed payload
+    /// (salt and encrypted header plus file bytes). Returned by
+    /// [`crate::stego::bury`].
+    #[cfg(feature = "stego")]
+    #[error(
+        "cover image is too small: it can hold {available} bytes, but {needed} bytes are needed"
+    )]
+    StegoCapacityExceeded {
+        /// Bytes the cover image's pixel data can hold at 1 bit per channel byte.
+        available: usize,
+        /// Bytes needed for the framing overhead (salt + header) plus the payload.
+        needed: usize,
+    },
+
+    /// [`crate::stego::exhume`] found no valid embedded payload: a wrong
+    /// passphrase, an image that was never buried, a corrupted/edited copy,
+    /// and a recorded length that does not fit the image's capacity all
+    /// produce this same variant. The collapse is deliberate - detection is
+    /// keyed by the passphrase, so distinguishing "wrong passphrase" from
+    /// "nothing here" would leak exactly the signal the scheme exists to
+    /// withhold.
+    #[cfg(feature = "stego")]
+    #[error(
+        "no valid pqfile payload found in this image (wrong passphrase, wrong image, or corrupted)"
+    )]
+    StegoPayloadNotFound,
+
+    /// The cover or stego image could not be decoded/encoded by the `image`
+    /// crate (unsupported or corrupt format).
+    #[cfg(feature = "stego")]
+    #[error("invalid image: {0}")]
+    StegoInvalidImage(String),
 }
 
 impl PqfileError {
@@ -308,6 +342,12 @@ impl PqfileError {
             PqfileError::WebauthnPrfNotRequired => 34,
             PqfileError::SealedSenderAuthFailed => 35,
             PqfileError::CertRevoked { .. } => 36,
+            #[cfg(feature = "stego")]
+            PqfileError::StegoCapacityExceeded { .. } => 37,
+            #[cfg(feature = "stego")]
+            PqfileError::StegoPayloadNotFound => 38,
+            #[cfg(feature = "stego")]
+            PqfileError::StegoInvalidImage(_) => 39,
         }
     }
 }

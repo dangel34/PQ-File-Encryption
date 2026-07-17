@@ -196,6 +196,9 @@ fn chk(kind: CheckKind, label: &str, value: &str) -> DoctorRow {
     DoctorRow::Check(kind, label.to_owned(), value.to_owned())
 }
 
+// `path` and `passphrase` only feed the native-only checks (revocation
+// sidecar, legacy-Argon2 probe), so they go unused on wasm.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 fn doctor_key(
     pem_str: &str,
     path: Option<&std::path::Path>,

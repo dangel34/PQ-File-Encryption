@@ -31,10 +31,18 @@ ctap-hid-fido2 = { version = "3.5", optional = true }
 getrandom = { workspace = true, optional = true }
 
 [features]
+# Unlike `fido2` (native-hardware-only), steganographic key backup has no
+# platform restriction - it works the same on native and WASM - so it's on
+# by default here (both the desktop and web builds get it for free) even
+# though the underlying pqfile feature is off by default at the library level.
+default = ["stego"]
 # FIDO2 hardware-token second factor for v10 passphrase files (desktop only;
 # mirrors pqfile-cli's `fido2` feature). Off by default: pulls in hidapi
 # (needs libudev-dev on Linux) purely for this one opt-in feature.
 fido2 = ["dep:ctap-hid-fido2", "dep:getrandom"]
+# Steganographic key backup (Bury/Exhume panel in the Keys tab). Mirrors
+# pqfile's own `stego` feature (image-codec dependency tree).
+stego = ["pqfile/stego"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -53,7 +53,7 @@ pub const VERSION_TLOCK: u8 = 0x0B;
 /// Authenticated-header flag bit on the version byte.
 ///
 /// When set (e.g. `0x83` = v3 layout + this bit), the chunk-0 key commitment is
-/// computed with [`compute_key_commitment`]'s v3 definition, which additionally
+/// computed with `compute_key_commitment`'s v3 definition, which additionally
 /// binds the mutable header fields that are *not* self-healing under tampering:
 /// `chunk_size`, `compression_algo`, and (for v10) the Argon2id salt/parameters
 /// and flags byte. Flipping any of those fields on an authenticated file makes

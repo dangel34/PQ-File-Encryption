@@ -93,6 +93,25 @@ pub(crate) enum OpStatus {
     Err(String),
 }
 
+/// One line in the watchfolder's rolling log. A typed level rather than a
+/// leading-character convention (e.g. reusing the same ✔/⚠/✖ glyphs as
+/// `Inspect`'s `CheckKind`), so the color the UI renders it in isn't derived
+/// by re-parsing the message text. Native-only, like the watchfolder itself.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub(crate) enum WatchLogLevel {
+    Ok,
+    Warn,
+    Err,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub(crate) struct WatchLogEntry {
+    pub(crate) level: WatchLogLevel,
+    pub(crate) text: String,
+}
+
 pub(crate) struct PickedFile {
     pub(crate) name: String,
     pub(crate) data: Vec<u8>,
@@ -462,6 +481,15 @@ pub(crate) enum SealedSenderSubTab {
     Identity,
     Seal,
     Unseal,
+}
+
+/// Which mode is active in the Keys tab's steganographic key backup panel.
+#[cfg(feature = "stego")]
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum StegoSubTab {
+    #[default]
+    Bury,
+    Exhume,
 }
 
 /// Which mode is active in the Archive tab.

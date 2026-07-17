@@ -49,6 +49,17 @@ impl PqfileApp {
                 ui.add_space(8.0);
                 self.show_cert_section(ui, dark);
             });
+
+        #[cfg(feature = "stego")]
+        {
+            ui.add_space(8.0);
+            egui::CollapsingHeader::new("🖼  Steganographic Key Backup")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_space(8.0);
+                    self.show_stego_section(ui, dark);
+                });
+        }
     }
 
     #[cfg(target_arch = "wasm32")]

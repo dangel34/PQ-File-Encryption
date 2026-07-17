@@ -11,6 +11,11 @@ readme = "../README.md"
 keywords = ["encryption", "post-quantum", "ml-kem", "chacha20", "cryptography"]
 categories = ["cryptography", "filesystem"]
 
+[lints.rust]
+# `--cfg fuzzing` is injected by cargo-fuzz; stego.rs gates its
+# Argon2-skipping fuzz entry points on it so they never ship in the API.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
+
 [dependencies]
 ml-kem = { version = "0.3", features = ["getrandom", "zeroize"] }
 chacha20poly1305 = "0.11"
@@ -35,6 +40,14 @@ rayon = "1"
 bech32 = "0.12"
 # Constant-time MAC comparison in sealed_sender.rs.
 subtle = "2"
+# Cover-image decode/encode for stego.rs (`stego` feature). PNG (lossless,
+# required for LSB embedding to survive) plus JPEG so a JPEG cover photo can
+# be used as input; output is always re-encoded as PNG regardless of input
+# format, per the standing BLAKE3-for-non-format-hashing guideline this also
+# uses blake3 rather than SHA3 since the payload checksum never touches the
+# wire format.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"], optional = true }
+blake3 = { version = "1", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # getrandom 0.4 needs the wasm_js feature to use globalThis.crypto in a browser/Node.js context.
@@ -59,7 +72,7 @@ memsec = { version = "0.7", default-features = false, features = ["use_os"] }
 # Optional F*-verified ML-KEM backend (`kem-libcrux` feature). Also listed
 # unconditionally below as a dev-dependency so tests/kem_oracle.rs runs on
 # every `cargo test` regardless of feature flags; Cargo unions the two.
-libcrux-ml-kem = { version = "0.0.9", optional = true }
+libcrux-ml-kem = { version = "0.0.10", optional = true }
 # Time-lock encryption (`tlock` feature): IBE over the drand beacon (tlock) and
 # a synchronous (ureq-based, no tokio) drand HTTP client (drand_core). This is
 # the only network-capable dependency in the workspace; both are optional so a
@@ -92,6 +105,11 @@ kem-libcrux = ["dep:libcrux-ml-kem"]
 # decrypt fetches a drand beacon signature over the network. See docs/ROADMAP.md,
 # "Time-locked encryption".
 tlock = ["dep:tlock", "dep:drand_core"]
+# Steganographic key backup (`bury`/`exhume`): LSB-embeds a file inside a
+# cover image's pixel data. Off by default so a normal build never pays for
+# the image-codec dependency tree. See docs/ROADMAP.md, "Steganographic key
+# backup".
+stego = ["dep:image", "dep:blake3"]
 
 [dependencies.tokio]
 version = "1"
@@ -110,7 +128,7 @@ proptest = "1"
 # (tests/kem_oracle.rs) runs on every `cargo test`, independent of whether the
 # `kem-libcrux` feature (which also depends on this crate, see [dependencies]
 # above) is enabled.
-libcrux-ml-kem = "0.0.9"
+libcrux-ml-kem = "0.0.10"
 iai-callgrind = "0.16.1"
 
 [[bench]]

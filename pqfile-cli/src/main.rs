@@ -111,7 +111,7 @@ enum Command {
         #[arg(long, default_value_t = false)]
         force: bool,
         /// Encrypt every file in a directory tree. INPUT must be a directory.
-        /// Each file is written alongside the original as <file>.pqf.
+        /// Each file is written alongside the original as `<file>.pqf`.
         #[arg(long, default_value_t = false)]
         recursive: bool,
         /// Chunk size in bytes for streaming encryption (default: 0 = auto-tune).
@@ -837,6 +837,50 @@ enum Command {
         #[arg(long, value_name = "TEXT", default_value = "")]
         reason: String,
         /// Output path for the updated revocation list.
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: PathBuf,
+        /// Overwrite an existing output file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+
+    /// Hide a file inside a cover image's pixel data (steganographic backup).
+    ///
+    /// Prompts for a passphrase; the passphrase keys detection itself, so without
+    /// it nothing in the image reveals that a payload is present, let alone what
+    /// it is. Intended for backing up a (ideally also passphrase-encrypted)
+    /// private key PEM somewhere that doesn't look like a key backup, e.g. among
+    /// ordinary photos. A statistical LSB-noise analysis can still flag the image
+    /// as carrying *something*; the passphrase only prevents confirming or
+    /// recovering *what*.
+    #[cfg(feature = "stego")]
+    Bury {
+        /// Cover image (PNG or JPEG).
+        #[arg(long, value_name = "IMAGE")]
+        image: PathBuf,
+        /// File to hide inside the cover image.
+        file: PathBuf,
+        /// Output path for the resulting image. Must end in `.png`: LSB embedding
+        /// only survives a lossless re-encode, so the output is always a PNG
+        /// regardless of the cover image's original format.
+        #[arg(short = 'o', long, value_name = "FILE.png")]
+        output: PathBuf,
+        /// Overwrite an existing output file without prompting.
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+
+    /// Recover a file previously hidden with `bury`.
+    ///
+    /// Prompts for the passphrase used at bury time. A wrong passphrase is
+    /// indistinguishable from an image that holds no payload at all - that is
+    /// the point of keying detection. The recovered file is written atomically
+    /// with owner-only permissions, since it is typically private key material.
+    #[cfg(feature = "stego")]
+    Exhume {
+        /// Image previously produced by `bury`.
+        image: PathBuf,
+        /// Output path for the recovered file.
         #[arg(short = 'o', long, value_name = "FILE")]
         output: PathBuf,
         /// Overwrite an existing output file without prompting.
@@ -1715,6 +1759,19 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             output,
             force,
         } => run_revoke_cert(ca_key, cert, existing, &reason, output, force, json),
+        #[cfg(feature = "stego")]
+        Command::Bury {
+            image,
+            file,
+            output,
+            force,
+        } => run_bury(&image, &file, output, force, json),
+        #[cfg(feature = "stego")]
+        Command::Exhume {
+            image,
+            output,
+            force,
+        } => run_exhume(&image, output, force, json),
     }
 }
 
@@ -2953,17 +3010,55 @@ fn read_keyfile(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, PqfileError>
     Ok(bytes)
 }
 
-/// Writes `contents` to `path`, then (on Unix) restricts the file to owner
-/// read/write only. Private key material written directly by the CLI (not
-/// through the `pqfile` library's own key-writing functions) should go
-/// through this helper rather than `std::fs::write` directly.
+/// Writes `contents` to `path` atomically (via [`AtomicOutput`]), restricting
+/// the file to its owner - mode 0600 on Unix, an owner-only ACL on Windows -
+/// *before* any secret bytes land in it, so the restriction travels with the
+/// temp file through the rename and there is never a window where the target
+/// holds key material at the process umask. Private key material written
+/// directly by the CLI (not through the `pqfile` library's own key-writing
+/// functions, which enforce the same restriction) should go through this
+/// helper rather than `std::fs::write` directly.
 fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
-    std::fs::write(path, contents)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    let mut out = AtomicOutput::new(path)?;
+    restrict_to_owner(&out.tmp, out.writer.get_ref())?;
+    out.write_all(contents)?;
+    out.commit()
+}
+
+#[cfg(unix)]
+fn restrict_to_owner(_tmp: &Path, file: &std::fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(windows)]
+fn restrict_to_owner(tmp: &Path, _file: &std::fs::File) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    // Strip all inherited ACEs and leave a single ACE granting full control to
+    // OWNER RIGHTS (well-known SID S-1-3-4, resolves to whoever owns the file):
+    // the closest Windows equivalent of chmod 0600. icacls ships with every
+    // supported Windows version; CREATE_NO_WINDOW stops a console flash.
+    // Mirrors `pqfile`'s internal fsutil helper, which is not public API.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = std::process::Command::new("icacls")
+        .arg(tmp)
+        .args(["/inheritance:r", "/grant:r", "*S-1-3-4:F"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "icacls exited with {status} while restricting '{}' to owner-only access",
+            tmp.display()
+        )))
     }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn restrict_to_owner(_tmp: &Path, _file: &std::fs::File) -> io::Result<()> {
     Ok(())
 }
 
@@ -4023,7 +4118,7 @@ fn resolve_pqf_sibling_out_path(
 /// Prints the final status line for a decrypt-with-verification command
 /// (signdecrypt, unseal) that may write plaintext to stdout or to a file: a
 /// JSON object (to stderr when the plaintext itself went to stdout, so the
-/// two never interleave) or a human-readable "<verb> Decrypted to: <path>"
+/// two never interleave) or a human-readable "`<verb>` Decrypted to: `<path>`"
 /// line. `status_key`/`status_val` name the extra JSON field describing what
 /// was verified (e.g. `"signature"`/`"valid"`, `"authentication"`/`"valid"`).
 fn emit_decrypt_verified_status(
@@ -5036,6 +5131,75 @@ fn run_revoke_cert(
     Ok(())
 }
 
+#[cfg(feature = "stego")]
+fn run_bury(
+    image: &Path,
+    file: &Path,
+    output: PathBuf,
+    force: bool,
+    json: bool,
+) -> Result<(), PqfileError> {
+    let output_is_png = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+    if !output_is_png {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "bury output must be a .png file (LSB embedding requires a lossless format)",
+        )));
+    }
+    ensure_overwrite_allowed(&output, false, force)?;
+
+    let cover = std::fs::read(image)?;
+    // The payload is nominally key material; treat it like read_keyfile does.
+    let payload = zeroize::Zeroizing::new(std::fs::read(file)?);
+    let passphrase = prompt_new_passphrase()?;
+    let stego_png = pqfile::stego::bury(&cover, &payload, &passphrase)?;
+    let mut out = AtomicOutput::new(&output)?;
+    out.write_all(&stego_png)?;
+    out.commit()?;
+
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("output", &output.to_string_lossy()),
+                kv_str("bytes_hidden", &payload.len().to_string()),
+            ])
+        );
+    } else {
+        println!("Buried {} bytes in {}", payload.len(), output.display());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "stego")]
+fn run_exhume(image: &Path, output: PathBuf, force: bool, json: bool) -> Result<(), PqfileError> {
+    ensure_overwrite_allowed(&output, false, force)?;
+
+    let stego_png = std::fs::read(image)?;
+    let passphrase = prompt_passphrase("Enter passphrase: ")?;
+    let payload = zeroize::Zeroizing::new(pqfile::stego::exhume(&stego_png, &passphrase)?);
+    // Atomic + owner-only: the recovered payload is typically a private key.
+    write_private_file(&output, &payload)?;
+
+    if json {
+        println!(
+            "{}",
+            json_object(&[
+                kv_str("status", "ok"),
+                kv_str("output", &output.to_string_lossy()),
+                kv_str("bytes_recovered", &payload.len().to_string()),
+            ])
+        );
+    } else {
+        println!("Recovered {} bytes to {}", payload.len(), output.display());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5076,6 +5240,50 @@ mod tests {
     fn json_escape_printable_passthrough() {
         let s = "hello/world-OK_123";
         assert_eq!(json_escape(s), s);
+    }
+
+    // ── write_private_file: atomic, owner-only, replaceable ──────────────────
+
+    #[test]
+    fn write_private_file_roundtrip_and_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.pem");
+        write_private_file(&path, b"top secret").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"top secret");
+        // Replacing an existing file must work (rename-over on every platform)
+        // and must not leave the temp file behind.
+        write_private_file(&path, b"rotated").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"rotated");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_file_sets_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.pem");
+        write_private_file(&path, b"top secret").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_private_file_restricts_acl_to_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.pem");
+        write_private_file(&path, b"top secret").unwrap();
+        // The ACL set on the temp file must survive the rename: a single
+        // OWNER-RIGHTS ACE, no inherited entries. Each ACE in icacls output
+        // carries a ":(...)" suffix, so counting those is locale-independent.
+        let out = std::process::Command::new("icacls")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let listing = String::from_utf8_lossy(&out.stdout).to_string();
+        let ace_count = listing.matches(":(").count();
+        assert_eq!(ace_count, 1, "expected exactly one ACE, got: {listing}");
     }
 
     // ── date helpers (issue-cert / verify-cert) ────────────────────────────

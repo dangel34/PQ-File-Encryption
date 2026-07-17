@@ -72,7 +72,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
@@ -86,7 +86,7 @@ jobs:
       # provenance-attested binaries (zizmor cache-poisoning). Releases are
       # rare enough that a cold build is an acceptable price.
       - name: Install cargo-auditable
-        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
           tool: cargo-auditable
 
@@ -159,7 +159,7 @@ jobs:
       # binary from the steps above is what actually ships.
       - name: Install cargo-deb and cargo-generate-rpm
         if: matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
           tool: cargo-deb,cargo-generate-rpm
 
@@ -311,7 +311,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
@@ -396,12 +396,12 @@ jobs:
         #   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
         #   artifacts/checksums.txt
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
 
       - name: Install cargo-cyclonedx
-        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
           tool: cargo-cyclonedx
 

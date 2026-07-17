@@ -240,6 +240,16 @@ impl PqfileApp {
 
     fn show_shamir_reconstruct_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "RECONSTRUCT KEY", dark);
+        ui.label(
+            RichText::new(
+                "Reconstruction writes an unencrypted privkey.pem to disk. Protect it with a \
+                 passphrase afterward (Keys tab -> Change Passphrase) if it needs to be stored \
+                 or transmitted.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(6.0);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             if self.shamir_shares.is_empty() {
                 ui.label(

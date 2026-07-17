@@ -30,7 +30,10 @@ impl PqfileApp {
     }
 
     // ── Repassphrase ──────────────────────────────────────────────────────
+    // The Change Passphrase and Revoke Key sections are mounted only by the
+    // Keys tab's native show fn, so all four methods are dead code on wasm.
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn show_repassphrase_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "CHANGE / UPGRADE PASSPHRASE", dark);
         ui.label(
@@ -117,6 +120,7 @@ impl PqfileApp {
         show_status(ui, &self.repassphrase_status, dark);
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn do_repassphrase(&mut self) {
         if *self.repassphrase_new_passphrase != *self.repassphrase_new_passphrase_confirm {
             self.repassphrase_status = OpStatus::Err("New passphrases do not match.".to_owned());
@@ -191,6 +195,7 @@ impl PqfileApp {
 
     // ── Revoke ────────────────────────────────────────────────────────────
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn show_revoke_section(&mut self, ui: &mut egui::Ui, dark: bool) {
         section_label(ui, "REVOKE KEY", dark);
         ui.label(
@@ -271,6 +276,7 @@ impl PqfileApp {
         show_status(ui, &self.revoke_status, dark);
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn do_revoke(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -318,6 +324,15 @@ impl PqfileApp {
             RichText::new(auto_clear_note)
                 .size(11.5)
                 .color(c_subtext(dark)),
+        );
+        ui.label(
+            RichText::new(
+                "This only clears pqfile's own text fields. Your OS clipboard history or a \
+                 clipboard manager may retain a separate copy of anything copied here \
+                 independently of this app.",
+            )
+            .size(11.5)
+            .color(c_subtext(dark)),
         );
         ui.add_space(10.0);
 

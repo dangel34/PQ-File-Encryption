@@ -20,4 +20,6 @@ trunk build --release
 See the root [README.md](../README.md) for a feature overview and
 [docs/QUICKSTART.md](../docs/QUICKSTART.md) for deployment instructions. The `fido2` Cargo
 feature (always on for `pqfile-desktop`, unavailable on `wasm32` since there is no browser
-HID API) adds hardware security key support as a v10 passphrase second factor.
+HID API) adds hardware security key support as a v10 passphrase second factor. The `stego`
+Cargo feature (on by default, unlike `fido2` - no platform restriction) adds the Keys tab's
+"Steganographic Key Backup" panel on both desktop and `wasm32`.

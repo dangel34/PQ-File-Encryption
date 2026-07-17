@@ -182,8 +182,8 @@ impl PqfileApp {
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             ui.label(
                 RichText::new(
-                    "Warning: plaintext is streamed to the output before the signature \
-                     is verified. Use the output only after this operation returns success.",
+                    "Decryption is fully buffered in memory: nothing is written to disk \
+                     until the signature verifies against the sender's key.",
                 )
                 .size(12.0)
                 .color(c_subtext(dark)),

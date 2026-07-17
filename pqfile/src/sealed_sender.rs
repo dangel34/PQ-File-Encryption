@@ -17,7 +17,8 @@
 //! # Scope
 //!
 //! This module intentionally ships only the safe, buffered decrypt path
-//! ([`unseal_bytes`]), mirroring [`crate::signcrypt::signdecrypt_bytes`]. A
+//! ([`unseal_bytes`](crate::sealed_sender::unseal_bytes)), mirroring
+//! [`crate::signcrypt::signdecrypt_bytes`]. A
 //! streaming write-before-verify variant (mirroring
 //! [`crate::signcrypt::signdecrypt`]) is not provided; add one later if a
 //! real large-file use case needs it.

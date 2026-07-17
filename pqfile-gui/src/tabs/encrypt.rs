@@ -386,7 +386,7 @@ impl PqfileApp {
     }
 
     pub(crate) fn show_encrypt(&mut self, ui: &mut egui::Ui, dark: bool) {
-        if tab_heading_help(ui, "Encrypt File", dark) {
+        if tab_heading_help(ui, "Encrypt Files", dark) {
             self.help_modal_open = Some(Tab::Encrypt);
         }
         ui.label(
@@ -659,15 +659,17 @@ impl PqfileApp {
             if !self.watch_log.is_empty() {
                 ui.add_space(4.0);
                 scrollable_list(ui, "encrypt_watch_log", 80.0, c_card(dark), |ui| {
-                    for msg in self.watch_log.iter().rev().take(50) {
-                        let color = if msg.starts_with('✔') {
-                            c_green(dark)
-                        } else if msg.starts_with('⚠') {
-                            c_yellow(dark)
-                        } else {
-                            c_red(dark)
+                    for entry in self.watch_log.iter().rev().take(50) {
+                        let (prefix, color) = match entry.level {
+                            crate::types::WatchLogLevel::Ok => ('✔', c_green(dark)),
+                            crate::types::WatchLogLevel::Warn => ('⚠', c_yellow(dark)),
+                            crate::types::WatchLogLevel::Err => ('✖', c_red(dark)),
                         };
-                        ui.label(RichText::new(msg).size(11.5).color(color));
+                        ui.label(
+                            RichText::new(format!("{prefix} {}", entry.text))
+                                .size(11.5)
+                                .color(color),
+                        );
                     }
                 });
             }
@@ -801,6 +803,19 @@ impl PqfileApp {
                     }
                 });
             });
+            if self.encrypt_recipients.len() > 1 {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Multiple recipients switch this file to the anonymized v8/v9 format \
+                         and disable Compress and Stealth mode. A recipient cannot be added \
+                         anonymously to an already-encrypted file later - Add Recipient (Decrypt \
+                         tab) reveals that a recipient was added.",
+                    )
+                    .size(11.5)
+                    .color(c_overlay(dark)),
+                );
+            }
             if !self.encrypt_recipients.is_empty() {
                 ui.add_space(6.0);
                 #[cfg(target_arch = "wasm32")]

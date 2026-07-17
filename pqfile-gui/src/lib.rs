@@ -851,4 +851,53 @@ mod tests {
         assert_eq!(app.encrypt_recipients.len(), 1);
         assert_eq!(app.encrypt_recipients[0].pem, subject_pub);
     }
+
+    #[cfg(all(feature = "stego", not(target_arch = "wasm32")))]
+    #[test]
+    fn stego_bury_exhume_roundtrip_via_gui() {
+        use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
+        use std::io::Cursor;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = PqfileApp::default();
+        app.settings.output_dir = tmp.path().to_string_lossy().into_owned();
+
+        let cover_img = ImageBuffer::from_fn(64, 64, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+        });
+        let mut cover_bytes = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(cover_img)
+            .write_to(&mut cover_bytes, ImageFormat::Png)
+            .unwrap();
+        let payload =
+            b"-----BEGIN PRIVATE KEY-----\nfake test key\n-----END PRIVATE KEY-----".to_vec();
+
+        app.stego_bury_cover = loaded_input("cover.png", cover_bytes.into_inner(), None);
+        app.stego_bury_payload = loaded_input("privkey.pem", payload.clone(), None);
+        *app.stego_bury_passphrase = "gui test passphrase".to_owned();
+        *app.stego_bury_passphrase_confirm = "gui test passphrase".to_owned();
+        app.do_stego_bury();
+        let OpStatus::Ok(_) = &app.stego_bury_status else {
+            panic!("bury failed: {:?}", app.stego_bury_status);
+        };
+        let stego_path = app
+            .stego_bury_output_path
+            .clone()
+            .expect("bury output path set");
+        let stego_bytes = std::fs::read(&stego_path).unwrap();
+
+        app.stego_exhume_image = loaded_input("stego.png", stego_bytes, None);
+        app.stego_exhume_filename = "recovered.pem".to_owned();
+        *app.stego_exhume_passphrase = "gui test passphrase".to_owned();
+        app.do_stego_exhume();
+        let OpStatus::Ok(_) = &app.stego_exhume_status else {
+            panic!("exhume failed: {:?}", app.stego_exhume_status);
+        };
+        let recovered_path = app
+            .stego_exhume_output_path
+            .clone()
+            .expect("exhume output path set");
+        let recovered = std::fs::read(&recovered_path).unwrap();
+        assert_eq!(recovered, payload);
+    }
 }

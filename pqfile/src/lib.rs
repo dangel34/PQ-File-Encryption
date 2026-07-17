@@ -159,6 +159,11 @@ pub mod async_io;
 #[cfg(feature = "tlock")]
 pub mod tlock;
 
+/// Steganographic key backup: embed/recover a file inside a cover image's
+/// pixel data (requires the `stego` feature).
+#[cfg(feature = "stego")]
+pub mod stego;
+
 // ── Crate-root re-exports ──────────────────────────────────────────────────
 
 pub use error::PqfileError;

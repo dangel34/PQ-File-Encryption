@@ -37,6 +37,10 @@ fido2 = ["dep:ctap-hid-fido2", "dep:getrandom"]
 # default: pulls in an HTTP stack (via pqfile's own `tlock` feature) purely
 # for this one opt-in feature; no CLI-only dependency is needed.
 tlock = ["pqfile/tlock"]
+# Steganographic key backup (`bury`, `exhume`). Off by default: pulls in
+# pqfile's `stego` feature (image-codec dependency tree) purely for this one
+# opt-in feature; no CLI-only dependency is needed.
+stego = ["pqfile/stego"]
 
 [dev-dependencies]
 tempfile     = { workspace = true }

@@ -51,3 +51,6 @@ Code `0` is a catch-all for errors that do not map to a known variant (should no
 | 34 | `WebauthnPrfNotRequired` | A WebAuthn PRF output was supplied but the file was not encrypted with one (or uses a different second factor); remove it and retry |
 | 35 | `SealedSenderAuthFailed` | Sealed-sender deniable-authentication tag did not verify against the claimed sender's identity key |
 | 36 | `CertRevoked` | Certificate appears in a verified revocation list the caller chose to consult |
+| 37 | `StegoCapacityExceeded` | `bury`'s cover image is too small to hold the payload; use a larger image |
+| 38 | `StegoPayloadNotFound` | `exhume` found no valid embedded payload (wrong passphrase, wrong image, or it was edited/corrupted since burying - deliberately indistinguishable) |
+| 39 | `StegoInvalidImage` | Cover or stego image could not be decoded/encoded (unsupported or corrupt format) |

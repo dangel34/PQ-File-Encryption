@@ -210,6 +210,15 @@ impl PqfileApp {
         ui.add_space(14.0);
 
         section_label(ui, "PASSPHRASE (OPTIONAL)", dark);
+        ui.label(
+            RichText::new(
+                "Your private key is the only way to decrypt files sent to you. If you lose \
+                 it (or forget its passphrase), those files cannot be recovered by anyone.",
+            )
+            .size(12.0)
+            .color(c_subtext(dark)),
+        );
+        ui.add_space(4.0);
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             let hw_active = self.keygen_use_hardware;
             ui.add_enabled_ui(!hw_active, |ui| {

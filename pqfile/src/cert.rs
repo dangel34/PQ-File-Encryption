@@ -3,7 +3,8 @@
 //!
 //! A CA signing key (ML-DSA-65 or SLH-DSA-SHAKE-192f, via [`crate::sign`])
 //! attests to a subject public key together with a human-readable label, a
-//! validity window, and an allowed-use bitmask ([`cert_use`]). The subject key
+//! validity window, and an allowed-use bitmask ([`cert_use`](crate::cert::cert_use)).
+//! The subject key
 //! itself is opaque to this module - it is stored and returned as its own
 //! self-describing PEM (a KEM public key, a hybrid public key, or a verifying
 //! key), so any current or future pqfile public key type can be certified
@@ -12,9 +13,10 @@
 //! Certificates do not chain: each is verified directly against a CA
 //! verifying key supplied by the caller. Revocation before a certificate's
 //! own validity window naturally expires is available via
-//! [`RevocationList`]/[`revoke_cert`], a CA-signed list of revoked
-//! certificate identifiers analogous to a compact CRL - optional and
-//! separate from [`verify_cert`] itself, mirroring how the `.revoked`
+//! [`RevocationList`](crate::cert::RevocationList)/[`revoke_cert`](crate::cert::revoke_cert),
+//! a CA-signed list of revoked certificate identifiers analogous to a compact
+//! CRL - optional and separate from
+//! [`verify_cert`](crate::cert::verify_cert) itself, mirroring how the `.revoked`
 //! sidecar convention for raw keys ([`crate::revoke`]) is a separate check
 //! from decoding the key.
 
