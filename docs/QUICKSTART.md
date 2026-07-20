@@ -36,13 +36,13 @@ cd PQ-File-Encryption
 **CLI only**
 
 ```
-cargo build --release -p pqfile
+cargo build --release -p pqfile-cli
 ```
 
 Binary lands at `target/release/pqfile`. To install to your Cargo bin directory:
 
 ```
-cargo install --path pqfile
+cargo install --path pqfile-cli
 ```
 
 **Native GUI**

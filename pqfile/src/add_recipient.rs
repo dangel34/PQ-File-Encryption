@@ -83,95 +83,61 @@ pub struct AddRecipientInfo {
     pub new_recipient_variant: u16,
 }
 
-fn add_to_v4(
-    existing_privkey_pem: &str,
-    new_pubkey_pem: &str,
-    passphrase: Option<&str>,
-    version: u8,
-    reader: &mut dyn Read,
-    writer: &mut dyn Write,
-) -> Result<AddRecipientInfo, PqfileError> {
-    let header = PqfHeaderV4::read_body(reader)?;
+// v4 and v7 recipient entries and headers have identical field layouts (only
+// the type names differ, to keep the two formats from being mixed up at
+// compile time), so `add_to_v4`/`add_to_v7` share one body via this macro
+// rather than hand-duplicating it.
+macro_rules! add_to_multi {
+    ($fn_name:ident, $header_ty:ident, $entry_ty:ident) => {
+        fn $fn_name(
+            existing_privkey_pem: &str,
+            new_pubkey_pem: &str,
+            passphrase: Option<&str>,
+            version: u8,
+            reader: &mut dyn Read,
+            writer: &mut dyn Write,
+        ) -> Result<AddRecipientInfo, PqfileError> {
+            let header = $header_ty::read_body(reader)?;
 
-    let session_key = recover_session_key_multi(
-        existing_privkey_pem,
-        passphrase,
-        &header
-            .recipients
-            .iter()
-            .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
-            .collect::<Vec<_>>(),
-    )?;
+            let session_key = recover_session_key_multi(
+                existing_privkey_pem,
+                passphrase,
+                &header
+                    .recipients
+                    .iter()
+                    .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
+                    .collect::<Vec<_>>(),
+            )?;
 
-    let (new_kem_ct, new_kem_variant, new_wrapped_key) =
-        encapsulate_for_rekey(new_pubkey_pem, &session_key)?;
+            let (new_kem_ct, new_kem_variant, new_wrapped_key) =
+                encapsulate_for_rekey(new_pubkey_pem, &session_key)?;
 
-    let mut recipients = header.recipients;
-    recipients.push(RecipientEntryV4 {
-        kem_variant: new_kem_variant,
-        kem_ciphertext: new_kem_ct,
-        wrapped_key: new_wrapped_key,
-    });
-    let recipient_count = recipients.len();
+            let mut recipients = header.recipients;
+            recipients.push($entry_ty {
+                kem_variant: new_kem_variant,
+                kem_ciphertext: new_kem_ct,
+                wrapped_key: new_wrapped_key,
+            });
+            let recipient_count = recipients.len();
 
-    let new_header = PqfHeaderV4 {
-        recipients,
-        nonce: header.nonce,
-        original_size: header.original_size,
+            let new_header = $header_ty {
+                recipients,
+                nonce: header.nonce,
+                original_size: header.original_size,
+            };
+            new_header.write(writer, version)?;
+            stream_payload(reader, writer)?;
+
+            Ok(AddRecipientInfo {
+                recipient_count,
+                new_recipient_variant: new_kem_variant,
+            })
+        }
     };
-    new_header.write(writer, version)?;
-    stream_payload(reader, writer)?;
-
-    Ok(AddRecipientInfo {
-        recipient_count,
-        new_recipient_variant: new_kem_variant,
-    })
 }
 
-fn add_to_v7(
-    existing_privkey_pem: &str,
-    new_pubkey_pem: &str,
-    passphrase: Option<&str>,
-    version: u8,
-    reader: &mut dyn Read,
-    writer: &mut dyn Write,
-) -> Result<AddRecipientInfo, PqfileError> {
-    let header = PqfHeaderV7::read_body(reader)?;
-
-    let session_key = recover_session_key_multi(
-        existing_privkey_pem,
-        passphrase,
-        &header
-            .recipients
-            .iter()
-            .map(|e| (e.kem_variant, e.kem_ciphertext.as_slice(), &e.wrapped_key))
-            .collect::<Vec<_>>(),
-    )?;
-
-    let (new_kem_ct, new_kem_variant, new_wrapped_key) =
-        encapsulate_for_rekey(new_pubkey_pem, &session_key)?;
-
-    let mut recipients = header.recipients;
-    recipients.push(RecipientEntryV7 {
-        kem_variant: new_kem_variant,
-        kem_ciphertext: new_kem_ct,
-        wrapped_key: new_wrapped_key,
-    });
-    let recipient_count = recipients.len();
-
-    let new_header = PqfHeaderV7 {
-        recipients,
-        nonce: header.nonce,
-        original_size: header.original_size,
-    };
-    new_header.write(writer, version)?;
-    stream_payload(reader, writer)?;
-
-    Ok(AddRecipientInfo {
-        recipient_count,
-        new_recipient_variant: new_kem_variant,
-    })
-}
+add_to_multi!(add_to_v4, PqfHeaderV4, RecipientEntryV4);
+add_to_multi!(add_to_v7, PqfHeaderV7, RecipientEntryV7);
 
 /// Streams the AEAD payload from `reader` to `writer` unchanged.
 fn stream_payload(reader: &mut dyn Read, writer: &mut dyn Write) -> Result<(), PqfileError> {

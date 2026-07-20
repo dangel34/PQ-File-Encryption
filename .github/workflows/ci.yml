@@ -449,6 +449,49 @@ jobs:
       - name: Test (pqfile-cli, stego feature)
         run: cargo test -p pqfile-cli --features stego
 
+  # ── Optional-feature compile check (update-check) ─────────────────────────
+  # `check-update` (CLI) / the About-window "Check for Updates" button (GUI)
+  # reach `ureq` via a second, independent opt-in feature - it's the same
+  # crate `tlock` uses, still the only network-capable dependency in the
+  # workspace. Off by default; only compiled into the
+  # published release binaries (see release.yml and pqfile-desktop's
+  # Cargo.toml), and even then never runs unless the user asks for it. This
+  # job compiles and runs the feature's offline unit tests (version-string
+  # comparison only, no network access) for the CLI and the GUI. Pure-Rust
+  # TLS (ureq's default `rustls` backend), so no install-linux-deps step is
+  # needed, unlike fido2-check.
+  update-check-check:
+    name: update-check feature check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: update-check
+          cache-target: "true"
+
+      - name: Clippy (pqfile-cli, update-check feature)
+        run: cargo clippy -p pqfile-cli --all-targets --features update-check -- --deny warnings
+
+      - name: Test (pqfile-cli, update-check feature)
+        run: cargo test -p pqfile-cli --features update-check
+
+      - name: Clippy (pqfile-gui, update-check feature)
+        run: cargo clippy -p pqfile-gui --all-targets --features update-check -- --deny warnings
+
+      - name: Test (pqfile-gui, update-check feature)
+        run: cargo test -p pqfile-gui --features update-check
+
   # ── WASM smoke test ────────────────────────────────────────────────────────
   wasm-test:
     name: WASM smoke test

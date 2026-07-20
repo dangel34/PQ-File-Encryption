@@ -52,6 +52,9 @@ surface.
 | `pqfile::add_recipient` | `add_recipient_stream`, `AddRecipientInfo` |
 | `pqfile::revoke` | `revoke_key`, `check_not_revoked`, `revoked_path_for` |
 | `pqfile::shred` | `shred_file` |
+| `pqfile::cert` | `issue_cert`, `verify_cert`, `revoke_cert`, `verify_revocation_list`, `check_cert_not_revoked`, `check_cert_not_revoked_pem`, `is_certificate`, `is_revocation_list`, `cert_id`, `cert_id_hex`, `Certificate`, `RevokedEntry`, `RevocationList` |
+| `pqfile::sealed_sender` | `identity_keygen`, `identity_keygen_bytes`, `is_identity_key_encrypted`, `seal`, `seal_bytes`, `unseal_bytes`, `IdentityKeygenResult` |
+| `pqfile::recipient_string` | `encode_pubkey`, `decode_pubkey`, `is_recipient_string` |
 | `pqfile::error` | `PqfileError` (all variants; new variants may be added in minor releases) |
 
 ### Format constants

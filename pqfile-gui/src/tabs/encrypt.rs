@@ -1267,7 +1267,6 @@ fn resolve_out_path(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Wraps `data` with Padmé length padding when `pad` is set, otherwise reads it unchanged.
 fn padded_reader(data: &[u8], original_size: u64, pad: bool) -> Box<dyn Read + '_> {
     if pad {

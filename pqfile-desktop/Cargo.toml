@@ -13,7 +13,10 @@ path = "src/main.rs"
 # fido2 always on: the desktop app is the one native GUI target, so it ships
 # with the FIDO2 hardware-token second factor built in (needs libudev-dev at
 # build time on Linux; see ci.yml's fido2-check job and release.yml).
-pqfile-gui = { workspace = true, features = ["fido2"] }
+# update-check always on too: real downloaded binaries should be able to
+# tell the user a newer release exists; still opt-in at runtime (see
+# Settings' "Check for updates on startup" toggle, off by default).
+pqfile-gui = { workspace = true, features = ["fido2", "update-check"] }
 eframe = { workspace = true }
 
 [build-dependencies]

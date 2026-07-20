@@ -314,11 +314,11 @@ impl PqfileApp {
         let auto_clear_note = if self.settings.clipboard_auto_clear {
             format!(
                 "Auto-clear active: text is zeroized after {} s of inactivity. \
-                 Configure in Settings → Clipboard.",
+                 Configure in Settings -> Clipboard.",
                 self.settings.clipboard_clear_secs
             )
         } else {
-            "Auto-clear is off. Enable it in Settings → Clipboard.".to_owned()
+            "Auto-clear is off. Enable it in Settings -> Clipboard.".to_owned()
         };
         ui.label(
             RichText::new(auto_clear_note)

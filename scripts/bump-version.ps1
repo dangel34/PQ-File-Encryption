@@ -122,9 +122,17 @@ $email    = git config user.email
 $name     = git config user.name
 $entry    = "* $date $name <$email> - $Version-1`n- $SpecChangelog"
 $specContent = Get-Content $specPath -Raw
-$specContent = $specContent -replace '(%changelog)', "%changelog`n$entry`n"
-Set-Content $specPath $specContent -NoNewline
-Write-Host "  added %changelog entry to pqfile-cli/packaging/pqfile.spec"
+# Idempotent: a prior run of this script for the same $Version can be
+# interrupted after this edit but before the commit (e.g. a later pre-flight
+# check failing), leaving the file modified but uncommitted. Re-running would
+# otherwise prepend a second, near-duplicate entry for the same version.
+if ($specContent -match [regex]::Escape("- $Version-1")) {
+    Write-Warning "changelog entry for $Version-1 already present in pqfile.spec; not duplicating"
+} else {
+    $specContent = $specContent -replace '(%changelog)', "%changelog`n$entry`n"
+    Set-Content $specPath $specContent -NoNewline
+    Write-Host "  added %changelog entry to pqfile-cli/packaging/pqfile.spec"
+}
 
 # docs/BUILDING.md - example output path
 Replace-InFile "$root\docs\BUILDING.md" `

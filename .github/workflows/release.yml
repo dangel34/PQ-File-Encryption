@@ -123,7 +123,7 @@ jobs:
           pgo_build() {
             echo "== PGO: instrumented build =="
             RUSTFLAGS="-Cprofile-generate=$PROFILE_DIR" \
-              cargo auditable build --release --locked -p pqfile-cli --target ${{ matrix.target }} || return 1
+              cargo auditable build --release --locked -p pqfile-cli --features update-check --target ${{ matrix.target }} || return 1
 
             echo "== PGO: training workload =="
             LLVM_PROFILE_FILE="$PROFILE_DIR/pqfile_%m_%p.profraw" \
@@ -134,14 +134,14 @@ jobs:
 
             echo "== PGO: optimized build =="
             RUSTFLAGS="-Cprofile-use=$PROFILE_DIR/merged.profdata -Cllvm-args=-pgo-warn-missing-function" \
-              cargo auditable build --release --locked -p pqfile-cli --target ${{ matrix.target }} || return 1
+              cargo auditable build --release --locked -p pqfile-cli --features update-check --target ${{ matrix.target }} || return 1
           }
 
           if pgo_build; then
             echo "PGO build succeeded."
           else
             echo "::warning::PGO build failed for ${{ matrix.target }}; falling back to a normal (non-PGO) build for pqfile-cli"
-            cargo auditable build --release --locked -p pqfile-cli --target ${{ matrix.target }}
+            cargo auditable build --release --locked -p pqfile-cli --features update-check --target ${{ matrix.target }}
           fi
 
       - name: Build desktop GUI

@@ -175,7 +175,7 @@ pub(crate) fn setting_toggle(
     });
 }
 
-pub(crate) fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, dark: bool) -> egui::Response {
+fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, dark: bool) -> egui::Response {
     let size = Vec2::new(36.0, 20.0);
     let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
     if response.clicked() {
@@ -588,7 +588,7 @@ pub(crate) fn passphrase_row(
 
 /// Opens the containing folder in the OS file manager.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn reveal_in_explorer(path: &str) {
+fn reveal_in_explorer(path: &str) {
     use std::path::Path;
     let p = Path::new(path);
     let dir = if p.is_dir() {
@@ -721,7 +721,7 @@ pub(crate) fn save_result(
             }
         }
         match atomic_write(&path, data) {
-            Ok(()) => OpStatus::Ok(format!("Saved →  {}", path.display())),
+            Ok(()) => OpStatus::Ok(format!("Saved ->  {}", path.display())),
             Err(e) => OpStatus::Err(e.to_string()),
         }
     }

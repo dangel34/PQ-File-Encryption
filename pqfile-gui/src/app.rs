@@ -86,6 +86,14 @@ pub struct PqfileApp {
     pub(crate) fido2_enroll_status: OpStatus,
     #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
     pub(crate) fido2_enroll_pending: Option<crate::types::Fido2Pending<()>>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+    pub(crate) update_check_status: Option<Result<crate::update_check::UpdateInfo, String>>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+    pub(crate) update_check_pending: Option<crate::update_check::UpdateCheckPending>,
+    /// Set once the automatic startup check (if enabled in Settings) has
+    /// fired, so it only ever runs once per launch.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+    pub(crate) update_check_auto_fired: bool,
     /// WebAuthn passkey enrollment file (wasm32 only feature, but the field
     /// itself is unconditional for code-sharing, mirroring
     /// `encrypt_fido2_enrollment`'s shape).
@@ -458,6 +466,12 @@ impl Default for PqfileApp {
             fido2_enroll_status: OpStatus::None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
             fido2_enroll_pending: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+            update_check_status: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+            update_check_pending: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+            update_check_auto_fired: false,
             encrypt_webauthn_enrollment: FileInput::default(),
             #[cfg(target_arch = "wasm32")]
             webauthn_enroll_status: OpStatus::None,
@@ -799,6 +813,11 @@ impl eframe::App for PqfileApp {
         }
         if self.poll_files() {
             ctx.request_repaint();
+        }
+        #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+        if self.settings.auto_check_updates && !self.update_check_auto_fired {
+            self.update_check_auto_fired = true;
+            self.start_update_check(&ctx);
         }
         #[cfg(target_arch = "wasm32")]
         self.tick_encrypt_wasm(&ctx);
@@ -1446,6 +1465,9 @@ impl PqfileApp {
         #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
         self.poll_fido2_jobs();
 
+        #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+        self.poll_update_check();
+
         #[cfg(target_arch = "wasm32")]
         {
             self.poll_webauthn_enroll_job();
@@ -1611,9 +1633,14 @@ impl PqfileApp {
                             "ChaCha20-Poly1305  (RFC 8439)",
                             dark,
                         );
-                        kv_row(ui, "Passphrase KDF", "Argon2id  (m=64 MiB, t=3, p=1)", dark);
+                        kv_row(ui, "Passphrase KDF", "Argon2id  (m=64 MiB, t=3, p=4)", dark);
                         kv_row(ui, "Randomness", "OS CSPRNG  (OsRng)", dark);
-                        kv_row(ui, "File format", ".pqf  v3-v6 / multi-recipient v4", dark);
+                        kv_row(
+                            ui,
+                            "File format",
+                            ".pqf  v2-v11 / multi-recipient v4,v7-v9",
+                            dark,
+                        );
                     });
 
                     ui.add_space(10.0);
@@ -2189,7 +2216,7 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
              The recovered plaintext appears in the encrypt area.",
             "## AUTO-CLEAR",
             "An optional timer zeroizes both text areas after a configurable period of \
-             inactivity. Configure it in Settings → Clipboard.",
+             inactivity. Configure it in Settings -> Clipboard.",
         ]),
         Tab::Settings => ("Settings", &[
             "Settings let you configure how pqfile behaves across sessions. Preferences are \

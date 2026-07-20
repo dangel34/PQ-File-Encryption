@@ -71,13 +71,13 @@ end = "2027-07-01"
 
 [[trusted.pqfile]]
 criteria = "safe-to-deploy"
-user-id = 419333 # Derek (dangel34)
+user-id = 419333
 start = "2026-05-28"
 end = "2027-06-29"
 
 [[trusted.pqfile-cli]]
 criteria = "safe-to-deploy"
-user-id = 419333 # Derek (dangel34)
+user-id = 419333
 start = "2026-05-28"
 end = "2027-06-29"
 

@@ -7,6 +7,8 @@ mod hex_lines;
 mod tabs;
 mod theme;
 mod types;
+#[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+mod update_check;
 mod webauthn;
 mod widgets;
 

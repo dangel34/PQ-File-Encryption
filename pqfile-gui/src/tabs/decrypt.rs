@@ -492,7 +492,7 @@ impl PqfileApp {
             if ui
                 .add(
                     egui::Label::new(
-                        RichText::new("Rekey instead →")
+                        RichText::new("Rekey instead ->")
                             .size(12.0)
                             .color(c_accent(dark))
                             .underline(),
@@ -507,7 +507,7 @@ impl PqfileApp {
             if ui
                 .add(
                     egui::Label::new(
-                        RichText::new("Add a recipient →")
+                        RichText::new("Add a recipient ->")
                             .size(12.0)
                             .color(c_accent(dark))
                             .underline(),
@@ -525,7 +525,7 @@ impl PqfileApp {
         if ui
             .add(
                 egui::Label::new(
-                    RichText::new("← Back to Decrypt")
+                    RichText::new("<- Back to Decrypt")
                         .size(12.5)
                         .color(c_accent(dark))
                         .underline(),

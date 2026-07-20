@@ -115,22 +115,6 @@ pub(crate) fn load_seed(body: &[u8]) -> Result<Zeroizing<Vec<u8>>, PqfileError> 
     }
 }
 
-/// Deletes the hardware-stored seed described by the stub PEM body bytes.
-#[allow(dead_code)]
-pub(crate) fn delete_seed(body: &[u8]) -> Result<(), PqfileError> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = body;
-        return Err(wasm_unsupported());
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let key_ref = stub::HardwareKeyRef::decode(body)?;
-        dispatch_delete(key_ref.backend_id, &key_ref)
-    }
-}
-
 /// Returns the recommended backend ID for the current platform.
 pub fn default_backend_id() -> u8 {
     stub::BACKEND_CREDENTIAL_STORE
@@ -160,17 +144,6 @@ fn dispatch_load(
     match backend_id {
         stub::BACKEND_CREDENTIAL_STORE => {
             credential_store::CredentialStoreBackend.load_seed(key_ref)
-        }
-        id => Err(unknown_backend(id)),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-fn dispatch_delete(backend_id: u8, key_ref: &stub::HardwareKeyRef) -> Result<(), PqfileError> {
-    match backend_id {
-        stub::BACKEND_CREDENTIAL_STORE => {
-            credential_store::CredentialStoreBackend.delete_seed(key_ref)
         }
         id => Err(unknown_backend(id)),
     }

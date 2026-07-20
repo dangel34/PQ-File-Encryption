@@ -22,4 +22,7 @@ See the root [README.md](../README.md) for a feature overview and
 feature (always on for `pqfile-desktop`, unavailable on `wasm32` since there is no browser
 HID API) adds hardware security key support as a v10 passphrase second factor. The `stego`
 Cargo feature (on by default, unlike `fido2` - no platform restriction) adds the Keys tab's
-"Steganographic Key Backup" panel on both desktop and `wasm32`.
+"Steganographic Key Backup" panel on both desktop and `wasm32`. The `update-check` Cargo
+feature (always on for `pqfile-desktop`, unavailable on `wasm32` - a web build is always
+whatever's currently deployed) adds the Settings tab's "Check for Updates" button and
+opt-in startup check against the GitHub Releases API.

@@ -443,7 +443,7 @@ impl PqfileApp {
                         .map(|d| format!("\nExpires: {d}"))
                         .unwrap_or_default();
                     self.keygen_status = OpStatus::Ok(format!(
-                        "Imported SSH key → ML-KEM-768 key pair saved to {}\n\
+                        "Imported SSH key -> ML-KEM-768 key pair saved to {}\n\
                          Fingerprint: {fp}{expiry_note}\n\
                          Warning: this key is not interoperable with SSH.",
                         out_dir.display()

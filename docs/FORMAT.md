@@ -18,6 +18,7 @@ This document is the authoritative byte-level description of all `.pqf` file for
 | VERSION_V8 | `0x08` | Variant-blind anonymous multi-recipient |
 | VERSION_V9 | `0x09` | Padded anonymous multi-recipient |
 | VERSION_V10 | `0x0A` | Passphrase-only (no KEM) |
+| VERSION_TLOCK | `0x0B` | Time-locked (drand beacon), always carries VERSION_AUTH_BIT (`0x8B`). See §5.12. Requires the `tlock` cargo feature. |
 | VERSION_AUTH_BIT | `0x80` | Authenticated-header flag bit, OR-ed onto the version byte (e.g. `0x83` = v3 layout + authenticated header). See §4.4. |
 | CHUNK_SIZE | 65536 | Default chunk size (bytes) |
 | BASE_NONCE_LEN | 8 | Random base-nonce bytes stored in header |

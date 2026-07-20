@@ -1,8 +1,9 @@
 # pqfile-desktop
 
 Native desktop binary for [`pqfile`](../pqfile): a thin `eframe` shell around the shared
-GUI in [`pqfile-gui`](../pqfile-gui), with the `fido2` feature always enabled (hardware
-security key support). Not published to crates.io.
+GUI in [`pqfile-gui`](../pqfile-gui), with the `fido2` (hardware security key support) and
+`update-check` (GitHub release version check) features always enabled. Not published to
+crates.io.
 
 ```sh
 cargo build --release -p pqfile-desktop

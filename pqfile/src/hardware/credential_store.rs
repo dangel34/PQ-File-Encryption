@@ -95,15 +95,6 @@ impl CredentialStoreBackend {
         })?);
         Ok(decode_legacy_hex_seed(&secret).unwrap_or(secret))
     }
-
-    /// Removes the credential from the store.
-    #[allow(dead_code)]
-    pub fn delete_seed(&self, key_ref: &HardwareKeyRef) -> Result<(), PqfileError> {
-        ensure_store()?;
-        let account = account_name(&key_ref.label);
-        let entry = Entry::new("pqfile", &account).map_err(hw_err)?;
-        entry.delete_credential().map_err(hw_err)
-    }
 }
 
 fn account_name(label: &str) -> String {

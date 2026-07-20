@@ -29,6 +29,12 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 ctap-hid-fido2 = { version = "3.5", optional = true }
 # Random challenge/salt generation for FIDO2 enroll/derive; optional alongside it.
 getrandom = { workspace = true, optional = true }
+# HTTP client for the update-check panel only; optional and native-only (no
+# WASM target for this crate - a web build is always whatever's deployed, so
+# an update check makes no sense there anyway).
+ureq = { version = "3", optional = true }
+# JSON parsing for the GitHub Releases API response; optional alongside ureq.
+serde_json = { version = "1", optional = true }
 
 [features]
 # Unlike `fido2` (native-hardware-only), steganographic key backup has no
@@ -43,6 +49,11 @@ fido2 = ["dep:ctap-hid-fido2", "dep:getrandom"]
 # Steganographic key backup (Bury/Exhume panel in the Keys tab). Mirrors
 # pqfile's own `stego` feature (image-codec dependency tree).
 stego = ["pqfile/stego"]
+# Update check (Settings toggle + About-window button). Off by default,
+# native-only, and never runs unless the user clicks the button or enables
+# automatic checks - mirrors pqfile-cli's `update-check` feature. Forced on
+# for pqfile-desktop specifically (see its Cargo.toml), same as fido2.
+update-check = ["dep:ureq", "dep:serde_json"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

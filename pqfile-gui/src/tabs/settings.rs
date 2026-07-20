@@ -142,6 +142,20 @@ impl PqfileApp {
                     dark,
                 );
             }
+            #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+            {
+                ui.add_space(8.0);
+                setting_toggle(
+                    ui,
+                    &mut self.settings.auto_check_updates,
+                    "Check for updates on startup",
+                    "Checks GitHub once per launch. No file data or telemetry is sent, and \
+                     nothing is ever downloaded or installed automatically.",
+                    dark,
+                );
+                ui.add_space(6.0);
+                self.show_update_check_row(ui, dark);
+            }
         });
         ui.add_space(10.0);
     }

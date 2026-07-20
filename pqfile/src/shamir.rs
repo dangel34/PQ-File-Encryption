@@ -370,7 +370,6 @@ fn encode_share_pem(
 struct DecodedShare {
     kem_variant: u16,
     threshold: u8,
-    #[allow(dead_code)]
     total: u8,
     x: u8,
     pubkey_fp: [u8; 16],

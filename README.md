@@ -101,7 +101,12 @@ PQ-File-Encryption/
 │   └── benches/
 │       └── crypto.rs             Criterion benchmarks (encrypt/decrypt at 1 KB/1 MB/100 MB)
 ├── pqfile-cli/                  CLI binary
-│   ├── src/main.rs                CLI entry point (clap subcommands, stdin/stdout support)
+│   ├── src/main.rs                Cli/Command argument definitions + dispatch only
+│   │   ├── config.rs, json_util.rs, prompts.rs, io_util.rs   Shared helpers
+│   │   ├── interactive.rs         No-args guided prompt mode
+│   │   └── commands/              One module per subcommand family (encrypt, decrypt,
+│   │                               keygen, sign, cert, keys, archive, sealed_sender,
+│   │                               shamir, inspect, stego)
 │   ├── packaging/                 .deb / .rpm packaging assets (pqfile.spec)
 │   └── tests/roundtrip.rs         End-to-end CLI integration tests
 ├── pqfile-gui/                  Shared GUI logic + WASM web app
@@ -616,6 +621,27 @@ pqfile completions fish   > ~/.config/fish/completions/pqfile.fish
 pqfile completions powershell >> $PROFILE
 ```
 
+### Man page
+
+```bash
+pqfile man > /usr/local/share/man/man1/pqfile.1
+```
+
+Generates a roff man page covering every subcommand via `clap_mangen`; no cargo feature needed.
+
+### Update check (`update-check` cargo feature)
+
+```bash
+pqfile check-update
+# A newer version is available: v4.4.0 (you have v4.3.1).
+# https://github.com/dangel34/PQ-File-Encryption/releases/tag/v4.4.0
+
+pqfile --json check-update
+# {"status":"ok","current_version":"4.3.1","latest_version":"4.4.0","update_available":"true"}
+```
+
+Queries the GitHub Releases API and compares the tag against this binary's own version. Never downloads or installs anything - it's a version comparison and a link, nothing more. Requires building with `--features update-check` (off by default, reaching the same `ureq` dependency `tlock` uses - still the only network-capable crate in the workspace - via a second, independent opt-in feature), but is compiled into the published release binaries so a normal download has it; even then it never runs unless invoked explicitly. The desktop GUI has the same check as a "Check for Updates now" button in Settings, alongside an opt-in "Check for updates on startup" toggle (off by default too, so nothing calls home without the user asking first).
+
 ### JSON output
 
 Every command accepts a global `--json` flag for machine-readable output:
@@ -649,9 +675,9 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 - **🔀 Shamir**: split a private key into M-of-N shares (with QR code export for air-gapped transfer) and reconstruct from shares
 - **🔍 Inspect**: header metadata for any `.pqf` file, or a key-file health check (passphrase/hardware status, expiry, legacy Argon2 detection, revocation sidecar), without decrypting
 - **📋 Clipboard**: encrypt/decrypt short text snippets without writing to disk, with an optional auto-clear timer
-- **⚙ Settings**: theme, default output directory, confirm-before-overwrite, and clipboard auto-clear preferences
+- **⚙ Settings**: theme, default output directory, confirm-before-overwrite, clipboard auto-clear, and (native, `update-check` cargo feature) an opt-in "Check for updates on startup" toggle plus a "Check for Updates now" button that works regardless of the toggle
 
-Hardware-backed keys, the folder watcher, SSH key import, passphrase change, and revocation are native-only (not available in the WASM build, which cannot access the OS credential store or filesystem watch APIs).
+Hardware-backed keys, the folder watcher, SSH key import, passphrase change, and revocation are native-only (not available in the WASM build, which cannot access the OS credential store or filesystem watch APIs). The update check is also native-only, but for a different reason: it has no `ureq` target for wasm32, and a web app is always whatever's currently deployed, so a version check makes no sense there anyway.
 
 ---
 
@@ -1061,6 +1087,8 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 | apple-native-keyring-store   | 1 | macOS Keychain backend (macOS only)                       |
 | linux-keyutils-keyring-store | 1 | Linux Secret Service backend (Linux only)                 |
 | tokio            | 1       | Async runtime backing `async_io` (optional, feature `"async"`)  |
+| memsec           | 0.7     | `mlock`/`VirtualLock` for in-flight secrets (`secret.rs`'s `LockedSecret`)  |
+| libcrux-ml-kem   | 0.0.10  | Optional F*-verified ML-KEM backend (`kem-libcrux` feature); agrees byte-for-byte with the default RustCrypto `ml-kem` on FIPS 203, proven by a cross-implementation oracle test |
 
 ### pqfile-cli (CLI binary, additional to the above)
 
@@ -1159,7 +1187,7 @@ iscc pqfile-desktop\packaging\setup.iss
 - **Each encryption is independent.** A fresh KEM ciphertext, fresh ephemeral X25519 scalar (hybrid mode), and fresh nonce are generated per file using the OS CSPRNG. Nonce reuse under the same symmetric key is structurally impossible.
 - **The entire file is authenticated.** For v2, the full header is passed as AEAD additional data, so any header or payload modification fails decryption. For chunked formats (v3 onward), each chunk carries its own AEAD tag plus a position-binding counter and last-chunk flag, so truncation, reordering, and payload swapping are all detected.
 - **Whole-file and async decrypt/encrypt paths are memory-bounded.** The v2 (whole-file) decrypt path and the optional `async` feature's encrypt/decrypt functions cap their internal buffering so a stream with an unbounded or oversized tail cannot force unbounded memory allocation.
-- **Secret material is zeroized on drop.** The decapsulation key seed, shared secrets, session keys, Shamir shares, and passphrase-derived keys are wrapped in `Zeroizing<T>` from the `zeroize` crate. `x25519-dalek`, `ml-kem`, and `ml-dsa` are compiled with their `zeroize` features enabled.
+- **Secret material is zeroized on drop.** The decapsulation key seed, shared secrets, session keys, Shamir shares, and passphrase-derived keys are wrapped in `Zeroizing<T>` from the `zeroize` crate. `x25519-dalek`, `ml-kem`, and `ml-dsa` are compiled with their `zeroize` features enabled. Small, long-lived secrets (session keys, KEM shared secrets, KDF output) additionally live in `mlock`ed (`VirtualLock` on Windows) heap memory via `secret.rs`'s `LockedSecret`, best-effort since unprivileged memory-lock quotas are small by default - a failed lock degrades to plain zeroize-on-drop rather than erroring.
 - **Private key and Shamir share files are written with owner-only permissions (0600) on Unix.** Hardware-backed keys never touch disk at all; the seed lives only in the OS credential store, accessed via its byte-native secret API.
 - **Multi-recipient security.** In v4/v7/v8/v9 formats, the file payload is encrypted with a single random 32-byte session key. Each recipient's copy of that key is wrapped under their KEM shared secret using AES-256-GCM (zero nonce; safe because the KEM shared secret is fresh and unique per encapsulation). A recipient with a non-matching key cannot distinguish a file addressed to them from one addressed to others; v9 additionally hides the true recipient count behind power-of-two padding.
 - **Hybrid mode security.** The combined session key is `HKDF-SHA256(X25519_ss || ML-KEM_ss, info="pqfile-hybrid-v1")`. Security holds if either X25519 or ML-KEM is unbroken, not both.

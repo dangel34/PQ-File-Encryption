@@ -34,10 +34,9 @@ cargo build --release -p pqfile-desktop
 ./target/release/pqfile-desktop.exe
 ```
 
-> **Icon note:** `pqfile-desktop/assets/icon.png` and `icon.ico` must exist before the
-> release build or `build.rs` will emit a warning and skip icon embedding.
-> The PNG is already committed. Convert it to ICO with icoconvert.com and drop it at
-> `pqfile-desktop/assets/icon.ico` and `pqfile-desktop/packaging/assets/icon.ico`.
+> **Icon note:** the Windows release build embeds `pqfile-desktop/packaging/assets/icon.ico`
+> (the same file the Inno Setup installer uses) via `build.rs`/`winres`; it's already
+> committed, so no manual conversion step is needed.
 
 ---
 
@@ -70,7 +69,7 @@ python -m http.server 8080   # http://localhost:8080
 
 ```powershell
 # Build
-cargo build --release -p pqfile
+cargo build --release -p pqfile-cli
 
 # Quick smoke test
 $bin = "./target/release/pqfile.exe"

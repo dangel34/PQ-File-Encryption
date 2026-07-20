@@ -526,6 +526,13 @@ pub(crate) struct Settings {
     /// The tab the user was on when the app last closed, restored on the next
     /// launch so frequent users don't re-land on Keygen every time.
     pub(crate) last_tab: Tab,
+    /// When true, checks GitHub for a newer release once per launch. Off by
+    /// default: this is the only setting that makes an outbound network
+    /// request without the user clicking something first. The "Check for
+    /// Updates now" button in this same Settings section always works
+    /// regardless of this toggle.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+    pub(crate) auto_check_updates: bool,
 }
 
 impl Default for Settings {
@@ -541,6 +548,8 @@ impl Default for Settings {
             #[cfg(not(target_arch = "wasm32"))]
             output_dir: String::new(),
             last_tab: Tab::Keygen,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+            auto_check_updates: false,
         }
     }
 }
@@ -580,6 +589,8 @@ impl Settings {
             .get_string("last_tab")
             .and_then(|s| tab_from_key(&s))
             .unwrap_or(Tab::Keygen);
+        #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+        let auto_check_updates = get_or(storage, "auto_check_updates", false);
         Self {
             dark_mode,
             auto_clear,
@@ -591,6 +602,8 @@ impl Settings {
             #[cfg(not(target_arch = "wasm32"))]
             output_dir,
             last_tab,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+            auto_check_updates,
         }
     }
 
@@ -619,5 +632,7 @@ impl Settings {
         #[cfg(not(target_arch = "wasm32"))]
         storage.set_string("output_dir", self.output_dir.clone());
         storage.set_string("last_tab", tab_key(self.last_tab).to_owned());
+        #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+        storage.set_string("auto_check_updates", self.auto_check_updates.to_string());
     }
 }

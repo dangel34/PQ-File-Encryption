@@ -83,7 +83,7 @@ impl PqfileApp {
                             if ui
                                 .add(
                                     egui::Button::new(
-                                        RichText::new("✕").size(11.0).color(c_subtext(dark)),
+                                        RichText::new("✖").size(11.0).color(c_subtext(dark)),
                                     )
                                     .fill(Color32::TRANSPARENT)
                                     .stroke(Stroke::NONE),
