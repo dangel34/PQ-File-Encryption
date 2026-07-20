@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784569533178,
+  "lastUpdate": 1784569781732,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -4079,6 +4079,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48156,
             "range": "± 153",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "5b64223cec3055f80f6f3d8393269d499a63ad97",
+          "message": "chore(coverage): update sonar-project.properties to refine coverage exclusions\n\n- Expanded coverage exclusions in `sonar-project.properties` to include additional files in the `pqfile-cli/src` directory, specifically `interactive.rs`, `prompts.rs`, and all modules under `commands/`.\n- Clarified comments regarding the rationale for excluding certain files from coverage, emphasizing their integration testing instead of unit testing.",
+          "timestamp": "2026-07-20T13:45:43-04:00",
+          "tree_id": "f17009a3c8bb0217ec0defed12887de067efbb1c",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/5b64223cec3055f80f6f3d8393269d499a63ad97"
+        },
+        "date": 1784569781383,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67846,
+            "range": "± 697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 967085,
+            "range": "± 8683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 106678733,
+            "range": "± 249448",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 107703,
+            "range": "± 663",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 970530,
+            "range": "± 1852",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93312611,
+            "range": "± 201132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 69653,
+            "range": "± 492",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 969151,
+            "range": "± 150147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99426614,
+            "range": "± 384529",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 112970,
+            "range": "± 456",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1181739,
+            "range": "± 9444",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99225004,
+            "range": "± 299518",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48342,
+            "range": "± 148",
             "unit": "ns/iter"
           }
         ]
