@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784313721337,
+  "lastUpdate": 1784560987116,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -3875,6 +3875,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 53527,
             "range": "± 207",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "37af3fe69bea415d9a5cad4e3e73276d3d847872",
+          "message": "chore(deps): update dependencies and enhance documentation\n\n- Updated `Cargo.lock` to bump versions of several dependencies, including `thiserror` to 2.0.19, `anyhow` to 1.0.104, and `async-trait` to 0.1.91.\n- Modified the `syn` dependency version to 2.0.119 across multiple packages for consistency.\n- Enhanced the `README.md` with new sections for man page generation and update check functionality, detailing how to use the `check-update` feature.\n- Improved documentation in `BUILDING.md`, `QUICKSTART.md`, and `CHANGELOG.md` to reflect changes in CLI commands and packaging processes.\n- Added a new CI job for testing the `update-check` feature in both CLI and GUI workflows.",
+          "timestamp": "2026-07-20T11:19:08-04:00",
+          "tree_id": "c0c515d80abab61aa67ed8c1a67ff238c2384fd8",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/37af3fe69bea415d9a5cad4e3e73276d3d847872"
+        },
+        "date": 1784560986285,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 56348,
+            "range": "± 553",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 823936,
+            "range": "± 4099",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 92962219,
+            "range": "± 1875124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 93468,
+            "range": "± 667",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 840648,
+            "range": "± 1615",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 82143334,
+            "range": "± 956598",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 58129,
+            "range": "± 841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 847628,
+            "range": "± 4054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 86791481,
+            "range": "± 284560",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 94959,
+            "range": "± 368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 883277,
+            "range": "± 1034",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 86537085,
+            "range": "± 344147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 41921,
+            "range": "± 288",
             "unit": "ns/iter"
           }
         ]
