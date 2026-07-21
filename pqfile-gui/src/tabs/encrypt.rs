@@ -1497,13 +1497,23 @@ fn recipient_row(
     ui.allocate_ui(egui::vec2(w, 22.0), |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if !job_running {
-                remove = ui
+                let resp = ui
                     .add(
                         egui::Button::new(RichText::new("x").size(11.0).color(c_overlay(dark)))
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE),
                     )
-                    .clicked();
+                    .on_hover_text("Remove recipient");
+                // "x" alone isn't a useful accessible name, and on_hover_text
+                // is mouse-only tooltip text AccessKit never sees.
+                resp.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        ui.is_enabled(),
+                        "Remove recipient",
+                    )
+                });
+                remove = resp.clicked();
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 let badge_color = variant_badge_color(variant_name, dark);
@@ -1536,13 +1546,23 @@ fn file_entry_row(
     ui.allocate_ui(egui::vec2(w, 22.0), |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if !job_running {
-                remove = ui
+                let resp = ui
                     .add(
                         egui::Button::new(RichText::new("x").size(11.0).color(c_overlay(dark)))
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE),
                     )
-                    .clicked();
+                    .on_hover_text("Remove file");
+                // "x" alone isn't a useful accessible name, and on_hover_text
+                // is mouse-only tooltip text AccessKit never sees.
+                resp.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        ui.is_enabled(),
+                        "Remove file",
+                    )
+                });
+                remove = resp.clicked();
             }
             match status {
                 OpStatus::None => {}

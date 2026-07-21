@@ -1,0 +1,57 @@
+name: iai-bench
+
+# Deterministic benchmark gate (instruction counts). Complements the
+# wall-clock `bench` job in ci.yml: criterion's timings are noisy on shared
+# runners, so that job's regression threshold is loose (125%). iai-callgrind
+# counts instructions under Valgrind, which is deterministic on the same
+# binary, so the gate here can be tight (5%, set per-benchmark in
+# pqfile/benches/iai.rs via Callgrind::soft_limits). The comparison baseline
+# is target/iai/ from the previous run, restored by the cache below; a cold
+# cache (first run, or after a Cargo.lock change evicts the exact-match key)
+# just skips the regression check for that one run.
+#
+# Moved off every push/PR to a weekly schedule (2026-07-21) - installing
+# Valgrind and running full Callgrind benchmarks on every single push/PR was
+# one of the heavier recurring CI-minutes costs for a signal (performance
+# regression) that doesn't need minute-level detection latency.
+# workflow_dispatch is available for an on-demand run, e.g. right after a
+# change to a hot path. Lives in its own workflow file rather than ci.yml
+# because a schedule: trigger fires every job in the file it is in (same
+# reasoning as advisories.yml).
+on:
+  schedule:
+    - cron: '30 4 * * 1'  # 04:30 UTC every Monday
+  workflow_dispatch:
+
+jobs:
+  iai-bench:
+    name: iai-bench
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
+        with:
+          toolchain: stable
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Install iai-callgrind-runner
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
+        with:
+          # Must exactly match the iai-callgrind version in pqfile/Cargo.toml
+          # (dev-dependency) - a mismatch is a hard error at bench-run time.
+          tool: iai-callgrind-runner@0.16.1
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: iai
+          cache-target: "true"
+
+      - name: Run iai-callgrind benchmarks
+        run: cargo bench -p pqfile --bench iai

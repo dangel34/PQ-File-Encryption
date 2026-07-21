@@ -359,6 +359,9 @@ pqfile check -k privkey.pem backup.tar.pqf
 # v10 passphrase-only files
 pqfile check --passphrase secret.txt.pqf
 
+# Verify chunks in parallel (only effective for v3/v5 chunked-format files)
+pqfile check -k privkey.pem --parallel large_backup.tar.pqf
+
 # Files written with `encrypt --stealth` (requires -k)
 pqfile check -k privkey.pem --stealth secret.txt.pqf
 
@@ -596,6 +599,8 @@ pqfile --json doctor privkey.pem
 pqfile doctor --calibrate
 pqfile doctor --calibrate --target-ms 500
 ```
+
+`doctor` and `inspect` also warn (never fail) if a single-recipient file's KEM variant or a key's algorithm is on pqfile's algorithm-distrust list - empty today, since no supported algorithm has been judged untrustworthy yet.
 
 Calibration scales the memory cost first (64 MiB floor — the compiled-in default — up to a 1 GiB ceiling), then the time cost. It never recommends parameters weaker than the defaults: a fast machine gets stronger parameters, a slow machine simply gets the defaults back.
 

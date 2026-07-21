@@ -22,6 +22,30 @@ fn kem_variant_name(variant: u16) -> &'static str {
     }
 }
 
+/// A one-line warning if `variant` is on the algorithm-distrust list,
+/// `None` otherwise. Thin formatting wrapper over `pqfile::distrust`, which
+/// owns the canonical algorithm naming and the actual list.
+fn distrust_warning_for_kem_variant(variant: u16) -> Option<String> {
+    let entry = pqfile::distrust::check_kem_variant(variant)?;
+    let name = pqfile::distrust::kem_variant_algorithm_name(variant)?;
+    Some(format!(
+        "{name} has been distrusted since {}: {}",
+        entry.since, entry.reason
+    ))
+}
+
+/// A one-line warning if the key PEM's algorithm is on the algorithm-distrust
+/// list, `None` otherwise (including for a PEM whose algorithm isn't
+/// recognised - see `pqfile::distrust::key_pem_algorithm_name`).
+fn distrust_warning_for_key_pem(pem_str: &str) -> Option<String> {
+    let entry = pqfile::distrust::check_key_pem(pem_str)?;
+    let name = pqfile::distrust::key_pem_algorithm_name(pem_str)?;
+    Some(format!(
+        "{name} has been distrusted since {}: {}",
+        entry.since, entry.reason
+    ))
+}
+
 pub(crate) fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
     let mut file = std::fs::File::open(input)?;
     // Peek the raw version byte: the Multi/AnonMulti inspect variants do not carry
@@ -57,6 +81,7 @@ pub(crate) fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                 v if *v == format::COMPRESSION_ZSTD => "zstd",
                 _ => "unknown",
             };
+            let distrust = distrust_warning_for_kem_variant(*kem_variant);
             if json {
                 let mut fields = vec![
                     kv_str("status", "ok"),
@@ -74,6 +99,9 @@ pub(crate) fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                 if layout == format::VERSION_V6 {
                     fields.push(kv_str("compression", compression_name));
                 }
+                if let Some(ref w) = distrust {
+                    fields.push(kv_str("distrust_warning", w));
+                }
                 println!("{}", json_object(&fields));
             } else {
                 println!("Magic:              PQFL");
@@ -87,6 +115,9 @@ pub(crate) fn inspect(input: &Path, json: bool) -> Result<(), PqfileError> {
                 }
                 if layout == format::VERSION_V6 {
                     println!("Compression:        {compression_name}");
+                }
+                if let Some(ref w) = distrust {
+                    println!("WARNING:            {w}");
                 }
             }
         }
@@ -446,20 +477,25 @@ fn doctor_key(
         "n/a"
     };
 
+    // Algorithm-distrust check (not covered for hardware-backed stubs - see
+    // pqfile::distrust::key_pem_algorithm_name's docs).
+    let distrust = distrust_warning_for_key_pem(pem_str);
+
     if json {
-        println!(
-            "{}",
-            json_object(&[
-                kv_str("status", "ok"),
-                kv_str("file", &file.to_string_lossy()),
-                kv_str("type", "private_key"),
-                kv_raw("encrypted", &is_encrypted.to_string()),
-                kv_raw("hardware", &is_hardware.to_string()),
-                kv_raw("legacy_argon2_p1", &is_legacy.to_string()),
-                kv_str("revocation", revocation_status),
-                kv_str("hardware_stub", hw_valid),
-            ])
-        );
+        let mut fields = vec![
+            kv_str("status", "ok"),
+            kv_str("file", &file.to_string_lossy()),
+            kv_str("type", "private_key"),
+            kv_raw("encrypted", &is_encrypted.to_string()),
+            kv_raw("hardware", &is_hardware.to_string()),
+            kv_raw("legacy_argon2_p1", &is_legacy.to_string()),
+            kv_str("revocation", revocation_status),
+            kv_str("hardware_stub", hw_valid),
+        ];
+        if let Some(ref w) = distrust {
+            fields.push(kv_str("distrust_warning", w));
+        }
+        println!("{}", json_object(&fields));
     } else {
         println!("File:              {}", file.display());
         println!("Type:              private key");
@@ -477,6 +513,9 @@ fn doctor_key(
         if is_hardware {
             println!("Hardware stub:     {hw_valid}");
         }
+        if let Some(ref w) = distrust {
+            println!("WARNING:           {w}");
+        }
     }
     Ok(())
 }
@@ -485,7 +524,7 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
     let mut buf = content;
     let info = inspect_stream(&mut buf)?;
 
-    let (version_str, kem_info_str, original_size) = match &info {
+    let (version_str, kem_info_str, original_size, distrust) = match &info {
         PqfHeaderInfo::Single {
             version,
             kem_variant,
@@ -494,7 +533,8 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
         } => {
             let v = format!("{version:#04x}");
             let k = kem_variant_name(*kem_variant).to_string();
-            (v, k, *original_size)
+            let w = distrust_warning_for_kem_variant(*kem_variant);
+            (v, k, *original_size, w)
         }
         PqfHeaderInfo::Multi {
             recipients,
@@ -503,7 +543,7 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
         } => {
             let v = format!("{:#04x}", content.get(4).copied().unwrap_or(0));
             let k = format!("{} recipients", recipients.len());
-            (v, k, *original_size)
+            (v, k, *original_size, None)
         }
         PqfHeaderInfo::AnonMulti {
             recipients,
@@ -512,7 +552,7 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
         } => {
             let v = format!("{:#04x}", content.get(4).copied().unwrap_or(0));
             let k = format!("{} slots (anon)", recipients.len());
-            (v, k, *original_size)
+            (v, k, *original_size, None)
         }
         PqfHeaderInfo::AnonMultiV8 {
             version,
@@ -527,7 +567,7 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
                 "anon v8"
             };
             let k = format!("{slot_count} slots ({label})");
-            (v, k, *original_size)
+            (v, k, *original_size, None)
         }
         PqfHeaderInfo::Passphrase {
             version,
@@ -538,7 +578,7 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
         } => {
             let v = format!("{version:#04x}");
             let k = format!("passphrase (m={m_kib} KiB, t={t_cost})");
-            (v, k, *original_size)
+            (v, k, *original_size, None)
         }
         #[cfg(feature = "tlock")]
         PqfHeaderInfo::TimeLocked {
@@ -548,24 +588,25 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
         } => {
             let v = format!("{:#04x}", content.get(4).copied().unwrap_or(0));
             let k = format!("time-locked (round {round})");
-            (v, k, *original_size)
+            (v, k, *original_size, None)
         }
-        _ => ("unknown".to_string(), "unknown".to_string(), 0u64),
+        _ => ("unknown".to_string(), "unknown".to_string(), 0u64, None),
     };
 
     if json {
-        println!(
-            "{}",
-            json_object(&[
-                kv_str("status", "ok"),
-                kv_str("file", &file.to_string_lossy()),
-                kv_str("type", "pqf_ciphertext"),
-                kv_str("version", &version_str),
-                kv_str("kem_info", &kem_info_str),
-                kv_raw("original_size", &original_size.to_string()),
-                kv_str("header_valid", "true"),
-            ])
-        );
+        let mut fields = vec![
+            kv_str("status", "ok"),
+            kv_str("file", &file.to_string_lossy()),
+            kv_str("type", "pqf_ciphertext"),
+            kv_str("version", &version_str),
+            kv_str("kem_info", &kem_info_str),
+            kv_raw("original_size", &original_size.to_string()),
+            kv_str("header_valid", "true"),
+        ];
+        if let Some(ref w) = distrust {
+            fields.push(kv_str("distrust_warning", w));
+        }
+        println!("{}", json_object(&fields));
     } else {
         println!("File:         {}", file.display());
         println!("Type:         .pqf ciphertext");
@@ -573,6 +614,9 @@ fn doctor_pqf(file: &Path, content: &[u8], json: bool) -> Result<(), PqfileError
         println!("KEM info:     {kem_info_str}");
         println!("Orig size:    {original_size} bytes");
         println!("Header:       valid");
+        if let Some(ref w) = distrust {
+            println!("WARNING:      {w}");
+        }
     }
     Ok(())
 }

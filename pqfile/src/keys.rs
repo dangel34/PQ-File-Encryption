@@ -310,7 +310,7 @@ impl std::fmt::Debug for PqfVerifyingKey {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-fn algorithm_name(kem_variant: u16) -> &'static str {
+pub(crate) fn algorithm_name(kem_variant: u16) -> &'static str {
     match kem_variant {
         KEM_VARIANT_512 => "ML-KEM-512",
         KEM_VARIANT_768 => "ML-KEM-768",

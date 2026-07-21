@@ -1,0 +1,98 @@
+name: Feature Checks
+
+# Compile + test coverage for the workspace's off-by-default cargo features
+# (fido2, kem-libcrux, tlock, stego). None of these is exercised by the
+# release pipeline (release.yml only ever builds pqfile-cli with
+# --features update-check, and pqfile-desktop forces on fido2/update-check
+# for the GUI - kem-libcrux/tlock/stego are never compiled into any shipped
+# artifact) or by ci.yml's default test-and-lint job, so without this,
+# feature-gated code (an entire additional wire format for tlock, a whole
+# steganography subsystem, an alternate formally-verified crypto backend)
+# would get zero automated verification and could silently bit-rot behind a
+# dependency bump.
+#
+# Moved off every push/PR to a weekly schedule (2026-07-21) to cut recurring
+# CI-minutes cost on features that rarely change in themselves - a week's
+# detection latency for a dependency-bump breakage is an acceptable tradeoff
+# for opt-in functionality. workflow_dispatch is available for an on-demand
+# run, e.g. right after bumping one of these features' own dependencies.
+# Lives in its own workflow file rather than ci.yml because a schedule:
+# trigger fires every job in the file it is in (same reasoning as
+# advisories.yml).
+on:
+  schedule:
+    - cron: '0 4 * * 1'  # 04:00 UTC every Monday
+  workflow_dispatch:
+
+jobs:
+  feature-check:
+    name: ${{ matrix.feature }} feature check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # fido2: USB HID hardware token second factor. Native hardware isn't
+          # available on a CI runner, so this checks compilation and the
+          # feature's own unit tests (enrollment file parsing), not live USB
+          # I/O. Needs GTK/XCB/libudev for pqfile-gui (rfd/eframe) and the
+          # hidraw backend.
+          - feature: fido2
+            packages: pqfile-cli pqfile-gui
+            needs_linux_deps: true
+          # kem-libcrux: swaps the ML-KEM backend from `ml-kem` to Cryspen's
+          # F*-verified `libcrux-ml-kem`. Library crate only - a pqfile
+          # implementation detail with no CLI/GUI surface.
+          # pqfile/tests/kem_oracle.rs (a plain dev-dependency, unaffected by
+          # this feature) already proves the two backends agree byte-for-byte.
+          - feature: kem-libcrux
+            packages: pqfile
+            needs_linux_deps: false
+          # tlock: time-locked encryption (v11 format), pulls in the only
+          # network-capable dependencies in the workspace (tlock, drand_core).
+          # Runs the feature's offline unit tests only (a pinned historical
+          # drand beacon signature); the two live-network tests in
+          # pqfile/src/tlock.rs are #[ignore]d and never run in CI, per the
+          # same convention as the ct_*.rs dudect harnesses.
+          - feature: tlock
+            packages: pqfile pqfile-cli
+            needs_linux_deps: false
+          # stego: steganographic key backup (bury/exhume), pulls in an
+          # image-codec dependency tree (PNG + JPEG decode/encode).
+          - feature: stego
+            packages: pqfile pqfile-cli
+            needs_linux_deps: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
+        with:
+          toolchain: stable
+          components: clippy
+
+      - if: matrix.needs_linux_deps
+        uses: ./.github/actions/install-linux-deps
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: feature-${{ matrix.feature }}
+          cache-target: "true"
+
+      # Loops over this feature's package list rather than a single combined
+      # `-p a -p b --features x` invocation, matching how each package was
+      # checked individually before this job existed - keeps clippy/test
+      # scoped per-package rather than resolving features across a combined
+      # selection.
+      - name: Clippy and test each package with this feature enabled
+        shell: bash
+        run: |
+          for pkg in ${{ matrix.packages }}; do
+            echo "== clippy -p $pkg --features ${{ matrix.feature }} =="
+            cargo clippy -p "$pkg" --all-targets --features ${{ matrix.feature }} -- --deny warnings
+            echo "== test -p $pkg --features ${{ matrix.feature }} =="
+            cargo test -p "$pkg" --features ${{ matrix.feature }}
+          done

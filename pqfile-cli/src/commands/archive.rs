@@ -15,7 +15,7 @@ fn bad_archive_input(msg: String) -> PqfileError {
 }
 
 /// Recursively collects every file under `dir` for `archive --recursive`,
-/// sorted for determinism. Unlike [`collect_files`] (encrypt --recursive,
+/// sorted for determinism. Unlike `collect_files` (encrypt --recursive,
 /// which skips what it can't use), archiving is a fidelity operation: symlinks
 /// and special files (devices, FIFOs, sockets) cannot be represented in a PQFA
 /// archive, so encountering one is an error rather than a silent omission.

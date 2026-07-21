@@ -87,6 +87,10 @@ pub mod encrypt;
 /// Error types.
 pub mod error;
 
+/// Algorithm-distrust list: lets a future release flag a supported algorithm
+/// as no longer trustworthy without breaking files/keys that already used it.
+pub mod distrust;
+
 /// On-disk format constants and header structs.
 pub mod format;
 
@@ -104,6 +108,11 @@ pub mod reader;
 
 /// Streaming encryptor: `PqfWriter<W>` implements `std::io::Write`.
 pub mod writer;
+
+/// Random-access decryptor: `SeekableDecryptor<R>` implements `std::io::Read`
+/// and `std::io::Seek`. Weakens the whole-file-authenticated-or-nothing
+/// invariant for the sake of true random access - see the module docs.
+pub mod seek_decrypt;
 
 /// Rekey: transfer a v3/v5 file to a new recipient without re-encrypting.
 pub mod rekey;

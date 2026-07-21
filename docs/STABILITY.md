@@ -39,6 +39,7 @@ surface.
 | `pqfile::inspect` | `inspect_stream`, `PqfHeaderInfo`, `RecipientInfo`, `PqfInfo` |
 | `pqfile::reader` | `PqfReader`, `PqfInfo` |
 | `pqfile::writer` | `PqfWriter` |
+| `pqfile::seek_decrypt` | `SeekableDecryptor` |
 | `pqfile::repassphrase` | `repassphrase`, `repassphrase_file`, `RepassphraseResult` |
 | `pqfile::hardware` | `HW_TAG_*` constants, `is_hardware_tag`, `default_backend_id` |
 | `pqfile::hardware::stub` | `BACKEND_CREDENTIAL_STORE`, `BACKEND_PKCS11` |
@@ -56,6 +57,7 @@ surface.
 | `pqfile::sealed_sender` | `identity_keygen`, `identity_keygen_bytes`, `is_identity_key_encrypted`, `seal`, `seal_bytes`, `unseal_bytes`, `IdentityKeygenResult` |
 | `pqfile::recipient_string` | `encode_pubkey`, `decode_pubkey`, `is_recipient_string` |
 | `pqfile::error` | `PqfileError` (all variants; new variants may be added in minor releases) |
+| `pqfile::distrust` | `check`, `check_against`, `check_kem_variant`, `check_key_pem`, `kem_variant_algorithm_name`, `key_pem_algorithm_name`, `DistrustEntry`, `DISTRUSTED_ALGORITHMS` |
 
 ### Format constants
 

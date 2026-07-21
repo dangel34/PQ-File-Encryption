@@ -205,6 +205,7 @@ pub(crate) fn run_check(
     max_kdf_mem: u32,
     max_kdf_time: u32,
     input: String,
+    parallel: bool,
     stealth: bool,
     tlock: bool,
     tlock_url: Option<String>,
@@ -286,7 +287,17 @@ pub(crate) fn run_check(
         let privkey_pem = std::fs::read_to_string(&key_path)?;
         let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
         let pp_str = pp.as_deref().map(|z| z.as_str());
-        decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut sink, pp_str)?;
+        if parallel {
+            decrypt::decrypt_stream_parallel(
+                &privkey_pem,
+                &mut *reader,
+                &mut sink,
+                pp_str,
+                PARALLEL_BATCH_SIZE,
+            )?;
+        } else {
+            decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut sink, pp_str)?;
+        }
     }
     let count = sink.into_inner().0;
 

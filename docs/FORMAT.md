@@ -147,6 +147,20 @@ rejects any bit-carrying version byte with `UnsupportedVersion` — the intended
 "upgrade to read this file" signal. Files written by older versions remain
 readable.
 
+### 4.5 Random-access decryption (library only, no wire-format change)
+
+Because `chunk_nonce`/`chunk_aad` (§4.1-4.2) depend only on the chunk's own
+index, not on any preceding chunk's output, chunk *N* can be decrypted in
+isolation given the session key and whether *N* is the last chunk —
+no wire-format addition was needed to support this. `pqfile::seek_decrypt::SeekableDecryptor<R>`
+(`R: Read + Seek`, v3/v5 single-recipient files only) exploits this to jump
+directly to any chunk, or any byte offset via its `Read`/`Seek` impls, without
+decrypting everything before it. This intentionally does **not** authenticate
+the whole file the way every other decrypt function in this crate does — only
+the chunk(s) actually requested are checked. See the module's doc comments and
+`docs/ROADMAP.md`, "Seekable/random-access decryption API", for the full
+tradeoff.
+
 ---
 
 ## 5. Version Layouts

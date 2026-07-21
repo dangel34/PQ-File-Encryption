@@ -169,19 +169,29 @@ pub(crate) fn setting_toggle(
                 ui.label(RichText::new(desc).size(11.5).color(c_subtext(dark)));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                toggle_switch(ui, val, dark);
+                toggle_switch(ui, val, label, dark);
             });
         });
     });
 }
 
-fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, dark: bool) -> egui::Response {
+/// `label` is not painted here (the caller already renders it as visible
+/// text) - it exists only so a screen reader announces this hand-painted
+/// switch as e.g. "Dark mode, checkbox, checked" instead of an unlabeled
+/// clickable region. `ui.allocate_exact_size(_, Sense::click())` already
+/// makes the rect focusable and keyboard-activatable (Space/Enter) for free
+/// (`Sense::click()` implies `Sense::FOCUSABLE`); only the accessible
+/// name/role/state were missing before this.
+fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, label: &str, dark: bool) -> egui::Response {
     let size = Vec2::new(36.0, 20.0);
     let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
     }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label)
+    });
     if ui.is_rect_visible(rect) {
         let t = ui.ctx().animate_bool(response.id, *on);
         let off_col = c_surface1(dark);
@@ -865,20 +875,32 @@ pub(crate) fn seg_tabs<T: PartialEq + Clone>(
 
 /// Small clipboard-copy button. Shows "⎘" and copies `text` on click.
 /// Returns `true` if clicked this frame.
+///
+/// The visible glyph alone is not a useful accessible name (a screen reader
+/// has no reliable pronunciation for "⎘"), and `on_hover_text` is a
+/// mouse-only tooltip that AccessKit never sees - so the accessible name is
+/// set explicitly via `widget_info` rather than left to default to the
+/// button's own text content.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn copy_text_btn(ui: &mut egui::Ui, text: &str, dark: bool) -> bool {
-    ui.add(
-        egui::Button::new(RichText::new("⎘").size(11.0).color(c_subtext(dark)))
-            .fill(egui::Color32::TRANSPARENT)
-            .stroke(egui::Stroke::NONE)
-            .min_size(egui::vec2(20.0, 20.0)),
-    )
-    .on_hover_text("Copy to clipboard")
-    .clicked()
-    .then(|| {
-        ui.ctx().copy_text(text.to_owned());
-    })
-    .is_some()
+    let enabled = ui.is_enabled();
+    let response = ui
+        .add(
+            egui::Button::new(RichText::new("⎘").size(11.0).color(c_subtext(dark)))
+                .fill(egui::Color32::TRANSPARENT)
+                .stroke(egui::Stroke::NONE)
+                .min_size(egui::vec2(20.0, 20.0)),
+        )
+        .on_hover_text("Copy to clipboard");
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Copy to clipboard")
+    });
+    response
+        .clicked()
+        .then(|| {
+            ui.ctx().copy_text(text.to_owned());
+        })
+        .is_some()
 }
 
 /// Shows a primary action button (bold label, accent fill) that's
@@ -941,4 +963,95 @@ pub(crate) fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {
         .show(ui, |ui| {
             ui.label(RichText::new(msg).size(13.0).color(color));
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs `add_contents` inside a fresh, AccessKit-enabled `egui::Context`
+    /// for one pass and returns every resulting AccessKit node's role and
+    /// label. This is the automated accessibility harness this crate didn't
+    /// have before: it lets a test assert that a widget produces a real,
+    /// correctly-labeled AccessKit node - not just that it renders without
+    /// panicking. `egui` always depends on `accesskit` (re-exported as
+    /// `egui::accesskit`) regardless of the `eframe`-level `accesskit`
+    /// feature, which only gates the winit/platform wiring - so this needs
+    /// no new dev-dependency.
+    fn accesskit_nodes(
+        mut add_contents: impl FnMut(&mut egui::Ui),
+    ) -> Vec<(egui::accesskit::Role, Option<String>)> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        ctx.enable_accesskit();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| add_contents(ui));
+        let update = output
+            .platform_output
+            .accesskit_update
+            .expect("enable_accesskit() must populate an AccessKit tree update");
+        update
+            .nodes
+            .iter()
+            .map(|(_, node)| (node.role(), node.label().map(str::to_owned)))
+            .collect()
+    }
+
+    #[test]
+    fn toggle_switch_exposes_a_labeled_checkbox_node() {
+        let mut on = false;
+        let nodes = accesskit_nodes(|ui| {
+            setting_toggle(ui, &mut on, "Dark mode", "Use a dark color scheme", false);
+        });
+        assert!(
+            nodes
+                .iter()
+                .any(|(role, label)| *role == egui::accesskit::Role::CheckBox
+                    && label.as_deref() == Some("Dark mode")),
+            "expected a CheckBox node labeled 'Dark mode', got: {nodes:?}"
+        );
+    }
+
+    #[test]
+    fn toggle_switch_label_tracks_state() {
+        // The label carries the on/off state via the node's Toggled property,
+        // not the label text itself - just confirm the checkbox node's
+        // `toggled()` reflects `on` in both positions.
+        for on_value in [false, true] {
+            let mut on = on_value;
+            let ctx = egui::Context::default();
+            ctx.set_fonts(egui::FontDefinitions::empty());
+            ctx.enable_accesskit();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                setting_toggle(ui, &mut on, "Auto-clear", "desc", false);
+            });
+            let update = output.platform_output.accesskit_update.unwrap();
+            let node = update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.role() == egui::accesskit::Role::CheckBox)
+                .map(|(_, n)| n)
+                .expect("checkbox node must exist");
+            let expected = if on_value {
+                egui::accesskit::Toggled::True
+            } else {
+                egui::accesskit::Toggled::False
+            };
+            assert_eq!(node.toggled(), Some(expected));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn copy_text_btn_exposes_a_labeled_button_node() {
+        let nodes = accesskit_nodes(|ui| {
+            copy_text_btn(ui, "some secret text", false);
+        });
+        assert!(
+            nodes
+                .iter()
+                .any(|(role, label)| *role == egui::accesskit::Role::Button
+                    && label.as_deref() == Some("Copy to clipboard")),
+            "expected a Button node labeled 'Copy to clipboard', got: {nodes:?}"
+        );
+    }
 }

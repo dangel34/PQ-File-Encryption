@@ -380,7 +380,7 @@ pub(crate) fn resolve_in_place_out_path(
 
 /// Resolves the output path for an "encrypt a sibling `.pqf` file" command
 /// (signcrypt, seal): defaults to `<input>.pqf` next to the input, or honors
-/// an explicit `-o`. Shared by [`run_signcrypt`] and [`run_seal`].
+/// an explicit `-o`. Shared by `run_signcrypt` and `run_seal`.
 pub(crate) fn resolve_pqf_sibling_out_path(
     input: &Path,
     output: Option<PathBuf>,

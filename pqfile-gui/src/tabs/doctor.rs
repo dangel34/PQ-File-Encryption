@@ -231,6 +231,18 @@ fn doctor_key(
         DoctorRow::Section("Health Checks".to_owned()),
     ];
 
+    // Algorithm-distrust check (not covered for hardware-backed stubs - see
+    // pqfile::distrust::key_pem_algorithm_name's docs). Uses the library's
+    // own PEM-tag parsing rather than the `key_type` string match above, so
+    // it stays correct even if that heuristic display string ever drifts.
+    if let Some(entry) = pqfile::distrust::check_key_pem(pem_str) {
+        rows.push(chk(
+            CheckKind::Warn,
+            "Algorithm",
+            &format!("distrusted since {}: {}", entry.since, entry.reason),
+        ));
+    }
+
     if is_hardware {
         rows.push(chk(
             CheckKind::Info,
@@ -465,6 +477,13 @@ fn doctor_pqf(info: &inspect::PqfHeaderInfo) -> Vec<DoctorRow> {
             rows.push(DoctorRow::Section("Health Checks".to_owned()));
             rows.push(chk(CheckKind::Pass, "Header validity", "OK"));
             rows.push(chk(CheckKind::Info, "Recipients", "single"));
+            if let Some(entry) = pqfile::distrust::check_kem_variant(*kem_variant) {
+                rows.push(chk(
+                    CheckKind::Warn,
+                    "Algorithm",
+                    &format!("distrusted since {}: {}", entry.since, entry.reason),
+                ));
+            }
             rows.push(DoctorRow::Section("Raw Details".to_owned()));
             rows.push(DoctorRow::Kv(
                 "Version (hex)".to_owned(),

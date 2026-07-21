@@ -400,15 +400,23 @@ fn key_entry_row(
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
+            let resp = ui
                 .add(
                     egui::Button::new(RichText::new("x").size(11.0).color(c_overlay(dark)))
                         .fill(Color32::TRANSPARENT)
                         .stroke(Stroke::NONE),
                 )
-                .on_hover_text("Remove from list")
-                .clicked()
-            {
+                .on_hover_text("Remove from list");
+            // "x" alone isn't a useful accessible name, and on_hover_text is
+            // mouse-only tooltip text AccessKit never sees.
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    ui.is_enabled(),
+                    "Remove from list",
+                )
+            });
+            if resp.clicked() {
                 action = Some(KeyAction::Remove(i));
             }
             ui.add_space(4.0);

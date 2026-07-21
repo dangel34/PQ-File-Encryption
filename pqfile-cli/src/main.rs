@@ -302,6 +302,9 @@ enum Command {
         key: Option<PathBuf>,
         /// Encrypted .pqf file to check, or '-' to read from stdin.
         input: String,
+        /// Check chunks in parallel using rayon (only effective for v3/v5 format files).
+        #[arg(long, default_value_t = false)]
+        parallel: bool,
         /// Check a v10 passphrase-only file. The passphrase is prompted interactively.
         /// Mutually exclusive with -k.
         #[arg(long = "passphrase", default_value_t = false, conflicts_with = "key")]
@@ -1119,6 +1122,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
         Command::Check {
             key,
             input,
+            parallel,
             passphrase_v10,
             max_kdf_mem,
             max_kdf_time,
@@ -1142,6 +1146,7 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             max_kdf_mem,
             max_kdf_time,
             input,
+            parallel,
             stealth,
             #[cfg(feature = "tlock")]
             tlock,

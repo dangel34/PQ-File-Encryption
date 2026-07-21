@@ -3,6 +3,13 @@ name: CI
 # Note: workflow files are deliberately NOT in paths-ignore. A push that only
 # edits a workflow still runs the full suite — a broken workflow edit landing
 # with zero checks is how the June 2026 release-pipeline breakage went unnoticed.
+#
+# Related checks that do NOT run here (moved to a weekly schedule on
+# 2026-07-21 to cut recurring CI-minutes cost): the off-by-default cargo
+# feature compile/test checks (feature-checks.yml), the deterministic
+# instruction-count benchmark gate (iai-bench.yml), and the SonarQube
+# coverage scan (sonarqube.yml). All three still have workflow_dispatch for
+# an on-demand run.
 on:
   push:
     branches: [main]
@@ -34,7 +41,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -56,7 +63,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -69,7 +76,7 @@ jobs:
           key-suffix: vet
 
       - name: Install cargo-vet
-        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         with:
           # Pinned: no GitHub release binary exists past v0.10.0, so an
           # unpinned "latest" silently resolves to that stale binary. Pinning
@@ -96,7 +103,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -109,7 +116,7 @@ jobs:
           key-suffix: semver
 
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         with:
           tool: cargo-semver-checks
 
@@ -133,7 +140,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -161,7 +168,7 @@ jobs:
       # Credentials stay persisted here (zizmor artipacked): the step below
       # pushes the gh-pages branch and github-action-benchmark auto-pushes
       # benchmark history to it.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0 # zizmor: ignore[artipacked]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
         with:
@@ -198,47 +205,6 @@ jobs:
           fail-on-alert: true
           alert-comment-cc-users: '@dangel34'
 
-  # ── Deterministic benchmark gate (instruction counts, main and PRs) ───────
-  # Complements the wall-clock `bench` job above: criterion's timings are noisy
-  # on shared runners, so the regression threshold there is loose (125%).
-  # iai-callgrind counts instructions under Valgrind, which is deterministic
-  # on the same binary, so the gate here can be tight (5%, set per-benchmark
-  # in pqfile/benches/iai.rs via Callgrind::soft_limits). The comparison
-  # baseline is target/iai/ from the previous run, restored by the cache
-  # below; a cold cache (first run, or after a Cargo.lock change evicts the
-  # exact-match key) just skips the regression check for that one run.
-  iai-bench:
-    name: iai-bench
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
-        with:
-          toolchain: stable
-
-      - name: Install valgrind
-        run: sudo apt-get update && sudo apt-get install -y valgrind
-
-      - name: Install iai-callgrind-runner
-        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
-        with:
-          # Must exactly match the iai-callgrind version in pqfile/Cargo.toml
-          # (dev-dependency) - a mismatch is a hard error at bench-run time.
-          tool: iai-callgrind-runner@0.16.1
-
-      - uses: ./.github/actions/cargo-cache
-        with:
-          key-suffix: iai
-          cache-target: "true"
-
-      - name: Run iai-callgrind benchmarks
-        run: cargo bench -p pqfile --bench iai
-
   # ── Secret scanning ────────────────────────────────────────────────────────
   gitleaks:
     name: gitleaks
@@ -246,7 +212,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # full history so gitleaks can scan all commits
           persist-credentials: false
@@ -263,7 +229,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -291,207 +257,6 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --features pqfile/async
 
-  # ── Optional-feature compile check (fido2) ────────────────────────────────
-  # The `fido2` feature is off by default so the main test-and-lint job never
-  # needs libusb/hidraw system packages; this job exists purely so the
-  # feature-gated code doesn't silently bit-rot between uses. Native HID
-  # hardware isn't available on a CI runner, so this checks compilation and
-  # the feature's own unit tests (enrollment file parsing), not live USB I/O.
-  fido2-check:
-    name: fido2 feature check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
-        with:
-          toolchain: stable
-          components: clippy
-
-      - uses: ./.github/actions/install-linux-deps
-
-      - uses: ./.github/actions/cargo-cache
-        with:
-          key-suffix: fido2
-          cache-target: "true"
-
-      - name: Clippy (pqfile-cli, fido2 feature)
-        run: cargo clippy -p pqfile-cli --all-targets --features fido2 -- --deny warnings
-
-      - name: Test (pqfile-cli, fido2 feature)
-        run: cargo test -p pqfile-cli --features fido2
-
-      # pqfile-desktop always enables pqfile-gui's fido2 feature (it's the one
-      # native GUI target), so the main test-and-lint job already builds it
-      # with FIDO2 code compiled in via --workspace. What it does not do is
-      # run pqfile-gui's OWN test binary with the feature on (that requires
-      # passing the feature to pqfile-gui specifically), so fido2.rs's unit
-      # tests (enrollment file parsing) need this separate invocation.
-      - name: Clippy (pqfile-gui, fido2 feature)
-        run: cargo clippy -p pqfile-gui --all-targets --features fido2 -- --deny warnings
-
-      - name: Test (pqfile-gui, fido2 feature)
-        run: cargo test -p pqfile-gui --features fido2
-
-  # ── Optional-feature compile check (kem-libcrux) ──────────────────────────
-  # The `kem-libcrux` feature swaps the ML-KEM backend from `ml-kem` to
-  # Cryspen's F*-verified `libcrux-ml-kem`; off by default so a normal build
-  # never pays for the extra dependency tree. This job exists purely so the
-  # feature-gated code doesn't silently bit-rot between uses - library crate
-  # only, since the feature is a pqfile implementation detail with no CLI/GUI
-  # surface. pqfile/tests/kem_oracle.rs (a plain dev-dependency, unaffected by
-  # this feature) already proves the two backends agree byte-for-byte.
-  kem-libcrux-check:
-    name: kem-libcrux feature check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
-        with:
-          toolchain: stable
-          components: clippy
-
-      - uses: ./.github/actions/cargo-cache
-        with:
-          key-suffix: kem-libcrux
-          cache-target: "true"
-
-      - name: Clippy (pqfile, kem-libcrux feature)
-        run: cargo clippy -p pqfile --all-targets --features kem-libcrux -- --deny warnings
-
-      - name: Test (pqfile, kem-libcrux feature)
-        run: cargo test -p pqfile --features kem-libcrux
-
-  # ── Optional-feature compile check (tlock) ────────────────────────────────
-  # Time-locked encryption (V11 format) pulls in the only network-capable
-  # dependencies in the workspace (`tlock`, `drand_core`); off by default so a
-  # normal build never gains an HTTP stack. This job compiles and runs the
-  # feature's offline unit tests (a pinned historical drand beacon signature,
-  # so no network access is needed here) for both the library and the CLI.
-  # The two live-network tests in pqfile/src/tlock.rs are #[ignore]d and never
-  # run in CI, per the same convention as the ct_*.rs dudect harnesses.
-  tlock-check:
-    name: tlock feature check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
-        with:
-          toolchain: stable
-          components: clippy
-
-      - uses: ./.github/actions/cargo-cache
-        with:
-          key-suffix: tlock
-          cache-target: "true"
-
-      - name: Clippy (pqfile, tlock feature)
-        run: cargo clippy -p pqfile --all-targets --features tlock -- --deny warnings
-
-      - name: Test (pqfile, tlock feature)
-        run: cargo test -p pqfile --features tlock
-
-      - name: Clippy (pqfile-cli, tlock feature)
-        run: cargo clippy -p pqfile-cli --all-targets --features tlock -- --deny warnings
-
-      - name: Test (pqfile-cli, tlock feature)
-        run: cargo test -p pqfile-cli --features tlock
-
-  # ── Optional-feature compile check (stego) ────────────────────────────────
-  # Steganographic key backup (`bury`/`exhume`) pulls in an image-codec
-  # dependency tree (PNG + JPEG decode/encode); off by default so a normal
-  # build never pays for it. This job compiles and runs the feature's own
-  # unit tests (LSB embed/extract round-trips, capacity, tamper detection)
-  # for both the library and the CLI.
-  stego-check:
-    name: stego feature check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
-        with:
-          toolchain: stable
-          components: clippy
-
-      - uses: ./.github/actions/cargo-cache
-        with:
-          key-suffix: stego
-          cache-target: "true"
-
-      - name: Clippy (pqfile, stego feature)
-        run: cargo clippy -p pqfile --all-targets --features stego -- --deny warnings
-
-      - name: Test (pqfile, stego feature)
-        run: cargo test -p pqfile --features stego
-
-      - name: Clippy (pqfile-cli, stego feature)
-        run: cargo clippy -p pqfile-cli --all-targets --features stego -- --deny warnings
-
-      - name: Test (pqfile-cli, stego feature)
-        run: cargo test -p pqfile-cli --features stego
-
-  # ── Optional-feature compile check (update-check) ─────────────────────────
-  # `check-update` (CLI) / the About-window "Check for Updates" button (GUI)
-  # reach `ureq` via a second, independent opt-in feature - it's the same
-  # crate `tlock` uses, still the only network-capable dependency in the
-  # workspace. Off by default; only compiled into the
-  # published release binaries (see release.yml and pqfile-desktop's
-  # Cargo.toml), and even then never runs unless the user asks for it. This
-  # job compiles and runs the feature's offline unit tests (version-string
-  # comparison only, no network access) for the CLI and the GUI. Pure-Rust
-  # TLS (ureq's default `rustls` backend), so no install-linux-deps step is
-  # needed, unlike fido2-check.
-  update-check-check:
-    name: update-check feature check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
-        with:
-          toolchain: stable
-          components: clippy
-
-      - uses: ./.github/actions/cargo-cache
-        with:
-          key-suffix: update-check
-          cache-target: "true"
-
-      - name: Clippy (pqfile-cli, update-check feature)
-        run: cargo clippy -p pqfile-cli --all-targets --features update-check -- --deny warnings
-
-      - name: Test (pqfile-cli, update-check feature)
-        run: cargo test -p pqfile-cli --features update-check
-
-      - name: Clippy (pqfile-gui, update-check feature)
-        run: cargo clippy -p pqfile-gui --all-targets --features update-check -- --deny warnings
-
-      - name: Test (pqfile-gui, update-check feature)
-        run: cargo test -p pqfile-gui --features update-check
-
   # ── WASM smoke test ────────────────────────────────────────────────────────
   wasm-test:
     name: WASM smoke test
@@ -499,7 +264,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -509,7 +274,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         with:
           tool: wasm-pack
 

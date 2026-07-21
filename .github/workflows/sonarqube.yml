@@ -1,25 +1,29 @@
 name: SonarQube Analysis
 
+# Full instrumented `cargo llvm-cov` coverage run - the heaviest job in the
+# whole CI setup (re-runs the entire test suite under coverage
+# instrumentation on top of ci.yml's own plain test run). Moved off every
+# push/PR to a weekly schedule (2026-07-21) to cut recurring CI-minutes cost;
+# workflow_dispatch is available for an on-demand run, e.g. right before
+# checking the dashboard. Since this no longer runs on pull_request, it
+# cannot be a required status check on branch protection - if it is
+# currently configured as one, that rule needs to be relaxed or every future
+# PR will be permanently blocked on a check that never starts.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  schedule:
+    - cron: '0 5 * * 1'  # 05:00 UTC every Monday
+  workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   sonarqube:
     name: Analyze
     runs-on: ubuntu-latest
-    # Skip on forks / when the SonarQube secrets are not configured, so the job
-    # does not fail for external contributors who cannot access them.
-    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history required for blame / new-code detection
           persist-credentials: false
@@ -33,7 +37,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         with:
           tool: cargo-llvm-cov
 

@@ -312,10 +312,6 @@ criteria = "safe-to-deploy"
 version = "1.1.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.cfg_aliases]]
-version = "0.2.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.chacha20]]
 version = "0.10.1"
 criteria = "safe-to-deploy"
@@ -341,15 +337,15 @@ version = "1.8.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
-version = "4.6.2"
+version = "4.6.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_derive]]
-version = "4.6.1"
+version = "4.6.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_mangen]]
-version = "0.2.33"
+version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.clipboard-win]]
@@ -712,6 +708,10 @@ criteria = "safe-to-deploy"
 version = "0.1.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.glob]]
+version = "0.3.4"
+criteria = "safe-to-deploy"
+
 [[exemptions.glow]]
 version = "0.17.0"
 criteria = "safe-to-deploy"
@@ -961,7 +961,7 @@ version = "0.13.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.libc]]
-version = "0.2.186"
+version = "0.2.188"
 criteria = "safe-to-deploy"
 
 [[exemptions.libcrux-intrinsics]]
@@ -1769,7 +1769,7 @@ version = "0.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio]]
-version = "1.53.0"
+version = "1.53.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-macros]]
@@ -2265,11 +2265,11 @@ version = "5.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy]]
-version = "0.8.54"
+version = "0.8.55"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy-derive]]
-version = "0.8.54"
+version = "0.8.55"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerofrom]]

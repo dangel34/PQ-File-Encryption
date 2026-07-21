@@ -2276,6 +2276,105 @@ fn check_authenticates_without_writing_plaintext() {
     assert_eq!(v["code"], 7, "tampered chunk must map to DecryptionFailure");
 }
 
+// ── Parallel decrypt / check (rayon batch decryption) ─────────────────────────
+
+#[test]
+fn decrypt_and_check_parallel_roundtrip() {
+    // Small chunk size + many chunks so this spans several parallel batches
+    // (CLI's PARALLEL_BATCH_SIZE is 8 chunks per batch).
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    let chunk_size: usize = 1024;
+    let payload_size = chunk_size * 25 + 500;
+    let original: Vec<u8> = (0..=255u8).cycle().take(payload_size).collect();
+
+    let input = dir.join("large.bin");
+    fs::write(&input, &original).unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args(["keygen", "--out", dir.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "keygen failed");
+
+    let pubkey = dir.join("pubkey.pem");
+    let pqf = dir.join("large.bin.pqf");
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "--chunk-size",
+            &chunk_size.to_string(),
+            "-r",
+            pubkey.to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt failed");
+
+    let privkey = dir.join("privkey.pem");
+    let recovered = dir.join("large.bin.recovered");
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "--parallel",
+            "-k",
+            privkey.to_str().unwrap(),
+            pqf.to_str().unwrap(),
+            "-o",
+            recovered.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "decrypt --parallel failed");
+    assert_eq!(
+        fs::read(&recovered).unwrap(),
+        original,
+        "parallel decrypt roundtrip mismatch"
+    );
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "--json",
+            "check",
+            "--parallel",
+            "-k",
+            privkey.to_str().unwrap(),
+            pqf.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "check --parallel failed");
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("check output must be valid JSON");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["plaintext_bytes"], payload_size);
+
+    // Corrupt one ciphertext byte inside the final chunk: the parallel path
+    // must still catch tampering, same as the serial path.
+    let mut ct = fs::read(&pqf).unwrap();
+    let last = ct.len() - 2;
+    ct[last] ^= 0x01;
+    fs::write(&pqf, &ct).unwrap();
+
+    let output = std::process::Command::new(bin())
+        .args([
+            "--json",
+            "check",
+            "--parallel",
+            "-k",
+            privkey.to_str().unwrap(),
+            pqf.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "check --parallel must fail on tampered ciphertext"
+    );
+}
+
 // ── Config file defaults ──────────────────────────────────────────────────────
 
 /// Escapes a path for use inside a TOML basic string (backslashes on Windows).
