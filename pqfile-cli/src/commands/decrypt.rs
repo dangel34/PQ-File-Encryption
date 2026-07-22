@@ -1,11 +1,12 @@
 //! `decrypt` and `check`: recipient-key, passphrase (v10), stealth, and
 //! time-locked (v11) decryption, plus `tlock round` (round-number lookup).
 
-use std::io;
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use pqfile::decrypt;
 use pqfile::error::PqfileError;
+use pqfile::seek_decrypt::SeekableDecryptor;
 
 use crate::config::load_config;
 use crate::io_util::{
@@ -31,13 +32,41 @@ pub(crate) fn run_decrypt(
     stealth: bool,
     tlock: bool,
     tlock_url: Option<String>,
+    resume: bool,
+    fec: bool,
+    #[cfg(feature = "audit")] audit_log: Option<PathBuf>,
+    #[cfg(feature = "audit")] audit_key: Option<PathBuf>,
+    #[cfg(feature = "audit")] audit_recipient: Option<String>,
     json: bool,
 ) -> Result<(), PqfileError> {
+    if resume {
+        if tlock {
+            return Err(PqfileError::Io(io::Error::other(
+                "--resume is not supported with --tlock",
+            )));
+        }
+        return run_decrypt_resumable(key, no_config, &input, output.as_deref(), json);
+    }
+    // Merge config-file defaults for --audit-log/--audit-key/--audit-recipient
+    // once, here, before any of the branches below - each of tlock/stealth/
+    // passphrase/key-based only ever executes one path per invocation
+    // (mutually exclusive, unlike encrypt's --recursive), so there is no
+    // repeated-passphrase-prompt concern that would need special-casing.
+    #[cfg(feature = "audit")]
+    let (audit_log, audit_key, audit_recipient) = {
+        let cfg = load_config(no_config)?;
+        (
+            audit_log.or(cfg.audit_log),
+            audit_key.or(cfg.audit_key),
+            audit_recipient.or(cfg.audit_recipient),
+        )
+    };
     let (to_stdout, out_path) = resolve_decrypt_out_path(&input, output.as_deref(), force)?;
-    let mut reader = open_reader(&input)?;
+    let reader = open_reader(&input)?;
+    let mut reader = maybe_wrap_fec(reader, fec, &input)?;
 
     if tlock {
-        return run_decrypt_tlock(
+        let result = run_decrypt_tlock(
             tlock_url.as_deref(),
             &mut *reader,
             &input,
@@ -45,6 +74,11 @@ pub(crate) fn run_decrypt(
             &out_path,
             json,
         );
+        #[cfg(feature = "audit")]
+        if result.is_ok() {
+            log_decrypt_event(&audit_log, &audit_key, &audit_recipient, &input, "tlock")?;
+        }
+        return result;
     }
 
     if stealth {
@@ -58,6 +92,14 @@ pub(crate) fn run_decrypt(
         // path below, there is no header to peek anyway).
         decrypt::decrypt_stream_stealth(&privkey_pem, &mut *reader, &mut writer, pp_str)?;
         writer.commit()?;
+        #[cfg(feature = "audit")]
+        log_decrypt_event(
+            &audit_log,
+            &audit_key,
+            &audit_recipient,
+            &input,
+            &pqfile::keygen::fingerprint_pem(&privkey_pem),
+        )?;
         emit_json_ok(json, to_stdout, &out_path)?;
         return Ok(());
     }
@@ -72,6 +114,9 @@ pub(crate) fn run_decrypt(
         peek_original_size(&input),
     );
 
+    #[cfg(feature = "audit")]
+    #[allow(unused_assignments)]
+    let mut key_fingerprint = String::from("passphrase");
     if passphrase_v10 {
         let pp = prompt_passphrase("Enter passphrase: ")?;
         if let Some(ref kf_path) = keyfile {
@@ -119,12 +164,165 @@ pub(crate) fn run_decrypt(
         } else {
             decrypt::decrypt_stream(&privkey_pem, &mut *reader, &mut writer, pp_str)?;
         }
+        #[cfg(feature = "audit")]
+        {
+            key_fingerprint = pqfile::keygen::fingerprint_pem(&privkey_pem);
+        }
     }
     let mut writer = writer.into_inner();
     writer.commit()?;
+    #[cfg(feature = "audit")]
+    log_decrypt_event(
+        &audit_log,
+        &audit_key,
+        &audit_recipient,
+        &input,
+        &key_fingerprint,
+    )?;
 
     emit_json_ok(json, to_stdout, &out_path)?;
     Ok(())
+}
+
+/// `decrypt --resume`: v3/v5 (single-recipient, chunked) files only. Unlike
+/// `encrypt --resume`, no checkpoint sidecar is needed - the ciphertext
+/// doesn't change between attempts and `-k` supplies the private key every
+/// time, so an existing partial output's own length is enough to know how
+/// far decryption already got. The last whole chunk apparently present is
+/// always redone rather than trusted (harmless and idempotent), since a
+/// plain byte-length check can't distinguish "this chunk finished writing"
+/// from "the file happens to be a multiple of chunk_size for some other
+/// reason" the way `encrypt --resume`'s explicit tag-verification step can.
+fn run_decrypt_resumable(
+    key: Option<PathBuf>,
+    no_config: bool,
+    input: &str,
+    output: Option<&str>,
+    json: bool,
+) -> Result<(), PqfileError> {
+    if input == "-" {
+        return Err(PqfileError::Io(io::Error::other(
+            "--resume requires a real input file, not stdin",
+        )));
+    }
+    let out = output.unwrap_or("");
+    if out == "-" {
+        return Err(PqfileError::Io(io::Error::other(
+            "--resume requires a real output file, not stdout",
+        )));
+    }
+    let out_path: PathBuf = if out.is_empty() {
+        PathBuf::from(input).with_extension("")
+    } else {
+        PathBuf::from(out)
+    };
+
+    let key_path = resolve_key_path(key, no_config)?;
+    let privkey_pem = std::fs::read_to_string(&key_path)?;
+    let pp = maybe_prompt_passphrase(&privkey_pem, "Enter passphrase for private key: ")?;
+    let pp_str = pp.as_deref().map(|z| z.as_str());
+
+    let ct_file = std::fs::File::open(input)?;
+    let mut sd = SeekableDecryptor::open(ct_file, &privkey_pem, pp_str)?;
+    let chunk_size = sd.chunk_size() as u64;
+    let num_chunks = sd.num_chunks();
+
+    let already_bytes = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+    let safe_chunks =
+        (already_bytes / chunk_size).min(u64::from(num_chunks.saturating_sub(1))) as u32;
+    let keep_bytes = u64::from(safe_chunks) * chunk_size;
+
+    let mut out_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&out_path)?;
+    out_file.set_len(keep_bytes).map_err(PqfileError::Io)?;
+    out_file
+        .seek(SeekFrom::Start(keep_bytes))
+        .map_err(PqfileError::Io)?;
+
+    for idx in safe_chunks..num_chunks {
+        let pt = sd.read_chunk(idx)?;
+        out_file.write_all(&pt).map_err(PqfileError::Io)?;
+    }
+    out_file.flush().map_err(PqfileError::Io)?;
+
+    emit_json_ok(json, false, &out_path)?;
+    Ok(())
+}
+
+/// Wraps `reader` in a [`pqfile::fec::FecRepairReader`] when `--fec` was
+/// passed, transparently repairing bit rot using the `<input>.fec` sidecar
+/// before any decrypt/check path sees the bytes. Requires a real input file
+/// (not stdin) and the sidecar to actually exist.
+#[cfg(feature = "fec")]
+fn maybe_wrap_fec(
+    reader: Box<dyn io::Read>,
+    fec: bool,
+    input: &str,
+) -> Result<Box<dyn io::Read>, PqfileError> {
+    if !fec {
+        return Ok(reader);
+    }
+    if input == "-" {
+        return Err(PqfileError::Io(io::Error::other(
+            "--fec is not supported with stdin input",
+        )));
+    }
+    let mut fec_path = std::ffi::OsString::from(input);
+    fec_path.push(".fec");
+    let parity = std::fs::File::open(&fec_path).map_err(|e| {
+        PqfileError::Io(io::Error::other(format!(
+            "--fec sidecar not found or unreadable ({}): {e}",
+            Path::new(&fec_path).display()
+        )))
+    })?;
+    Ok(Box::new(pqfile::fec::FecRepairReader::new(reader, parity)?))
+}
+
+#[cfg(not(feature = "fec"))]
+fn maybe_wrap_fec(
+    reader: Box<dyn io::Read>,
+    _fec: bool,
+    _input: &str,
+) -> Result<Box<dyn io::Read>, PqfileError> {
+    Ok(reader)
+}
+
+/// After a successful decrypt, if `--audit-log` (or its config-file
+/// default) is set, appends a signed+encrypted audit record for this event.
+/// The fingerprinted file is the *ciphertext* input, not the recovered
+/// plaintext - the artifact of record for a decrypt event is which
+/// encrypted file was opened, mirroring what `encrypt` logs (the produced
+/// ciphertext, never the plaintext) so nothing plaintext-derived ever
+/// enters the log. Not supported with stdin input, since there is no file
+/// to fingerprint.
+#[cfg(feature = "audit")]
+fn log_decrypt_event(
+    audit_log: &Option<PathBuf>,
+    audit_key: &Option<PathBuf>,
+    audit_recipient: &Option<String>,
+    input: &str,
+    key_fingerprint: &str,
+) -> Result<(), PqfileError> {
+    let Some(target) = crate::commands::audit::AuditTarget::resolve(
+        audit_log.clone(),
+        audit_key.clone(),
+        audit_recipient.clone(),
+        &crate::config::CliConfig::default(),
+    )?
+    else {
+        return Ok(());
+    };
+    if input == "-" {
+        return Err(PqfileError::Io(io::Error::other(
+            "--audit-log is not supported with stdin input",
+        )));
+    }
+    let fingerprint = crate::commands::audit::fingerprint_file(Path::new(input))?;
+    target.append("decrypt", fingerprint, key_fingerprint)
 }
 
 /// Always present regardless of the `tlock` feature so `run_decrypt`/`run_check`
@@ -209,9 +407,11 @@ pub(crate) fn run_check(
     stealth: bool,
     tlock: bool,
     tlock_url: Option<String>,
+    fec: bool,
     json: bool,
 ) -> Result<(), PqfileError> {
-    let mut reader = open_reader(&input)?;
+    let reader = open_reader(&input)?;
+    let mut reader = maybe_wrap_fec(reader, fec, &input)?;
 
     if tlock {
         return run_check_tlock(tlock_url.as_deref(), &mut *reader, &input, json);

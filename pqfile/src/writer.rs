@@ -26,6 +26,8 @@ use zeroize::Zeroizing;
 
 use crate::error::PqfileError;
 use crate::format::{chunk_nonce, BASE_NONCE_LEN};
+use crate::resume::{self, ResumeCheckpoint, ResumeHeaderInfo};
+use crate::secret::LockedSecret;
 
 /// Streaming encryptor wrapping any `W: Write`.
 ///
@@ -34,6 +36,7 @@ use crate::format::{chunk_nonce, BASE_NONCE_LEN};
 pub struct PqfWriter<W: Write> {
     inner: Option<W>,
     cipher: ChaCha20Poly1305,
+    session_key: LockedSecret<32>,
     base_nonce: [u8; BASE_NONCE_LEN],
     key_commitment: [u8; 32],
     chunk_size: usize,
@@ -63,9 +66,15 @@ impl<W: Write> PqfWriter<W> {
             &mut sink,
         )?;
 
+        let mut session_key = LockedSecret::<32>::zeroed();
+        session_key
+            .as_mut()
+            .copy_from_slice(stream.ss_bytes.as_ref());
+
         Ok(Self {
             inner: Some(sink),
             cipher: stream.cipher(),
+            session_key,
             base_nonce: stream.base_nonce,
             key_commitment: stream.key_commitment,
             chunk_size,
@@ -73,6 +82,28 @@ impl<W: Write> PqfWriter<W> {
             buf: Zeroizing::new(Vec::with_capacity(chunk_size)),
             finished: false,
         })
+    }
+
+    /// Snapshots the current progress for `encrypt --resume`: the committed
+    /// chunk count, the session key, and `prefix_hash` (a BLAKE3 hash of the
+    /// plaintext consumed so far, supplied by the caller since `PqfWriter`
+    /// does not itself track a running hash - see [`crate::resume`]).
+    ///
+    /// Only meaningful at a chunk boundary (immediately after a [`Write::write`]
+    /// call that completed a full chunk); calling this mid-chunk would record
+    /// a `committed_chunks` count that does not match `prefix_hash`'s actual
+    /// coverage. Driving the write loop in exactly `chunk_size`-sized calls,
+    /// as [`PqfWriter::resume`]'s caller must anyway to keep the hash
+    /// aligned, guarantees this.
+    #[must_use]
+    pub fn checkpoint(&self, prefix_hash: [u8; 32]) -> ResumeCheckpoint {
+        ResumeCheckpoint::new(&self.session_key, self.counter, prefix_hash)
+    }
+
+    /// Number of complete chunks committed so far.
+    #[must_use]
+    pub fn committed_chunks(&self) -> u32 {
+        self.counter
     }
 
     /// Seals the final partial chunk, flushes the underlying writer, and returns it.
@@ -123,6 +154,74 @@ impl<W: Write> PqfWriter<W> {
         }
         self.finished = true;
         Ok(())
+    }
+}
+
+impl PqfWriter<std::fs::File> {
+    /// Resumes an interrupted single-recipient (v3/v5) encryption from a
+    /// [`ResumeCheckpoint`], continuing to write into the same partial
+    /// output file `sink` describes.
+    ///
+    /// Takes a concrete [`std::fs::File`] rather than a generic `W: Write`
+    /// (unlike [`PqfWriter::new`]) because resuming requires truncating away
+    /// a torn trailing write, which has no portable meaning outside a real
+    /// file.
+    ///
+    /// `header` is read via [`resume::read_stream_header_for_resume`] from
+    /// the start of `sink` (typically the caller's own prior read to obtain
+    /// it; this constructor does not re-read it). Before returning, this
+    /// truncates `sink` to the exact byte length the checkpoint implies -
+    /// discarding any torn trailing write from a mid-chunk crash - and
+    /// verifies the last committed chunk still authenticates under the
+    /// checkpoint's session key, returning
+    /// [`PqfileError::ResumeCheckpointInvalid`] if either check fails.
+    ///
+    /// This does **not** check whether the source file being re-encrypted
+    /// still matches what was already committed - callers must compare
+    /// [`ResumeCheckpoint::prefix_hash`] against a fresh hash of the
+    /// source's own prefix themselves and refuse to resume
+    /// (`PqfileError::ResumeSourceChanged`) on a mismatch, since only the
+    /// caller has access to the source file this checkpoint was made
+    /// against.
+    pub fn resume(
+        mut sink: std::fs::File,
+        header: &ResumeHeaderInfo,
+        checkpoint: &ResumeCheckpoint,
+    ) -> Result<Self, PqfileError> {
+        let (cipher, key_commitment, base_nonce) =
+            resume::verify_and_truncate(&mut sink, header, checkpoint)?;
+
+        let mut session_key = LockedSecret::<32>::zeroed();
+        session_key
+            .as_mut()
+            .copy_from_slice(checkpoint.session_key_bytes());
+
+        Ok(Self {
+            inner: Some(sink),
+            cipher,
+            session_key,
+            base_nonce,
+            key_commitment,
+            chunk_size: header.chunk_size() as usize,
+            counter: checkpoint.committed_chunks(),
+            buf: Zeroizing::new(Vec::with_capacity(header.chunk_size() as usize)),
+            finished: false,
+        })
+    }
+
+    /// Fsyncs the underlying output file to stable storage.
+    ///
+    /// A caller implementing checkpointed resume (see [`crate::resume`])
+    /// **must** call this before persisting an updated [`ResumeCheckpoint`]:
+    /// [`Write::flush`] alone does not durably commit a plain [`std::fs::File`]'s
+    /// writes, and a checkpoint claiming more committed chunks than have
+    /// actually reached disk would make a later resume attempt truncate to a
+    /// length the file was never guaranteed to reach.
+    pub fn sync_data(&self) -> io::Result<()> {
+        self.inner
+            .as_ref()
+            .expect("sync_data called after finish()")
+            .sync_data()
     }
 }
 

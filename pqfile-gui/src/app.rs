@@ -44,6 +44,11 @@ pub struct PqfileApp {
     pub(crate) help_modal_open: Option<Tab>,
     pub(crate) settings: Settings,
     pub(crate) app_icon: Option<egui::TextureHandle>,
+    /// Passphrase for the audit signing key, if it's passphrase-protected.
+    /// Deliberately *not* part of `Settings` - never persisted to disk,
+    /// re-entered each session, like every other in-memory-only secret here.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+    pub(crate) audit_key_passphrase: Zeroizing<String>,
 
     pub(crate) keygen_passphrase: Zeroizing<String>,
     pub(crate) keygen_passphrase_confirm: Zeroizing<String>,
@@ -120,6 +125,11 @@ pub struct PqfileApp {
     pub(crate) encrypt_pad: bool,
     /// Omit the .pqf magic, version byte, and KEM variant field entirely (single recipient only).
     pub(crate) encrypt_stealth: bool,
+    /// Write a Reed-Solomon forward-error-correction sidecar alongside the
+    /// output, protecting against cold-storage bit rot (not tampering, which
+    /// AEAD authentication already covers).
+    #[cfg(feature = "fec")]
+    pub(crate) encrypt_fec: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) encrypt_compress: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -437,6 +447,8 @@ impl Default for PqfileApp {
             help_modal_open: None,
             settings: Settings::default(),
             app_icon: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+            audit_key_passphrase: Zeroizing::new(String::new()),
             keygen_passphrase: Zeroizing::new(String::new()),
             keygen_passphrase_confirm: Zeroizing::new(String::new()),
             keygen_use_passphrase: false,
@@ -484,6 +496,8 @@ impl Default for PqfileApp {
             encrypt_pad_recipients: false,
             encrypt_pad: false,
             encrypt_stealth: false,
+            #[cfg(feature = "fec")]
+            encrypt_fec: false,
             #[cfg(not(target_arch = "wasm32"))]
             encrypt_compress: false,
             #[cfg(not(target_arch = "wasm32"))]

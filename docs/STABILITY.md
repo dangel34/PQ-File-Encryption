@@ -38,8 +38,11 @@ surface.
 | `pqfile::keys` | `PqfPublicKey`, `PqfPrivateKey`, `PqfSigningKey`, `PqfVerifyingKey` and all their methods |
 | `pqfile::inspect` | `inspect_stream`, `PqfHeaderInfo`, `RecipientInfo`, `PqfInfo` |
 | `pqfile::reader` | `PqfReader`, `PqfInfo` |
-| `pqfile::writer` | `PqfWriter` |
+| `pqfile::writer` | `PqfWriter` (including `checkpoint`, `committed_chunks`, `sync_data`, and the `PqfWriter<std::fs::File>::resume` constructor) |
 | `pqfile::seek_decrypt` | `SeekableDecryptor` |
+| `pqfile::resume` | `ResumeCheckpoint`, `ResumeHeaderInfo`, `read_stream_header_for_resume` |
+| `pqfile::fec` *(feature = "fec")* | `generate_sidecar`, `FecRepairReader` |
+| `pqfile::audit` *(feature = "audit")* | `AuditRecord`, `build_entry`, `verify_log` |
 | `pqfile::repassphrase` | `repassphrase`, `repassphrase_file`, `RepassphraseResult` |
 | `pqfile::hardware` | `HW_TAG_*` constants, `is_hardware_tag`, `default_backend_id` |
 | `pqfile::hardware::stub` | `BACKEND_CREDENTIAL_STORE`, `BACKEND_PKCS11` |

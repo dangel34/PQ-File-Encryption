@@ -533,6 +533,21 @@ pub(crate) struct Settings {
     /// regardless of this toggle.
     #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
     pub(crate) auto_check_updates: bool,
+    /// Path to the encrypted, signed, hash-chained audit log. Native only -
+    /// an append-only log needs true persistent storage, not a fit for the
+    /// web build's download-only file model (unlike the FEC sidecar, a
+    /// one-time artifact). Empty means audit logging is off; all three of
+    /// this, `audit_key_path`, and `audit_recipient_path` must be set
+    /// together for it to actually engage.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+    pub(crate) audit_log_path: String,
+    /// Operator signing key (ML-DSA/SLH-DSA) used to sign each audit record.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+    pub(crate) audit_key_path: String,
+    /// Auditor's ML-KEM public key (or `pqf1…` string); each record is
+    /// encrypted to this key.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+    pub(crate) audit_recipient_path: String,
 }
 
 impl Default for Settings {
@@ -550,6 +565,12 @@ impl Default for Settings {
             last_tab: Tab::Keygen,
             #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
             auto_check_updates: false,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+            audit_log_path: String::new(),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+            audit_key_path: String::new(),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+            audit_recipient_path: String::new(),
         }
     }
 }
@@ -591,6 +612,14 @@ impl Settings {
             .unwrap_or(Tab::Keygen);
         #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
         let auto_check_updates = get_or(storage, "auto_check_updates", false);
+        #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+        let audit_log_path = storage.get_string("audit_log_path").unwrap_or_default();
+        #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+        let audit_key_path = storage.get_string("audit_key_path").unwrap_or_default();
+        #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+        let audit_recipient_path = storage
+            .get_string("audit_recipient_path")
+            .unwrap_or_default();
         Self {
             dark_mode,
             auto_clear,
@@ -604,6 +633,12 @@ impl Settings {
             last_tab,
             #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
             auto_check_updates,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+            audit_log_path,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+            audit_key_path,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+            audit_recipient_path,
         }
     }
 
@@ -634,5 +669,11 @@ impl Settings {
         storage.set_string("last_tab", tab_key(self.last_tab).to_owned());
         #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
         storage.set_string("auto_check_updates", self.auto_check_updates.to_string());
+        #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+        storage.set_string("audit_log_path", self.audit_log_path.clone());
+        #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+        storage.set_string("audit_key_path", self.audit_key_path.clone());
+        #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+        storage.set_string("audit_recipient_path", self.audit_recipient_path.clone());
     }
 }

@@ -7,7 +7,7 @@ use crate::types::{EncryptMode, OpStatus, SecondFactorMode, Tab};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::widgets::pick_folder_files;
 use crate::widgets::{
-    card, file_row, pick_file, pick_files, save_result, scrollable_list, section_label,
+    card, file_row, pick_file, pick_files, save_result_with_fec, scrollable_list, section_label,
     show_status, tab_heading_help,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
@@ -207,6 +207,17 @@ impl PqfileApp {
         let pad_recipients = self.encrypt_pad_recipients;
         let pad = self.encrypt_pad;
         let stealth = self.encrypt_stealth;
+        #[cfg(feature = "fec")]
+        let fec = self.encrypt_fec;
+        #[cfg(not(feature = "fec"))]
+        let fec = false;
+        #[cfg(feature = "audit")]
+        let audit_settings = (
+            self.settings.audit_log_path.clone(),
+            self.settings.audit_key_path.clone(),
+            self.settings.audit_recipient_path.clone(),
+            self.audit_key_passphrase.clone(),
+        );
         let output_dir: Option<PathBuf> = if self.settings.output_dir.is_empty() {
             None
         } else {
@@ -255,6 +266,34 @@ impl PqfileApp {
                         return;
                     }
                 };
+                // Resolved once for the whole batch, same reasoning as the
+                // FIDO2 secret above: re-reading the signing key and
+                // re-prompting for its passphrase per file would be a much
+                // worse experience than a single upfront resolution. A
+                // resolve failure here (bad path, unreadable key) is
+                // reported the same way a FIDO2 resolve failure is above -
+                // it means the user configured audit logging but it's
+                // broken, which should be visible, not silently skipped.
+                #[cfg(feature = "audit")]
+                let audit_target = match crate::audit_log::AuditTarget::resolve(
+                    &audit_settings.0,
+                    &audit_settings.1,
+                    &audit_settings.2,
+                    &audit_settings.3,
+                ) {
+                    Ok(t) => t,
+                    Err(msg) => {
+                        for (i, ..) in &files {
+                            job.lock().unwrap().results.push((
+                                *i,
+                                OpStatus::Err(format!("audit log misconfigured: {msg}")),
+                            ));
+                        }
+                        job.lock().unwrap().finished = true;
+                        ctx.request_repaint();
+                        return;
+                    }
+                };
                 for (i, name, data, path) in files {
                     let out_name = format!("{name}.pqf");
                     let out_path = resolve_out_path(&output_dir, &out_name, path);
@@ -281,6 +320,9 @@ impl PqfileApp {
                         pad_recipients,
                         pad,
                         stealth,
+                        fec,
+                        #[cfg(feature = "audit")]
+                        audit_target.as_ref(),
                         confirm,
                         &progress,
                     );
@@ -341,6 +383,10 @@ impl PqfileApp {
         let pad_recipients = self.encrypt_pad_recipients;
         let pad = self.encrypt_pad;
         let stealth = self.encrypt_stealth;
+        #[cfg(feature = "fec")]
+        let fec = self.encrypt_fec;
+        #[cfg(not(feature = "fec"))]
+        let fec = false;
         let status = if let Some(target) = &self.encrypt_wasm_target {
             encrypt_entry(
                 target,
@@ -353,6 +399,7 @@ impl PqfileApp {
                 pad_recipients,
                 pad,
                 stealth,
+                fec,
                 false,
                 &|_, _| {},
             )
@@ -1117,6 +1164,25 @@ impl PqfileApp {
                     .color(c_yellow(dark)),
                 );
             }
+            #[cfg(feature = "fec")]
+            {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add(egui::Checkbox::new(&mut self.encrypt_fec, ""));
+                    ui.label(
+                        RichText::new("Error-correction sidecar (cold-storage resilience)")
+                            .size(13.0)
+                            .color(c_text(dark)),
+                    )
+                    .on_hover_text(
+                        "Writes a separate Reed-Solomon parity file alongside the output \
+                             (named <output>.fec), protecting against bit rot on cold storage - \
+                             corrects up to ~3% random byte corruption per block. Does not help \
+                             against deliberate tampering, which the normal authentication \
+                             already detects and rejects regardless of this setting.",
+                    );
+                });
+            }
         });
         ui.add_space(14.0);
     }
@@ -1347,6 +1413,19 @@ pub(crate) fn derive_fido2_secret(
     }
 }
 
+/// Folds an optional audit-log warning (see `log_event` in `encrypt_entry`)
+/// into an already-successful [`OpStatus`], so a broken audit append stays
+/// visible without turning a file that really did encrypt successfully into
+/// a reported failure. A warning on an already-`Err` status is dropped: the
+/// encrypt/save failure is the more important thing to report.
+#[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+fn append_audit_warning(status: OpStatus, warning: Option<String>) -> OpStatus {
+    match (status, warning) {
+        (OpStatus::Ok(msg), Some(w)) => OpStatus::Ok(format!("{msg} (audit log warning: {w})")),
+        (status, _) => status,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn encrypt_entry(
     target: &ResolvedEncryptTarget,
@@ -1359,11 +1438,33 @@ fn encrypt_entry(
     pad_recipients: bool,
     pad: bool,
     stealth: bool,
+    fec: bool,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))] audit: Option<
+        &crate::audit_log::AuditTarget,
+    >,
     confirm: bool,
     progress: &dyn Fn(u64, u64),
 ) -> OpStatus {
     let chunk_size = adaptive_chunk_size(original_size);
     let (effective_path, effective_confirm) = (out_path, confirm);
+
+    // Computed once regardless of which branch below actually encrypts,
+    // since passphrase mode has no recipient key pair to fingerprint at all.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+    let key_fingerprint = match target {
+        ResolvedEncryptTarget::PublicKeys(pems) => pqfile::keygen::fingerprint_pem(&pems[0]),
+        ResolvedEncryptTarget::Passphrase { .. } => "passphrase".to_string(),
+    };
+    // Returns `Some(warning)` on a logging failure rather than swallowing
+    // it: the encrypt itself already succeeded and its output is already on
+    // disk, so this doesn't fail the whole operation, but a broken audit
+    // log is exactly the kind of thing that should stay visible (matching
+    // how a broken `--audit-log`/`--audit-key`/`--audit-recipient` resolve
+    // above is already surfaced, not silently skipped).
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+    let log_event = |out: &[u8]| -> Option<String> {
+        audit.and_then(|t| t.append("encrypt", out, &key_fingerprint).err())
+    };
 
     let pub_pems: &[String] = match target {
         ResolvedEncryptTarget::PublicKeys(pems) => pems.as_slice(),
@@ -1408,7 +1509,20 @@ fn encrypt_entry(
                 )
             };
             return match result {
-                Ok(()) => save_result(out_name, &out, effective_path, effective_confirm),
+                Ok(()) => {
+                    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+                    let warning = log_event(&out);
+                    let status = save_result_with_fec(
+                        out_name,
+                        &out,
+                        effective_path,
+                        effective_confirm,
+                        fec,
+                    );
+                    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+                    let status = append_audit_warning(status, warning);
+                    status
+                }
                 Err(e) => OpStatus::Err(e.to_string()),
             };
         }
@@ -1423,7 +1537,15 @@ fn encrypt_entry(
         let result =
             encrypt::encrypt_stream_stealth(&pub_pems[0], original_size, &mut *reader, &mut out);
         return match result {
-            Ok(()) => save_result(out_name, &out, effective_path, effective_confirm),
+            Ok(()) => {
+                #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+                let warning = log_event(&out);
+                let status =
+                    save_result_with_fec(out_name, &out, effective_path, effective_confirm, fec);
+                #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+                let status = append_audit_warning(status, warning);
+                status
+            }
             Err(e) => OpStatus::Err(e.to_string()),
         };
     }
@@ -1452,7 +1574,15 @@ fn encrypt_entry(
             )
         };
         match result {
-            Ok(()) => save_result(out_name, &out, effective_path, effective_confirm),
+            Ok(()) => {
+                #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+                let warning = log_event(&out);
+                let status =
+                    save_result_with_fec(out_name, &out, effective_path, effective_confirm, fec);
+                #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+                let status = append_audit_warning(status, warning);
+                status
+            }
             Err(e) => OpStatus::Err(e.to_string()),
         }
     } else {
@@ -1479,7 +1609,15 @@ fn encrypt_entry(
             )
         };
         match result {
-            Ok(()) => save_result(out_name, &out, effective_path, effective_confirm),
+            Ok(()) => {
+                #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+                let warning = log_event(&out);
+                let status =
+                    save_result_with_fec(out_name, &out, effective_path, effective_confirm, fec);
+                #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+                let status = append_audit_warning(status, warning);
+                status
+            }
             Err(e) => OpStatus::Err(e.to_string()),
         }
     }

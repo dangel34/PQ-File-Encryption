@@ -24,6 +24,9 @@ impl PqfileApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.show_output_dir_section(ui, dark);
 
+        #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+        self.show_audit_log_section(ui, dark);
+
         self.show_behavior_section(ui, dark);
         self.show_defaults_section(ui, dark);
         self.show_clipboard_settings(ui, dark);
@@ -115,6 +118,118 @@ impl PqfileApp {
                     self.settings.output_dir.clear();
                 }
             }
+        });
+        ui.add_space(10.0);
+    }
+
+    // ── Audit log ─────────────────────────────────────────────────────────
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+    fn show_audit_log_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        section_label(ui, "AUDIT LOG", dark);
+        card(ui, c_card(dark), c_surface1(dark), |ui| {
+            ui.label(
+                RichText::new(
+                    "When all three fields below are set, every encrypt/decrypt appends a \
+                     signed, encrypted record here - a hash chain makes silent deletion or \
+                     reordering detectable, without needing the auditor's private key to \
+                     check. Leave any field blank to keep audit logging off.",
+                )
+                .size(12.0)
+                .color(c_subtext(dark)),
+            );
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("Log file").size(12.5).color(c_text(dark)));
+            let row_w = ui.available_width();
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.audit_log_path)
+                        .hint_text("Off (no path set)")
+                        .desired_width((row_w - 80.0).max(50.0)),
+                );
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Browse...").size(13.0).color(c_text(dark)),
+                        )
+                        .fill(c_surface0(dark)),
+                    )
+                    .clicked()
+                {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .set_file_name("audit.log")
+                        .save_file()
+                    {
+                        self.settings.audit_log_path = p.to_string_lossy().into_owned();
+                    }
+                }
+            });
+            ui.add_space(6.0);
+
+            ui.label(
+                RichText::new("Your signing key (ML-DSA or SLH-DSA)")
+                    .size(12.5)
+                    .color(c_text(dark)),
+            );
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.audit_key_path)
+                        .hint_text("sign_privkey.pem")
+                        .desired_width((row_w - 80.0).max(50.0)),
+                );
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Browse...").size(13.0).color(c_text(dark)),
+                        )
+                        .fill(c_surface0(dark)),
+                    )
+                    .clicked()
+                {
+                    if let Some(p) = rfd::FileDialog::new().pick_file() {
+                        self.settings.audit_key_path = p.to_string_lossy().into_owned();
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("Signing key passphrase (if any, never saved to disk)")
+                    .size(12.5)
+                    .color(c_text(dark)),
+            );
+            ui.add(
+                egui::TextEdit::singleline(&mut *self.audit_key_passphrase)
+                    .password(true)
+                    .desired_width(row_w),
+            );
+            ui.add_space(6.0);
+
+            ui.label(
+                RichText::new("Auditor's public key (or pqf1… recipient string)")
+                    .size(12.5)
+                    .color(c_text(dark)),
+            );
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.audit_recipient_path)
+                        .hint_text("pubkey.pem or pqf1…")
+                        .desired_width((row_w - 80.0).max(50.0)),
+                );
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Browse...").size(13.0).color(c_text(dark)),
+                        )
+                        .fill(c_surface0(dark)),
+                    )
+                    .clicked()
+                {
+                    if let Some(p) = rfd::FileDialog::new().pick_file() {
+                        self.settings.audit_recipient_path = p.to_string_lossy().into_owned();
+                    }
+                }
+            });
         });
         ui.add_space(10.0);
     }

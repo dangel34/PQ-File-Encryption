@@ -114,6 +114,10 @@ pub mod writer;
 /// invariant for the sake of true random access - see the module docs.
 pub mod seek_decrypt;
 
+/// Checkpointed resume support for interrupted single-recipient (v3/v5)
+/// `PqfWriter` encryption. Not a new wire format - see the module docs.
+pub mod resume;
+
 /// Rekey: transfer a v3/v5 file to a new recipient without re-encrypting.
 pub mod rekey;
 
@@ -172,6 +176,21 @@ pub mod tlock;
 /// pixel data (requires the `stego` feature).
 #[cfg(feature = "stego")]
 pub mod stego;
+
+/// Forward-error-correction sidecar for cold-storage resilience (requires
+/// the `fec` feature). Not a wire-format change - see the module docs.
+#[cfg(feature = "fec")]
+pub mod fec;
+
+/// Encrypted, signed, hash-chained audit log for encrypt/decrypt events
+/// (requires the `audit` feature). Not a wire-format change - see the
+/// module docs.
+#[cfg(feature = "audit")]
+pub mod audit;
+
+/// Small `Read` helpers shared by `fec`/`audit` - not part of the public API.
+#[cfg(any(feature = "fec", feature = "audit"))]
+mod io_util;
 
 // ── Crate-root re-exports ──────────────────────────────────────────────────
 

@@ -121,6 +121,11 @@ fn interactive_encrypt() -> Result<(), PqfileError> {
             fido2: None,
             pad: false,
             stealth: false,
+            resume: false,
+            fec: false,
+            audit_log: None,
+            audit_key: None,
+            audit_recipient: None,
         },
     )
 }
@@ -162,6 +167,14 @@ fn interactive_decrypt() -> Result<(), PqfileError> {
         force,
         false,
         false,
+        None,
+        false,
+        false,
+        #[cfg(feature = "audit")]
+        None,
+        #[cfg(feature = "audit")]
+        None,
+        #[cfg(feature = "audit")]
         None,
         false,
     )

@@ -54,3 +54,7 @@ Code `0` is a catch-all for errors that do not map to a known variant (should no
 | 37 | `StegoCapacityExceeded` | `bury`'s cover image is too small to hold the payload; use a larger image |
 | 38 | `StegoPayloadNotFound` | `exhume` found no valid embedded payload (wrong passphrase, wrong image, or it was edited/corrupted since burying - deliberately indistinguishable) |
 | 39 | `StegoInvalidImage` | Cover or stego image could not be decoded/encoded (unsupported or corrupt format) |
+| 40 | `ResumeSourceChanged` | `encrypt --resume`'s source file no longer matches the checkpoint's recorded hash; refuses rather than splicing two versions together |
+| 41 | `ResumeCheckpointInvalid` | Resume checkpoint or the partial output it describes is unusable (corrupt, too short, or its last chunk fails to authenticate) |
+| 42 | `FecSidecarInvalid` | `--fec` parity sidecar could not be read (missing, corrupt header, or wrong version) - not the same as an uncorrectable block, which isn't an error at all |
+| 43 | `AuditLogInvalid` | Audit log is malformed, a record's signature does not verify, the hash chain does not link correctly, or (with `--expect-tip`) the log's final chain hash does not match |

@@ -1,4 +1,6 @@
 mod app;
+#[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+mod audit_log;
 mod colors;
 #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
 mod fido2;
@@ -276,6 +278,65 @@ mod tests {
 
         let decrypted = std::fs::read(tmp.path().join("input.txt")).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[cfg(feature = "audit")]
+    #[test]
+    fn encrypt_decrypt_with_audit_log_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (pub_pem, priv_pem) = pqfile::keygen::keygen_bytes(768, None).unwrap();
+        let signer = pqfile::sign::sign_keygen_bytes(None).unwrap();
+        let plaintext = b"audited via the GUI".to_vec();
+
+        let signing_key_path = tmp.path().join("sign_privkey.pem");
+        std::fs::write(&signing_key_path, &signer.sk_pem).unwrap();
+        let auditor_pubkey_path = tmp.path().join("pubkey.pem");
+        std::fs::write(&auditor_pubkey_path, &pub_pem).unwrap();
+        let audit_log_path = tmp.path().join("audit.log");
+
+        let plain_path = tmp.path().join("input.txt");
+        std::fs::write(&plain_path, &plaintext).unwrap();
+
+        let mut app = PqfileApp::default();
+        app.settings.audit_log_path = audit_log_path.to_string_lossy().into_owned();
+        app.settings.audit_key_path = signing_key_path.to_string_lossy().into_owned();
+        app.settings.audit_recipient_path = auditor_pubkey_path.to_string_lossy().into_owned();
+
+        app.encrypt_pubkey = loaded_input("pubkey.pem", pub_pem.as_bytes().to_vec(), None);
+        app.encrypt_files
+            .push(file_entry("input.txt", plaintext.clone(), Some(plain_path)));
+        app.poll_files();
+        app.handle_encrypt_all(&test_ctx());
+        flush_jobs(&mut app);
+        assert!(
+            matches!(app.encrypt_files[0].status, OpStatus::Ok(_)),
+            "encryption failed"
+        );
+
+        let pqf_path = tmp.path().join("input.txt.pqf");
+        let pqf_data = std::fs::read(&pqf_path).unwrap();
+        app.decrypt_privkey = loaded_input("privkey.pem", priv_pem.as_bytes().to_vec(), None);
+        app.decrypt_files
+            .push(file_entry("input.txt.pqf", pqf_data, Some(pqf_path)));
+        app.handle_decrypt_batch(&test_ctx());
+        flush_jobs(&mut app);
+        assert!(
+            matches!(app.decrypt_files[0].status, OpStatus::Ok(_)),
+            "decryption failed"
+        );
+
+        assert!(audit_log_path.exists(), "audit log was not written");
+        let mut log_file = std::fs::File::open(&audit_log_path).unwrap();
+        let (records, _tip) =
+            pqfile::audit::verify_log(&mut log_file, &signer.vk_pem, &priv_pem, None, None)
+                .unwrap();
+        assert_eq!(
+            records.len(),
+            2,
+            "expected one encrypt and one decrypt record"
+        );
+        assert_eq!(records[0].command, "encrypt");
+        assert_eq!(records[1].command, "decrypt");
     }
 
     #[test]

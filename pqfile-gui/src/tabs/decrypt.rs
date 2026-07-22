@@ -97,13 +97,47 @@ fn resolve_decrypt_target(target: DecryptTarget) -> Result<ResolvedDecryptTarget
     }
 }
 
+/// If `fec_sidecar` is present, transparently repairs `data` using it before
+/// any decrypt path sees the bytes - the same "repair before the AEAD check
+/// runs" shape as the CLI's `decrypt --fec`, adapted to the GUI's in-memory
+/// data flow. Native only: the sidecar is auto-detected from a same-named
+/// `<path>.fec` file next to the loaded input (see `handle_decrypt_batch`),
+/// since there is no filesystem to find a companion file from in the
+/// browser - WASM callers always pass `None`.
+#[cfg(feature = "fec")]
+fn maybe_repair_fec(
+    data: &[u8],
+    fec_sidecar: Option<&[u8]>,
+) -> Result<Vec<u8>, pqfile::error::PqfileError> {
+    match fec_sidecar {
+        None => Ok(data.to_vec()),
+        Some(sidecar) => {
+            let mut reader = pqfile::fec::FecRepairReader::new(data, sidecar)?;
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut reader, &mut buf)
+                .map_err(pqfile::error::PqfileError::Io)?;
+            Ok(buf)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn decrypt_entry(
     target: &ResolvedDecryptTarget,
     data: &[u8],
     stealth: bool,
+    #[cfg(feature = "fec")] fec_sidecar: Option<&[u8]>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))] audit: Option<
+        &crate::audit_log::AuditTarget,
+    >,
     progress: &dyn Fn(u64, u64),
-) -> Result<Vec<u8>, pqfile::error::PqfileError> {
-    match target {
+) -> Result<(Vec<u8>, Option<String>), pqfile::error::PqfileError> {
+    #[cfg(feature = "fec")]
+    let repaired = maybe_repair_fec(data, fec_sidecar)?;
+    #[cfg(feature = "fec")]
+    let data: &[u8] = &repaired;
+
+    let result = match target {
         ResolvedDecryptTarget::PrivateKey {
             priv_pem,
             unlock_passphrase,
@@ -162,6 +196,46 @@ fn decrypt_entry(
             };
             result.map(|_| out)
         }
+    };
+
+    // Logs the ciphertext being decrypted (the artifact of record for a
+    // decrypt event), never the recovered plaintext - mirrors what
+    // `encrypt` logs (the produced ciphertext, never the plaintext). A
+    // logging failure is carried back as a warning rather than swallowed
+    // (matches `encrypt_entry`'s `log_event`/`append_audit_warning`) or
+    // failing the decrypt outright: the plaintext is already recovered
+    // successfully by this point.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
+    let audit_warning = {
+        let mut warning = None;
+        if result.is_ok() {
+            if let Some(t) = audit {
+                let key_fingerprint = match target {
+                    ResolvedDecryptTarget::PrivateKey { priv_pem, .. } => {
+                        pqfile::keygen::fingerprint_pem(priv_pem)
+                    }
+                    ResolvedDecryptTarget::Passphrase { .. } => "passphrase".to_string(),
+                };
+                warning = t.append("decrypt", data, &key_fingerprint).err();
+            }
+        }
+        warning
+    };
+    #[cfg(not(all(not(target_arch = "wasm32"), feature = "audit")))]
+    let audit_warning: Option<String> = None;
+
+    result.map(|out| (out, audit_warning))
+}
+
+/// Folds an optional audit-log warning (see `decrypt_entry`) into an
+/// already-successful [`OpStatus`], so a broken audit append stays visible
+/// without turning a file that really did decrypt successfully into a
+/// reported failure. A warning alongside an already-`Err` status is
+/// dropped: the decrypt/save failure is the more important thing to report.
+fn append_audit_warning(status: OpStatus, warning: Option<String>) -> OpStatus {
+    match (status, warning) {
+        (OpStatus::Ok(msg), Some(w)) => OpStatus::Ok(format!("{msg} (audit log warning: {w})")),
+        (status, _) => status,
     }
 }
 
@@ -188,6 +262,13 @@ impl PqfileApp {
             use crate::types::DecryptBatchJob;
 
             let confirm = self.settings.confirm_overwrite;
+            #[cfg(feature = "audit")]
+            let audit_settings = (
+                self.settings.audit_log_path.clone(),
+                self.settings.audit_key_path.clone(),
+                self.settings.audit_recipient_path.clone(),
+                self.audit_key_passphrase.clone(),
+            );
             let output_dir: Option<PathBuf> = if self.settings.output_dir.is_empty() {
                 None
             } else {
@@ -235,6 +316,28 @@ impl PqfileApp {
                             return;
                         }
                     };
+                    // Resolved once for the whole batch - see the matching
+                    // comment in tabs/encrypt.rs's start_encrypt_job.
+                    #[cfg(feature = "audit")]
+                    let audit_target = match crate::audit_log::AuditTarget::resolve(
+                        &audit_settings.0,
+                        &audit_settings.1,
+                        &audit_settings.2,
+                        &audit_settings.3,
+                    ) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            for (i, ..) in &files {
+                                job.lock().unwrap().results.push((
+                                    *i,
+                                    OpStatus::Err(format!("audit log misconfigured: {msg}")),
+                                ));
+                            }
+                            job.lock().unwrap().finished = true;
+                            ctx.request_repaint();
+                            return;
+                        }
+                    };
                     for (i, name, data, path) in files {
                         // Reset per-file byte progress.
                         {
@@ -251,9 +354,28 @@ impl PqfileApp {
                             drop(g);
                             ctx_progress.request_repaint();
                         };
-                        let result = decrypt_entry(&target, &data, stealth, &progress);
+                        // Auto-detect a `<path>.fec` sidecar next to the loaded
+                        // file (if any) and use it to transparently repair bit
+                        // rot before decrypting - see `maybe_repair_fec`'s docs
+                        // for why this is native-only.
+                        #[cfg(feature = "fec")]
+                        let fec_bytes: Option<Vec<u8>> = path.as_deref().and_then(|p| {
+                            let mut fec_path = p.as_os_str().to_owned();
+                            fec_path.push(".fec");
+                            std::fs::read(fec_path).ok()
+                        });
+                        let result = decrypt_entry(
+                            &target,
+                            &data,
+                            stealth,
+                            #[cfg(feature = "fec")]
+                            fec_bytes.as_deref(),
+                            #[cfg(feature = "audit")]
+                            audit_target.as_ref(),
+                            &progress,
+                        );
                         let status = match result {
-                            Ok(plain) => {
+                            Ok((plain, audit_warning)) => {
                                 // Strip .pqf from name (which may be a relative path like subdir/file.txt.pqf)
                                 let out_name = if name.ends_with(".pqf") {
                                     name[..name.len() - 4].to_owned()
@@ -265,7 +387,8 @@ impl PqfileApp {
                                 } else {
                                     path.map(|p| p.with_extension(""))
                                 };
-                                save_result(&out_name, &plain, out_path, confirm)
+                                let status = save_result(&out_name, &plain, out_path, confirm);
+                                append_audit_warning(status, audit_warning)
                             }
                             Err(e) => OpStatus::Err(e.to_string()),
                         };
@@ -349,9 +472,18 @@ impl PqfileApp {
     #[cfg(target_arch = "wasm32")]
     fn run_decrypt_wasm(&mut self, target: ResolvedDecryptTarget, stealth: bool) {
         for entry in &mut self.decrypt_files {
-            let result = decrypt_entry(&target, &entry.data, stealth, &|_, _| {});
+            // No filesystem to auto-detect a `.fec` sidecar from in the
+            // browser - see `maybe_repair_fec`'s docs.
+            let result = decrypt_entry(
+                &target,
+                &entry.data,
+                stealth,
+                #[cfg(feature = "fec")]
+                None,
+                &|_, _| {},
+            );
             entry.status = match result {
-                Ok(plain) => {
+                Ok((plain, _audit_warning)) => {
                     let out_name = if entry.name.ends_with(".pqf") {
                         entry.name[..entry.name.len() - 4].to_owned()
                     } else {

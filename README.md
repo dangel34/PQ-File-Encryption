@@ -262,6 +262,12 @@ Multiple `-r` flags produce a v4 multi-recipient file. Each recipient gets their
 
 `--pad` requires a known, non-zero input size, so it is incompatible with stdin input, empty files, `--mmap`, `--pipeline`, and `--compress` (compression would shrink the padding back down); it composes with `--parallel` and `--stealth`. `--stealth` supports a single recipient only and is incompatible with `--passphrase`, `--recursive`, and `--mmap`; because the output has no header, the recipient must already know the file is in stealth mode and pass `--stealth` at decrypt time.
 
+An interrupted `encrypt` of a very large file doesn't have to restart from byte zero: `encrypt --resume` (single recipient, real file input/output only) writes a checkpoint sidecar (`<output>.pqfck`) roughly every 64 MiB and continues from it on a later run. The checkpoint holds the session key in the clear - guard it like a private key, and delete it along with the partial output to abandon a resume attempt; it's deleted automatically on success. `decrypt --resume` is the cheaper counterpart: no checkpoint needed, since the existing partial output's own length is enough to know where to continue.
+
+`encrypt --fec` (requires the `fec` build feature) protects against cold-storage bit rot - not tampering, which AEAD authentication already covers regardless of this flag - by writing a Reed-Solomon parity sidecar (`<output>.pqf.fec`) alongside the output, correcting up to roughly 3% random byte corruption per 128-byte block. `decrypt --fec` / `check --fec` repair using that sidecar before the normal authenticated decrypt/check runs; an uncorrectable block is passed through unchanged, so tampering and unrepairable corruption still fail normally. Not supported with stdout/stdin.
+
+`--audit-log <PATH> --audit-key <SIGNING_KEY> --audit-recipient <PUBKEY>` (requires the `audit` build feature; all three or none) appends a signed, encrypted record of the operation to an append-only audit log: signed with your own ML-DSA/SLH-DSA key so a verifier knows it came from you, encrypted to a separate auditor's public key so only they can read it, and hash-chained so deletion or reordering is detectable without the auditor's private key. Falls back to `audit_log`/`audit_key`/`audit_recipient` in the config file; not supported with `--recursive`. Verify a log with `pqfile audit-verify --auditor-key <AUDITOR_PRIVKEY> --operator-key <YOUR_VERIFYING_KEY> <LOG>`.
+
 ### Decryption
 
 ```bash
@@ -547,6 +553,42 @@ pqfile exhume vacation-with-key.png -o recovered-privkey.pem
 
 `bury` embeds the file's bytes one bit per color-channel byte into the cover image's pixel data (least-significant-bit steganography). The passphrase keys *detection*, not just recovery: everything embedded after a random salt is encrypted with a keystream derived from the passphrase (Argon2id, then BLAKE3 subkeys for the keystream and a payload MAC), so there is no plaintext magic, length, or checksum an image scanner could look for, and `exhume` with the wrong passphrase fails identically to `exhume` on an ordinary photo. Useful as an offline backup that doesn't look like a key backup, e.g. among ordinary photos on a drive. This is a plausible-deniability mechanism, not a steganalysis-hardened one: bits are placed sequentially rather than scattered, so a dedicated statistical attack on the image's LSB noise could in principle flag that *something* is embedded, even though it cannot confirm or recover *what*. Requires building with `--features stego` (off by default, since it pulls in an image-codec dependency tree a normal build doesn't need).
 
+### Forward error correction for cold storage (`fec` cargo feature)
+
+```bash
+# Write a Reed-Solomon parity sidecar alongside the ciphertext.
+pqfile encrypt -r pubkey.pem --fec secret.txt
+# -> secret.txt.pqf, secret.txt.pqf.fec
+
+# Later, repair bit rot using the sidecar before the normal authenticated decrypt runs.
+pqfile decrypt -k privkey.pem --fec secret.txt.pqf
+pqfile check -k privkey.pem --fec secret.txt.pqf
+```
+
+AEAD authentication is all-or-nothing: a single flipped bit anywhere in a chunk fails that chunk's tag with no way to recover past it - correct behavior against tampering, but also the failure mode for ordinary bit rot on optical media, aging cloud storage, or a flaky transfer. `--fec` adds classical Reed-Solomon BCH error *correction* (not just detection) over fixed 128-byte blocks of the raw ciphertext bytes, 8 ECC bytes each, correcting up to 4 corrupted bytes anywhere in a block without knowing their positions in advance - the same ratio [Picocrypt](https://github.com/Picocrypt/Picocrypt) uses, tolerating roughly 3% corruption before giving up. Parity lives in a separate sidecar file, never inside the `.pqf` file itself, computed as a post-pass with no awareness of `.pqf` structure at all - which is what lets it protect the header too, and apply uniformly to every format version. A block beyond the correctable bound is left untouched rather than erroring, so genuine tampering (or unrepairable corruption) still fails the normal authentication check exactly as it would without this feature - FEC only ever restores exact original bytes or gets out of the way. Not supported with stdin/stdout, since a real sidecar file is needed on both sides. Requires building with `--features fec` (off by default at the library level; on by default in `pqfile-gui`, since it has no platform restriction and no heavy dependency tree).
+
+### Encrypted audit log (`audit` cargo feature)
+
+```bash
+# One-time setup: a signing key for you, and a keypair for the auditor.
+pqfile sign-keygen --out ./me
+pqfile keygen --out ./auditor
+
+# Every encrypt/decrypt appends a signed, encrypted record.
+pqfile encrypt -r pubkey.pem --audit-log audit.log \
+  --audit-key me_sign_privkey.pem --audit-recipient auditor_pubkey.pem secret.txt
+pqfile decrypt -k privkey.pem --audit-log audit.log \
+  --audit-key me_sign_privkey.pem --audit-recipient auditor_pubkey.pem secret.txt.pqf
+
+# The auditor verifies the whole log end to end.
+pqfile audit-verify --auditor-key auditor_privkey.pem \
+  --operator-key me_sign_pubkey.pem audit.log
+```
+
+Each event (timestamp, command, a BLAKE3 file fingerprint, a key fingerprint) is signed with your own ML-DSA/SLH-DSA key - so a verifier knows it came from you - then encrypted to a separate auditor's ML-KEM public key, so only the auditor can read what happened. A hash chain links each record to the previous *signed* record, letting anyone holding your verifying key detect silent deletion or reordering without ever needing the auditor's private key. Since you can't decrypt your own log back, a small non-secret `<log>.chainhash` file (just a BLAKE3 hash, not sensitive) tracks the chain's tip between invocations; `audit-verify` doesn't need it at all, since it recomputes the chain from scratch while decrypting. All three of `--audit-log`/`--audit-key`/`--audit-recipient` must be set together (or use the `audit_log`/`audit_key`/`audit_recipient` config-file defaults); not supported with `--recursive`, since resolving a fresh signing-key passphrase per file in a batch would be worse than just disallowing the combination. Scoped to `encrypt`/`decrypt` only. Requires building with `--features audit` (off by default; native-only in `pqfile-gui`, since an append-only log needs real persistent storage the web build's download-only model can't provide).
+
+The chain check alone catches deletion or reordering of any entry that's followed by another one, but not a whole entry deleted off the *end* of the log (a truncated log is still internally consistent up to wherever it stops) - the co-located `<log>.chainhash` file shares the log's own trust boundary, so it can't help here either. Every `audit-verify` run prints a `tip:` line with the log's actual final chain hash; pass it back in as `--expect-tip <HEX>` on your next verification (kept somewhere the operator alone can't also silently rewrite) to additionally catch that case.
+
 ### Archive and extract
 
 ```bash
@@ -613,6 +655,10 @@ Routine commands can drop the `-r`/`-k` flags by setting defaults in a config fi
 recipient = "pqf1abc..."
 # Default private key for `decrypt` and `check`
 key = "/home/me/.keys/privkey.pem"
+# Default --audit-log / --audit-key / --audit-recipient (requires the `audit` build feature; all three or none)
+audit_log = "/home/me/.pqfile/audit.log"
+audit_key = "/home/me/.keys/sign_privkey.pem"
+audit_recipient = "/home/me/.keys/auditor_pubkey.pem"
 ```
 
 With this in place, `pqfile encrypt notes.txt` and `pqfile decrypt notes.txt.pqf` just work. Explicit flags always override the config. Pass the global `--no-config` flag to ignore the file entirely (recommended in scripts). A malformed config is a hard error, never silently ignored. Only `key = "value"` pairs, `#` comments, and `\\`/`\"` escapes are accepted.
@@ -672,15 +718,15 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 
 - **🗝 Keys**: a persistent registry of key pairs with fingerprints and quick-load buttons for the Encrypt/Decrypt tabs, plus collapsible "Change Passphrase" and "Revoke Key" sections (native only), an "Issue / Verify / Revoke Certificate" panel for the CA certificate workflow, and a "Steganographic Key Backup" panel (Bury/Exhume, `stego` cargo feature, on by default) for hiding a file inside a cover image under a passphrase that keys detection itself
 - **🔑 Keygen**: generates ML-KEM-512/768/1024, hybrid X25519+ML-KEM-768, ML-DSA-65, or SLH-DSA-SHAKE-192f signing key pairs, with optional passphrase or hardware-backed (OS credential store) protection, key expiry dates, and OpenSSH ed25519 key import (native only)
-- **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; checkboxes for Padme length padding and magic-free stealth mode (single recipient); a folder watcher that auto-encrypts new files (native only); drag-and-drop; a **Passphrase** mode (no key pair required, v10 format) with a Second Factor selector - Keyfile (both builds), FIDO2 hardware token (`pqfile-desktop` only), or Passkey/WebAuthn PRF (web build only, currently disabled pending browser support)
-- **🔓 Decrypt**: loads any v2-v10 `.pqf` file, prompting for a passphrase only when the key requires one; the same **Passphrase** mode and Second Factor selector as Encrypt for v10 files; a "Stealth mode" checkbox for files encrypted without a header; includes **Rekey** (re-wrap a file for a new recipient without decrypting the payload) and **Add Recipient** (append a recipient to an existing v4/v7/v8 multi-recipient file) sub-tabs
+- **🔒 Encrypt**: multi-file batch encryption to one or more recipients; 2+ recipients automatically use the anonymous v8 format (toggle "pad recipient count" for v9); optional zstd compression for single-recipient files; checkboxes for Padme length padding, magic-free stealth mode (single recipient), and a Reed-Solomon error-correction sidecar for cold-storage resilience (`fec` cargo feature, on by default); a folder watcher that auto-encrypts new files (native only); drag-and-drop; a **Passphrase** mode (no key pair required, v10 format) with a Second Factor selector - Keyfile (both builds), FIDO2 hardware token (`pqfile-desktop` only), or Passkey/WebAuthn PRF (web build only, currently disabled pending browser support)
+- **🔓 Decrypt**: loads any v2-v10 `.pqf` file, prompting for a passphrase only when the key requires one; the same **Passphrase** mode and Second Factor selector as Encrypt for v10 files; a "Stealth mode" checkbox for files encrypted without a header; auto-repairs from a `.fec` sidecar next to the loaded file when present (native only); includes **Rekey** (re-wrap a file for a new recipient without decrypting the payload) and **Add Recipient** (append a recipient to an existing v4/v7/v8 multi-recipient file) sub-tabs
 - **✏ Sign** / **🔏 Signcrypt**: sign and verify with ML-DSA-65 or SLH-DSA-SHAKE-192f (algorithm detected from the loaded key, shown inline), plus combined sign-then-encrypt and decrypt-then-verify
 - **🕶 Sealed Sender**: generate a separate X25519 identity key pair, then seal (encrypt with deniable sender authentication) and unseal files - proves the sender to the specific recipient without producing evidence a third party could ever check
 - **📦 Archive**: pack multiple files into one encrypted `.pqf` container and extract with path-traversal protection
 - **🔀 Shamir**: split a private key into M-of-N shares (with QR code export for air-gapped transfer) and reconstruct from shares
 - **🔍 Inspect**: header metadata for any `.pqf` file, or a key-file health check (passphrase/hardware status, expiry, legacy Argon2 detection, revocation sidecar), without decrypting
 - **📋 Clipboard**: encrypt/decrypt short text snippets without writing to disk, with an optional auto-clear timer
-- **⚙ Settings**: theme, default output directory, confirm-before-overwrite, clipboard auto-clear, and (native, `update-check` cargo feature) an opt-in "Check for updates on startup" toggle plus a "Check for Updates now" button that works regardless of the toggle
+- **⚙ Settings**: theme, default output directory, confirm-before-overwrite, clipboard auto-clear, (native, `audit` cargo feature, off by default) an audit-log section - log path, your signing key, the auditor's public key, and an in-memory-only signing-key passphrase - that engages automatically once all three paths are set, and (native, `update-check` cargo feature) an opt-in "Check for updates on startup" toggle plus a "Check for Updates now" button that works regardless of the toggle
 
 Hardware-backed keys, the folder watcher, SSH key import, passphrase change, and revocation are native-only (not available in the WASM build, which cannot access the OS credential store or filesystem watch APIs). The update check is also native-only, but for a different reason: it has no `ureq` target for wasm32, and a web app is always whatever's currently deployed, so a version check makes no sense there anyway.
 

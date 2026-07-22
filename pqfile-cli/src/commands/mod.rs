@@ -3,6 +3,8 @@
 //! actual logic lives here.
 
 pub(crate) mod archive;
+#[cfg(feature = "audit")]
+pub(crate) mod audit;
 pub(crate) mod cert;
 pub(crate) mod decrypt;
 pub(crate) mod encrypt;

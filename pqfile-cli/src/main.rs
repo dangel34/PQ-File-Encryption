@@ -23,6 +23,8 @@ mod update_check;
 mod update_check_common;
 
 use commands::archive::{run_archive, run_extract};
+#[cfg(feature = "audit")]
+use commands::audit::run_audit_verify;
 use commands::cert::{run_issue_cert, run_revoke_cert, run_verify_cert};
 #[cfg(feature = "tlock")]
 use commands::decrypt::run_tlock_round;
@@ -232,6 +234,54 @@ enum Command {
             conflicts_with_all = ["recipients", "passphrase_only"]
         )]
         tlock_round: Option<u64>,
+        /// Resume an interrupted encryption instead of restarting from byte
+        /// zero, using a checkpoint sidecar (`<output>.pqfck`) written every
+        /// ~64 MiB of progress. If no checkpoint exists yet, starts a fresh
+        /// encryption and begins writing one; on success the checkpoint is
+        /// deleted. Single recipient only; INPUT and -o must both be real
+        /// files (not `-`). The checkpoint holds the session key in the
+        /// clear (there is no recipient private key available mid-encrypt
+        /// to protect it with) - guard it like a private key, and delete it
+        /// along with the partial output to abandon a resume attempt.
+        #[arg(
+            long,
+            default_value_t = false,
+            conflicts_with_all = ["recursive", "passphrase_only", "compress", "parallel", "pipeline", "mmap", "stealth"]
+        )]
+        resume: bool,
+        /// Write a Reed-Solomon forward-error-correction sidecar
+        /// (`<output>.pqf.fec`) alongside the output, protecting against bit
+        /// rot on cold storage (corrects up to ~3% random byte corruption
+        /// per block; no help against deliberate tampering, which the
+        /// existing AEAD authentication already covers). Applies uniformly
+        /// to any format this produces; not supported with stdout output or
+        /// `--recursive` (each recursive output would need its own sidecar,
+        /// not yet wired).
+        #[cfg(feature = "fec")]
+        #[arg(long, default_value_t = false, conflicts_with = "recursive")]
+        fec: bool,
+        /// Append a signed, encrypted record of this operation to an audit
+        /// log. Falls back to the config file's `audit_log` default when
+        /// omitted. Must be set together with --audit-key and
+        /// --audit-recipient (all three, or none). Not supported with
+        /// --recursive: each file would re-prompt for the signing key's
+        /// passphrase, since a fresh operator key is resolved per event.
+        #[cfg(feature = "audit")]
+        #[arg(long, value_name = "PATH", conflicts_with = "recursive")]
+        audit_log: Option<PathBuf>,
+        /// Your own signing key (ML-DSA or SLH-DSA), used to sign each
+        /// audit record so a verifier can tell it came from you. Falls back
+        /// to the config file's `audit_key` default.
+        #[cfg(feature = "audit")]
+        #[arg(long, value_name = "SIGNING_KEY", conflicts_with = "recursive")]
+        audit_key: Option<PathBuf>,
+        /// The auditor's ML-KEM public key (or `pqf1…` recipient string);
+        /// each record is encrypted to this key, so only the auditor can
+        /// read the log's contents. Falls back to the config file's
+        /// `audit_recipient` default.
+        #[cfg(feature = "audit")]
+        #[arg(long, value_name = "PUBKEY", conflicts_with = "recursive")]
+        audit_recipient: Option<String>,
     },
     /// Decrypt a file produced by `encrypt`.
     Decrypt {
@@ -289,6 +339,47 @@ enum Command {
         #[cfg(feature = "tlock")]
         #[arg(long, value_name = "URL", requires = "tlock")]
         tlock_url: Option<String>,
+        /// Resume an interrupted decryption instead of restarting from byte
+        /// zero: an existing partial output is truncated to its last whole
+        /// authenticated chunk and decryption continues from there via
+        /// random-access reads into the (unchanged) ciphertext. No separate
+        /// checkpoint file is needed - unlike `encrypt --resume`, there is no
+        /// secret this side has to persist, since the ciphertext doesn't
+        /// change between attempts and -k already supplies the private key
+        /// every time. Requires -k; INPUT and -o must both be real files
+        /// (not `-`); only for v3/v5 (single-recipient, chunked) files.
+        #[arg(
+            long,
+            default_value_t = false,
+            conflicts_with_all = ["passphrase_v10", "stealth", "parallel"]
+        )]
+        resume: bool,
+        /// Repair bit rot using a Reed-Solomon sidecar written by
+        /// `encrypt --fec` (`<input>.fec`), before running the normal
+        /// authenticated decrypt. An uncorrectable block is passed through
+        /// unchanged, so decryption still fails normally in that case - this
+        /// only ever helps, never weakens authentication. Requires the
+        /// sidecar to exist; not supported with stdin input or `--resume`
+        /// (resume needs random-access reads, which the repair pass doesn't
+        /// support).
+        #[cfg(feature = "fec")]
+        #[arg(long, default_value_t = false, conflicts_with = "resume")]
+        fec: bool,
+        /// Append a signed, encrypted record of this operation to an audit
+        /// log. See `encrypt --audit-log`'s help for the full explanation;
+        /// must be set together with --audit-key and --audit-recipient.
+        #[cfg(feature = "audit")]
+        #[arg(long, value_name = "PATH")]
+        audit_log: Option<PathBuf>,
+        /// Your own signing key (ML-DSA or SLH-DSA), used to sign each
+        /// audit record.
+        #[cfg(feature = "audit")]
+        #[arg(long, value_name = "SIGNING_KEY")]
+        audit_key: Option<PathBuf>,
+        /// The auditor's ML-KEM public key (or `pqf1…` recipient string).
+        #[cfg(feature = "audit")]
+        #[arg(long, value_name = "PUBKEY")]
+        audit_recipient: Option<String>,
     },
     /// Verify that a .pqf file authenticates end-to-end without writing any plaintext.
     ///
@@ -344,12 +435,48 @@ enum Command {
         #[cfg(feature = "tlock")]
         #[arg(long, value_name = "URL", requires = "tlock")]
         tlock_url: Option<String>,
+        /// Repair bit rot using a Reed-Solomon sidecar written by
+        /// `encrypt --fec` (`<input>.fec`), before running the normal
+        /// authenticated check. An uncorrectable block is passed through
+        /// unchanged, so the check still fails normally in that case.
+        /// Requires the sidecar to exist; not supported with stdin input.
+        #[cfg(feature = "fec")]
+        #[arg(long, default_value_t = false)]
+        fec: bool,
     },
     /// Print a .pqf file's header fields (version, KEM variant, recipient count)
     /// without decrypting the payload.
     Inspect {
         /// Encrypted .pqf file to inspect.
         input: PathBuf,
+    },
+    /// Verify an `--audit-log`: decrypts every record with the auditor's
+    /// private key, checks each one's signature against the operator's
+    /// verifying key, and checks the hash chain end to end. Reports which
+    /// record (if any) failed and why - a broken chain means an entry was
+    /// deleted, reordered, or forged without the operator's signing key.
+    ///
+    /// The chain check alone cannot detect entries deleted off the *end* of
+    /// the log (a truncated log is still internally consistent up to
+    /// wherever it stops) - only `--expect-tip`, compared against a tip
+    /// saved from a prior run, catches that. Every run prints a `tip:` line
+    /// with the log's actual final chain hash to save for next time.
+    #[cfg(feature = "audit")]
+    #[command(name = "audit-verify")]
+    AuditVerify {
+        /// The audit log file written by `encrypt --audit-log` / `decrypt --audit-log`.
+        log: PathBuf,
+        /// The auditor's private key (decrypts each record).
+        #[arg(long, value_name = "PRIVKEY")]
+        auditor_key: PathBuf,
+        /// The operator's verifying key (checks each record's signature).
+        #[arg(long, value_name = "VERIFYING_KEY")]
+        operator_key: PathBuf,
+        /// The log's expected final chain hash (the `tip:` line from a
+        /// previous `audit-verify` run), 64 hex characters. Without this,
+        /// entries silently deleted from the end of the log go undetected.
+        #[arg(long, value_name = "HEX")]
+        expect_tip: Option<String>,
     },
     /// Enroll a FIDO2 hardware security key as a v10 second factor.
     ///
@@ -1041,6 +1168,15 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             stealth,
             #[cfg(feature = "tlock")]
             tlock_round,
+            resume,
+            #[cfg(feature = "fec")]
+            fec,
+            #[cfg(feature = "audit")]
+            audit_log,
+            #[cfg(feature = "audit")]
+            audit_key,
+            #[cfg(feature = "audit")]
+            audit_recipient,
         } => run_encrypt(
             recipients,
             ca_key,
@@ -1074,6 +1210,23 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
                 fido2: None,
                 pad,
                 stealth,
+                resume,
+                #[cfg(feature = "fec")]
+                fec,
+                #[cfg(not(feature = "fec"))]
+                fec: false,
+                #[cfg(feature = "audit")]
+                audit_log,
+                #[cfg(not(feature = "audit"))]
+                audit_log: None,
+                #[cfg(feature = "audit")]
+                audit_key,
+                #[cfg(not(feature = "audit"))]
+                audit_key: None,
+                #[cfg(feature = "audit")]
+                audit_recipient,
+                #[cfg(not(feature = "audit"))]
+                audit_recipient: None,
             },
         ),
         Command::Decrypt {
@@ -1093,6 +1246,15 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             tlock,
             #[cfg(feature = "tlock")]
             tlock_url,
+            resume,
+            #[cfg(feature = "fec")]
+            fec,
+            #[cfg(feature = "audit")]
+            audit_log,
+            #[cfg(feature = "audit")]
+            audit_key,
+            #[cfg(feature = "audit")]
+            audit_recipient,
         } => run_decrypt(
             key,
             passphrase_v10,
@@ -1117,6 +1279,17 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             tlock_url,
             #[cfg(not(feature = "tlock"))]
             None,
+            resume,
+            #[cfg(feature = "fec")]
+            fec,
+            #[cfg(not(feature = "fec"))]
+            false,
+            #[cfg(feature = "audit")]
+            audit_log,
+            #[cfg(feature = "audit")]
+            audit_key,
+            #[cfg(feature = "audit")]
+            audit_recipient,
             json,
         ),
         Command::Check {
@@ -1134,6 +1307,8 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             tlock,
             #[cfg(feature = "tlock")]
             tlock_url,
+            #[cfg(feature = "fec")]
+            fec,
         } => run_check(
             key,
             passphrase_v10,
@@ -1156,9 +1331,26 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             tlock_url,
             #[cfg(not(feature = "tlock"))]
             None,
+            #[cfg(feature = "fec")]
+            fec,
+            #[cfg(not(feature = "fec"))]
+            false,
             json,
         ),
         Command::Inspect { input } => inspect(input.as_path(), json),
+        #[cfg(feature = "audit")]
+        Command::AuditVerify {
+            log,
+            auditor_key,
+            operator_key,
+            expect_tip,
+        } => run_audit_verify(
+            &log,
+            &auditor_key,
+            &operator_key,
+            expect_tip.as_deref(),
+            json,
+        ),
         #[cfg(feature = "fido2")]
         Command::Fido2Enroll { output, force, pin } => run_fido2_enroll(output, force, pin, json),
         #[cfg(feature = "tlock")]

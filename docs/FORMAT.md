@@ -161,6 +161,65 @@ the chunk(s) actually requested are checked. See the module's doc comments and
 `docs/ROADMAP.md`, "Seekable/random-access decryption API", for the full
 tradeoff.
 
+### 4.6 Resumable encryption (library/CLI only, no wire-format change)
+
+`encrypt --resume` (single-recipient v3/v5 only) lets an interrupted
+encryption of a very large file continue instead of restarting from byte
+zero. A resumed file is byte-identical to one written in a single pass —
+same header, same chunks, same tags — so this adds no field, version byte,
+or layout of its own. The mechanism instead lives in a small sidecar file
+(`<output>.pqfck`, never read by anything except `pqfile::resume`/`PqfWriter`
+itself): the session key, the number of chunks already committed, and a
+BLAKE3 hash of the plaintext prefix already consumed, written roughly every
+64 MiB of progress. On resume, the partial output is truncated to the exact
+length the checkpoint implies (discarding any torn trailing write from a
+mid-chunk crash) and the last committed chunk's AEAD tag is re-verified
+under the checkpoint's session key before continuing. The checkpoint holds
+the session key in the clear — there is no recipient private key available
+mid-encrypt to protect it with — so it is written with owner-only
+permissions and deleted immediately on success; see `pqfile::resume`'s
+module docs and `docs/ROADMAP.md`, "Resumable/checkpointed encryption for
+very large files", for the full design and its accepted risk. `decrypt
+--resume` needs no checkpoint of its own: it is built on §4.5's
+`SeekableDecryptor`, and an existing partial output's own byte length
+(rounded down to the last whole chunk) is enough to know where to continue.
+
+### 4.7 Forward-error-correction sidecar (library/CLI/GUI only, no wire-format change)
+
+`encrypt --fec` protects against cold-storage bit rot, not tampering (which
+AEAD authentication already covers) - a single flipped bit anywhere in a
+chunk otherwise fails that chunk's tag with no way to recover past it. Uses
+classical Reed-Solomon BCH error *correction* over fixed 128-byte blocks
+with 8 ECC bytes each, correcting up to 4 corrupted bytes anywhere in a
+block without knowing their positions in advance (the same ratio Picocrypt
+uses, tolerating roughly 3% corruption before giving up). Parity is
+computed over the raw ciphertext bytes - header included - as a post-pass
+after a normal encrypt completes, with zero awareness of `.pqf` structure;
+it is written to a separate sidecar (`<output>.pqf.fec`), never embedded in
+the `.pqf` file itself, which is what lets it apply uniformly to every
+format version without any format-specific code. `pqfile::fec::FecRepairReader`
+wraps the ciphertext reader and repairs each block transparently before any
+decrypt/check path ever sees it; a block beyond the correctable bound
+passes through unchanged rather than erroring, so a genuine tamper failure
+still fails exactly as it would without FEC at all - see the module's own
+doc comments and `docs/ROADMAP.md`, "Forward-error-correction for
+cold-storage resilience", for the full design.
+
+### 4.8 Encrypted audit log (library/CLI/GUI only, no wire-format change)
+
+`--audit-log` records encrypt/decrypt events without adding anything to the
+`.pqf` format itself: each event becomes an `AuditRecord` (timestamp,
+command, a BLAKE3 file fingerprint, a key fingerprint), signed with the
+operator's ML-DSA/SLH-DSA key, then encrypted to a separate auditor's
+ML-KEM public key using the ordinary v3 single-recipient path already
+described in §5.2 - so a log entry is, physically, just a length-prefixed
+`.pqf` payload. The chaining and signing framing (record bytes, a 2-byte
+signature-length field, the signature, then encryption) is `pqfile::audit`'s
+own internal convention, not part of `format.rs`. See the module's doc
+comments and `docs/ROADMAP.md`, "Encrypted audit log", for the full design,
+including why the operator needs a small non-secret `<log>.chainhash`
+sidecar to append correctly without being able to decrypt their own log.
+
 ---
 
 ## 5. Version Layouts

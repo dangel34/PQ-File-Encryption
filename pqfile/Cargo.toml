@@ -47,7 +47,15 @@ subtle = "2"
 # uses blake3 rather than SHA3 since the payload checksum never touches the
 # wire format.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"], optional = true }
-blake3 = { version = "1", optional = true }
+# Also used by resume.rs's checkpoint prefix-hash convention (never touches
+# the wire format), so unlike `image` this is not gated behind `stego`.
+blake3 = "1"
+# Classical Reed-Solomon BCH error correction for fec.rs (`fec` feature).
+# Pure Rust, no_std-compatible, no system dependencies - gated behind an
+# opt-in feature anyway since bit-rot protection is a niche need most builds
+# don't want the extra dependency for. See docs/ROADMAP.md,
+# "Forward-error-correction for cold-storage resilience".
+reed-solomon = { version = "0.2", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # getrandom 0.4 needs the wasm_js feature to use globalThis.crypto in a browser/Node.js context.
@@ -109,7 +117,18 @@ tlock = ["dep:tlock", "dep:drand_core"]
 # cover image's pixel data. Off by default so a normal build never pays for
 # the image-codec dependency tree. See docs/ROADMAP.md, "Steganographic key
 # backup".
-stego = ["dep:image", "dep:blake3"]
+stego = ["dep:image"]
+# Reed-Solomon forward-error-correction sidecar for cold-storage resilience
+# (`encrypt --fec` / `decrypt --fec` / `check --fec`). Off by default; no
+# wire-format change, no impact on builds that don't opt in. See
+# docs/ROADMAP.md, "Forward-error-correction for cold-storage resilience".
+fec = ["dep:reed-solomon"]
+# Encrypted, signed, hash-chained audit log for encrypt/decrypt events
+# (`pqfile audit-verify`). No extra dependency - built entirely from
+# existing sign/encrypt/decrypt/blake3 primitives - but off by default like
+# every other niche, opt-in capability. See docs/ROADMAP.md, "Encrypted
+# audit log".
+audit = []
 
 [dependencies.tokio]
 version = "1"

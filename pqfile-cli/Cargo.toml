@@ -23,6 +23,9 @@ qrcode        = { version = "0.14", default-features = false }
 rayon         = "1"
 rpassword     = "7"
 zeroize       = { version = "1", features = ["derive"] }
+# Prefix hashing for `encrypt --resume`'s checkpoint sidecar (never touches
+# the wire format); same crate pqfile's own resume.rs convention uses.
+blake3        = "1"
 # CTAP2 USB HID for `--fido2`; optional so a default build never needs libusb/hidraw.
 ctap-hid-fido2 = { version = "3.5", optional = true }
 # Random salt generation for `fido2-enroll`; optional alongside ctap-hid-fido2.
@@ -49,6 +52,14 @@ tlock = ["pqfile/tlock"]
 # pqfile's `stego` feature (image-codec dependency tree) purely for this one
 # opt-in feature; no CLI-only dependency is needed.
 stego = ["pqfile/stego"]
+# Forward-error-correction sidecar for cold-storage resilience (`--fec` on
+# encrypt/decrypt/check). Off by default: pulls in pqfile's `fec` feature
+# (the reed-solomon crate) purely for this one opt-in feature.
+fec = ["pqfile/fec"]
+# Encrypted, signed, hash-chained audit log for encrypt/decrypt events
+# (`--audit-log` on encrypt/decrypt, `audit-verify` subcommand). Off by
+# default: mirrors pqfile's own `audit` feature.
+audit = ["pqfile/audit"]
 # `check-update`: queries the GitHub Releases API and compares the tag against
 # this binary's version. Off by default; never runs automatically even when
 # compiled in - only in response to the explicit subcommand. Enabled for the

@@ -1,20 +1,26 @@
 //! `encrypt`: recipient-key, passphrase (v10), and time-locked (v11) file
 //! encryption, plus the `--recursive` directory-tree variant.
 
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use pqfile::error::PqfileError;
+use pqfile::writer::PqfWriter;
 use pqfile::{encrypt, format, revoke};
 
 use crate::commands::cert::resolve_cert_with_ca;
 use crate::config::load_config;
 use crate::io_util::{
     derive_fido2_secret, emit_json_ok, ensure_overwrite_allowed, open_reader, read_keyfile,
-    AtomicOutput, CliOutput, PARALLEL_BATCH_SIZE,
+    write_private_file, AtomicOutput, CliOutput, PARALLEL_BATCH_SIZE,
 };
 use crate::json_util::{json_object, kv_raw, kv_str};
 use crate::prompts::prompt_new_passphrase;
+
+/// Checkpoint sidecar update cadence for `encrypt --resume`: bounds redo-on-
+/// crash to at most this many bytes of re-encryption, without fsyncing the
+/// (potentially huge) output file after every single small chunk.
+const RESUME_CHECKPOINT_INTERVAL_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Wraps a plaintext reader with Padmé length padding when requested,
 /// otherwise passes it through unchanged. A single concrete type keeps the
@@ -78,6 +84,14 @@ pub(crate) struct EncryptOpts {
     pub(crate) fido2: Option<PathBuf>,
     pub(crate) pad: bool,
     pub(crate) stealth: bool,
+    pub(crate) resume: bool,
+    pub(crate) fec: bool,
+    #[cfg_attr(not(feature = "audit"), allow(dead_code))]
+    pub(crate) audit_log: Option<PathBuf>,
+    #[cfg_attr(not(feature = "audit"), allow(dead_code))]
+    pub(crate) audit_key: Option<PathBuf>,
+    #[cfg_attr(not(feature = "audit"), allow(dead_code))]
+    pub(crate) audit_recipient: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -91,8 +105,25 @@ pub(crate) fn run_encrypt(
     input: String,
     output: Option<String>,
     recursive: bool,
-    opts: EncryptOpts,
+    #[allow(unused_mut)] mut opts: EncryptOpts,
 ) -> Result<(), PqfileError> {
+    // Merge config-file defaults for --audit-log/--audit-key/--audit-recipient
+    // once, here, before any dispatch branch - so every path below (tlock,
+    // passphrase, recursive, single) sees the same already-resolved fields
+    // and none of them need their own config lookup.
+    #[cfg(feature = "audit")]
+    {
+        let cfg = load_config(no_config)?;
+        if opts.audit_log.is_none() {
+            opts.audit_log = cfg.audit_log;
+        }
+        if opts.audit_key.is_none() {
+            opts.audit_key = cfg.audit_key;
+        }
+        if opts.audit_recipient.is_none() {
+            opts.audit_recipient = cfg.audit_recipient;
+        }
+    }
     if let Some(round) = tlock_round {
         if recursive {
             return Err(PqfileError::Io(std::io::Error::new(
@@ -103,6 +134,11 @@ pub(crate) fn run_encrypt(
         if opts.stealth {
             return Err(PqfileError::Io(std::io::Error::other(
                 "--stealth is not supported with --tlock-round",
+            )));
+        }
+        if opts.resume {
+            return Err(PqfileError::Io(std::io::Error::other(
+                "--resume is not supported with --tlock-round",
             )));
         }
         return run_encrypt_tlock(round, &input, output.as_deref(), opts);
@@ -282,6 +318,88 @@ fn resolve_encrypt_output(
     Ok((original_size, to_stdout, out_path))
 }
 
+/// After a successful encrypt, if `--fec` was requested, writes a Reed-
+/// Solomon parity sidecar (`<out_path>.fec`) as a post-pass over the
+/// finished output file - see `pqfile::fec`'s module docs for why this is a
+/// separate sidecar rather than anything embedded in the `.pqf` file
+/// itself. Not supported when the payload went to stdout, since there is no
+/// file to read back afterward.
+#[cfg(feature = "fec")]
+fn write_fec_sidecar_if_requested(
+    fec: bool,
+    to_stdout: bool,
+    out_path: &Path,
+) -> Result<(), PqfileError> {
+    if !fec {
+        return Ok(());
+    }
+    if to_stdout {
+        return Err(PqfileError::Io(io::Error::other(
+            "--fec is not supported with stdout output",
+        )));
+    }
+    let mut f = std::fs::File::open(out_path)?;
+    let sidecar = pqfile::fec::generate_sidecar(&mut f)?;
+    let mut fec_path = out_path.as_os_str().to_owned();
+    fec_path.push(".fec");
+    std::fs::write(fec_path, sidecar)?;
+    Ok(())
+}
+
+#[cfg(not(feature = "fec"))]
+fn write_fec_sidecar_if_requested(
+    _fec: bool,
+    _to_stdout: bool,
+    _out_path: &Path,
+) -> Result<(), PqfileError> {
+    Ok(())
+}
+
+/// After a successful encrypt, if `--audit-log` (or its config-file
+/// default) is set, appends a signed+encrypted audit record for this event.
+/// `key_fingerprint` is whatever identifies the key involved: the
+/// recipient's own fingerprint for key-pair modes, or a fixed placeholder
+/// string for passphrase/time-locked modes, which have no recipient key
+/// pair to fingerprint at all. Not supported when the payload went to
+/// stdout (no file to fingerprint afterward) - the `--recursive` case is
+/// excluded at the clap level instead (see `audit_log`'s help text) since
+/// resolving a fresh operator key/passphrase per file in a batch is a
+/// worse UX than just disallowing the combination for now.
+#[cfg(feature = "audit")]
+fn log_encrypt_event(
+    opts: &EncryptOpts,
+    to_stdout: bool,
+    out_path: &Path,
+    key_fingerprint: &str,
+) -> Result<(), PqfileError> {
+    let Some(target) = crate::commands::audit::AuditTarget::resolve(
+        opts.audit_log.clone(),
+        opts.audit_key.clone(),
+        opts.audit_recipient.clone(),
+        &crate::config::CliConfig::default(),
+    )?
+    else {
+        return Ok(());
+    };
+    if to_stdout {
+        return Err(PqfileError::Io(io::Error::other(
+            "--audit-log is not supported with stdout output",
+        )));
+    }
+    let fingerprint = crate::commands::audit::fingerprint_file(out_path)?;
+    target.append("encrypt", fingerprint, key_fingerprint)
+}
+
+#[cfg(not(feature = "audit"))]
+fn log_encrypt_event(
+    _opts: &EncryptOpts,
+    _to_stdout: bool,
+    _out_path: &Path,
+    _key_fingerprint: &str,
+) -> Result<(), PqfileError> {
+    Ok(())
+}
+
 fn run_encrypt_stealth(
     pubkey_pem: &str,
     input: &str,
@@ -294,6 +412,13 @@ fn run_encrypt_stealth(
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
     encrypt::encrypt_stream_stealth(pubkey_pem, original_size, &mut reader, &mut writer)?;
     writer.commit()?;
+    write_fec_sidecar_if_requested(opts.fec, to_stdout, &out_path)?;
+    log_encrypt_event(
+        &opts,
+        to_stdout,
+        &out_path,
+        &pqfile::keygen::fingerprint_pem(pubkey_pem),
+    )?;
 
     emit_json_ok(opts.json, to_stdout, &out_path)?;
     Ok(())
@@ -346,6 +471,9 @@ fn run_encrypt_passphrase(
         )?;
     }
     writer.commit()?;
+    write_fec_sidecar_if_requested(opts.fec, to_stdout, &out_path)?;
+    // Passphrase mode has no recipient key pair to fingerprint at all.
+    log_encrypt_event(&opts, to_stdout, &out_path, "passphrase")?;
 
     emit_json_ok(opts.json, to_stdout, &out_path)?;
     Ok(())
@@ -371,6 +499,9 @@ fn run_encrypt_tlock(
         let mut writer = CliOutput::new(to_stdout, &out_path)?;
         pqfile::tlock::encrypt_stream_tlock(round, None, original_size, &mut reader, &mut writer)?;
         writer.commit()?;
+        write_fec_sidecar_if_requested(opts.fec, to_stdout, &out_path)?;
+        // Time-locked mode has no recipient key pair to fingerprint at all.
+        log_encrypt_event(&opts, to_stdout, &out_path, &format!("tlock-round-{round}"))?;
 
         emit_json_ok(opts.json, to_stdout, &out_path)?;
         Ok(())
@@ -388,6 +519,9 @@ fn run_encrypt_single(
     output: Option<&str>,
     opts: EncryptOpts,
 ) -> Result<(), PqfileError> {
+    if opts.resume {
+        return run_encrypt_resumable(pubkey_pems, input, output, opts);
+    }
     let (original_size, to_stdout, out_path) = resolve_encrypt_output(input, output, opts.force)?;
 
     if opts.pad {
@@ -425,6 +559,13 @@ fn run_encrypt_single(
             &mut writer,
         )?;
         writer.commit()?;
+        write_fec_sidecar_if_requested(opts.fec, to_stdout, &out_path)?;
+        log_encrypt_event(
+            &opts,
+            to_stdout,
+            &out_path,
+            &pqfile::keygen::fingerprint_pem(&pubkey_pems[0]),
+        )?;
         emit_json_ok(opts.json, to_stdout, &out_path)?;
         return Ok(());
     }
@@ -447,6 +588,13 @@ fn run_encrypt_single(
             &mut writer,
         )?;
         writer.commit()?;
+        write_fec_sidecar_if_requested(opts.fec, to_stdout, &out_path)?;
+        log_encrypt_event(
+            &opts,
+            to_stdout,
+            &out_path,
+            &pqfile::keygen::fingerprint_pem(&pubkey_pems[0]),
+        )?;
         emit_json_ok(opts.json, to_stdout, &out_path)?;
         return Ok(());
     }
@@ -456,8 +604,176 @@ fn run_encrypt_single(
     let mut writer = CliOutput::new(to_stdout, &out_path)?;
     perform_encrypt(pubkey_pems, original_size, &opts, &mut reader, &mut writer)?;
     writer.commit()?;
+    write_fec_sidecar_if_requested(opts.fec, to_stdout, &out_path)?;
+    // Multi-recipient encrypts log the first recipient's fingerprint only -
+    // a documented simplification, not an attempt to represent every slot.
+    log_encrypt_event(
+        &opts,
+        to_stdout,
+        &out_path,
+        &pqfile::keygen::fingerprint_pem(&pubkey_pems[0]),
+    )?;
 
     emit_json_ok(opts.json, to_stdout, &out_path)?;
+    Ok(())
+}
+
+/// `<output>.pqfck` - the resume checkpoint sidecar path for `out_path`.
+fn resume_checkpoint_path(out_path: &Path) -> PathBuf {
+    let mut s = out_path.as_os_str().to_owned();
+    s.push(".pqfck");
+    PathBuf::from(s)
+}
+
+/// Reads exactly `buf.len()` bytes or however many remain before EOF,
+/// whichever is shorter - unlike a single `Read::read` call, which may
+/// return fewer bytes than requested even mid-stream. `pqfile` has its own
+/// private copy of this (`pqfile::io_util::fill_or_eof`, shared by
+/// `fec`/`audit`) - not reused here since it isn't part of `pqfile`'s public
+/// API and this crate has no other reason to depend on either feature.
+fn fill_or_eof(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match r.read(&mut buf[filled..])? {
+            0 => break,
+            n => filled += n,
+        }
+    }
+    Ok(filled)
+}
+
+/// `encrypt --resume`: single-recipient only, real file input/output only
+/// (see docs/ROADMAP.md, "Resumable/checkpointed encryption"). If
+/// `<output>.pqfck` already exists, verifies it against both the partial
+/// output and the source file, then continues; otherwise starts a fresh
+/// encryption and begins writing checkpoints as it goes. The checkpoint is
+/// deleted on successful completion.
+fn run_encrypt_resumable(
+    pubkey_pems: &[String],
+    input: &str,
+    output: Option<&str>,
+    opts: EncryptOpts,
+) -> Result<(), PqfileError> {
+    if pubkey_pems.len() != 1 {
+        return Err(PqfileError::Io(io::Error::other(
+            "--resume supports only one recipient",
+        )));
+    }
+    if input == "-" {
+        return Err(PqfileError::Io(io::Error::other(
+            "--resume requires a real input file, not stdin",
+        )));
+    }
+    let out = output.unwrap_or("");
+    if out == "-" {
+        return Err(PqfileError::Io(io::Error::other(
+            "--resume requires a real output file, not stdout",
+        )));
+    }
+    let out_path: PathBuf = if out.is_empty() {
+        let mut s = std::ffi::OsString::from(input);
+        s.push(".pqf");
+        PathBuf::from(s)
+    } else {
+        PathBuf::from(out)
+    };
+    let ck_path = resume_checkpoint_path(&out_path);
+
+    let (mut writer, mut hasher, chunk_size, prefix_len) = if ck_path.exists() {
+        let ck_bytes = std::fs::read(&ck_path)?;
+        let checkpoint = pqfile::resume::ResumeCheckpoint::from_bytes(&ck_bytes)?;
+
+        let header = {
+            let mut header_file = std::fs::File::open(&out_path)?;
+            pqfile::resume::read_stream_header_for_resume(&mut header_file)?
+        };
+        let chunk_size = header.chunk_size() as usize;
+        let prefix_len = checkpoint.committed_chunks() as u64 * chunk_size as u64;
+
+        // Verify the source file's already-consumed prefix still matches what
+        // the checkpoint recorded, reading it once and leaving the cursor
+        // positioned exactly at prefix_len for the main loop below to
+        // continue from. A short read (source now shorter than the prefix)
+        // is itself evidence the source changed.
+        let mut src = std::fs::File::open(input)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut remaining = prefix_len;
+        let mut buf = vec![0u8; chunk_size.max(1)];
+        while remaining > 0 {
+            let take = remaining.min(buf.len() as u64) as usize;
+            let n = fill_or_eof(&mut src, &mut buf[..take])?;
+            if n < take {
+                return Err(PqfileError::ResumeSourceChanged);
+            }
+            hasher.update(&buf[..take]);
+            remaining -= take as u64;
+        }
+        if *hasher.finalize().as_bytes() != checkpoint.prefix_hash() {
+            return Err(PqfileError::ResumeSourceChanged);
+        }
+        drop(src);
+
+        let out_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&out_path)?;
+        let writer = PqfWriter::resume(out_file, &header, &checkpoint)?;
+        (writer, hasher, chunk_size, prefix_len)
+    } else {
+        ensure_overwrite_allowed(&out_path, false, opts.force)?;
+        let original_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        let chunk_size = if opts.chunk_size == 0 {
+            format::adaptive_chunk_size(original_size)
+        } else {
+            opts.chunk_size
+        };
+        let out_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&out_path)?;
+        let writer = PqfWriter::new(out_file, &pubkey_pems[0], original_size, chunk_size)?;
+        (writer, blake3::Hasher::new(), chunk_size, 0u64)
+    };
+
+    let mut src = std::fs::File::open(input)?;
+    src.seek(SeekFrom::Start(prefix_len))
+        .map_err(PqfileError::Io)?;
+
+    let mut buf = vec![0u8; chunk_size];
+    let mut bytes_since_checkpoint: u64 = 0;
+    loop {
+        let n = fill_or_eof(&mut src, &mut buf).map_err(PqfileError::Io)?;
+        if n == 0 {
+            break;
+        }
+        io::Write::write_all(&mut writer, &buf[..n]).map_err(PqfileError::Io)?;
+        hasher.update(&buf[..n]);
+        if n == chunk_size {
+            bytes_since_checkpoint += n as u64;
+            if bytes_since_checkpoint >= RESUME_CHECKPOINT_INTERVAL_BYTES {
+                writer.sync_data().map_err(PqfileError::Io)?;
+                let ck = writer.checkpoint(*hasher.finalize().as_bytes());
+                write_private_file(&ck_path, &ck.to_bytes()).map_err(PqfileError::Io)?;
+                bytes_since_checkpoint = 0;
+            }
+        }
+    }
+    writer.finish()?;
+    // Best-effort: the encryption itself already succeeded: losing the
+    // checkpoint at this point just means a leftover file to clean up
+    // manually, not a correctness problem.
+    let _ = std::fs::remove_file(&ck_path);
+    write_fec_sidecar_if_requested(opts.fec, false, &out_path)?;
+    log_encrypt_event(
+        &opts,
+        false,
+        &out_path,
+        &pqfile::keygen::fingerprint_pem(&pubkey_pems[0]),
+    )?;
+
+    emit_json_ok(opts.json, false, &out_path)?;
     Ok(())
 }
 

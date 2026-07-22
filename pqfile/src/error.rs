@@ -290,6 +290,40 @@ pub enum PqfileError {
     #[cfg(feature = "stego")]
     #[error("invalid image: {0}")]
     StegoInvalidImage(String),
+
+    /// `encrypt --resume`: the source file's already-consumed prefix no
+    /// longer matches the hash recorded in the checkpoint. The source file
+    /// changed since the interrupted run; resuming would splice two
+    /// different versions of it together, so this refuses rather than
+    /// producing a file whose plaintext is a nonsensical mix.
+    #[error(
+        "source file has changed since the interrupted encryption; refusing to resume (delete the checkpoint and output to start over)"
+    )]
+    ResumeSourceChanged,
+
+    /// `encrypt --resume`/`decrypt --resume`: the checkpoint file or the
+    /// partial output it describes is unusable - corrupt checkpoint bytes,
+    /// an output file shorter than the checkpoint implies, or the last
+    /// committed chunk's authentication tag does not verify under the
+    /// checkpoint's session key.
+    #[error("resume checkpoint is invalid: {0}")]
+    ResumeCheckpointInvalid(String),
+
+    /// `--fec`: the parity sidecar could not be read (missing, corrupt
+    /// header, or wrong version). Uncorrectable *block-level* corruption is
+    /// not this variant - that case passes through to the normal AEAD/parse
+    /// failure the file would have produced without FEC at all.
+    #[cfg(feature = "fec")]
+    #[error("FEC sidecar is invalid: {0}")]
+    FecSidecarInvalid(String),
+
+    /// The encrypted audit log is malformed, a record's signature does not
+    /// verify, or the hash chain does not link correctly - meaning either
+    /// corruption or that an entry was deleted, reordered, or forged
+    /// without the operator's signing key.
+    #[cfg(feature = "audit")]
+    #[error("audit log is invalid: {0}")]
+    AuditLogInvalid(String),
 }
 
 impl PqfileError {
@@ -348,6 +382,12 @@ impl PqfileError {
             PqfileError::StegoPayloadNotFound => 38,
             #[cfg(feature = "stego")]
             PqfileError::StegoInvalidImage(_) => 39,
+            PqfileError::ResumeSourceChanged => 40,
+            PqfileError::ResumeCheckpointInvalid(_) => 41,
+            #[cfg(feature = "fec")]
+            PqfileError::FecSidecarInvalid(_) => 42,
+            #[cfg(feature = "audit")]
+            PqfileError::AuditLogInvalid(_) => 43,
         }
     }
 }

@@ -1,7 +1,9 @@
 name: Feature Checks
 
 # Compile + test coverage for the workspace's off-by-default cargo features
-# (fido2, kem-libcrux, tlock, stego). None of these is exercised by the
+# (fido2, kem-libcrux, tlock, stego, audit; fec is also here for pqfile-cli's
+# own copy of the feature - see that entry's comment). None of these is
+# exercised by the
 # release pipeline (release.yml only ever builds pqfile-cli with
 # --features update-check, and pqfile-desktop forces on fido2/update-check
 # for the GUI - kem-libcrux/tlock/stego are never compiled into any shipped
@@ -64,6 +66,19 @@ jobs:
           - feature: stego
             packages: pqfile pqfile-cli
             needs_linux_deps: false
+          # fec: Reed-Solomon parity sidecar for cold-storage bit rot. On by
+          # default in pqfile-gui (covered by ci.yml's test-and-lint job
+          # already), but not in pqfile or pqfile-cli - this covers those two
+          # plus pqfile-cli's own `tests/fec.rs` integration tests.
+          - feature: fec
+            packages: pqfile pqfile-cli
+            needs_linux_deps: false
+          # audit: encrypted, signed, hash-chained audit log. Off by default
+          # everywhere, including pqfile-gui (unlike fec/stego), so this is
+          # its only coverage in any workflow.
+          - feature: audit
+            packages: pqfile pqfile-cli pqfile-gui
+            needs_linux_deps: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

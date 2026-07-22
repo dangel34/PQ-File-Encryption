@@ -14,6 +14,15 @@ pub(crate) struct CliConfig {
     pub(crate) recipient: Option<String>,
     /// Default private key path for `decrypt` / `check`.
     pub(crate) key: Option<PathBuf>,
+    /// Default audit log path for `encrypt`/`decrypt --audit-log`.
+    #[cfg(feature = "audit")]
+    pub(crate) audit_log: Option<PathBuf>,
+    /// Default operator signing key for `--audit-log`.
+    #[cfg(feature = "audit")]
+    pub(crate) audit_key: Option<PathBuf>,
+    /// Default auditor public key for `--audit-log`.
+    #[cfg(feature = "audit")]
+    pub(crate) audit_recipient: Option<String>,
 }
 
 /// Platform config file location: `%APPDATA%\pqfile\config.toml` on Windows,
@@ -70,6 +79,12 @@ fn parse_config_toml(text: &str) -> Result<CliConfig, String> {
         match k.trim() {
             "recipient" => cfg.recipient = Some(val),
             "key" => cfg.key = Some(PathBuf::from(val)),
+            #[cfg(feature = "audit")]
+            "audit_log" => cfg.audit_log = Some(PathBuf::from(val)),
+            #[cfg(feature = "audit")]
+            "audit_key" => cfg.audit_key = Some(PathBuf::from(val)),
+            #[cfg(feature = "audit")]
+            "audit_recipient" => cfg.audit_recipient = Some(val),
             _ => {}
         }
     }
@@ -120,6 +135,26 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.recipient.as_deref(), Some("pqf1abcdef"));
         assert_eq!(cfg.key.as_deref(), Some(Path::new("C:\\keys\\privkey.pem")));
+    }
+
+    #[cfg(feature = "audit")]
+    #[test]
+    fn config_toml_parses_audit_settings() {
+        let cfg = parse_config_toml(
+            "audit_log = \"C:\\\\logs\\\\audit.log\"\n\
+             audit_key = \"C:\\\\keys\\\\sign_privkey.pem\"\n\
+             audit_recipient = \"pqf1auditor\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.audit_log.as_deref(),
+            Some(Path::new("C:\\logs\\audit.log"))
+        );
+        assert_eq!(
+            cfg.audit_key.as_deref(),
+            Some(Path::new("C:\\keys\\sign_privkey.pem"))
+        );
+        assert_eq!(cfg.audit_recipient.as_deref(), Some("pqf1auditor"));
     }
 
     #[test]

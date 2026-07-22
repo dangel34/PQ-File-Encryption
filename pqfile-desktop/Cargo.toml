@@ -16,7 +16,10 @@ path = "src/main.rs"
 # update-check always on too: real downloaded binaries should be able to
 # tell the user a newer release exists; still opt-in at runtime (see
 # Settings' "Check for updates on startup" toggle, off by default).
-pqfile-gui = { workspace = true, features = ["fido2", "update-check"] }
+# audit always on too: the encrypted audit log is native-only by design (see
+# pqfile-gui's audit_log.rs), so the one native GUI target ships it; still
+# opt-in at runtime (empty Settings path fields mean it's off).
+pqfile-gui = { workspace = true, features = ["fido2", "update-check", "audit"] }
 eframe = { workspace = true }
 
 [build-dependencies]

@@ -743,6 +743,57 @@ pub(crate) fn save_result(
     }
 }
 
+/// Saves `data` via [`save_result`], then - if `fec` is set - also generates
+/// and saves a Reed-Solomon forward-error-correction sidecar (`<filename>.fec`)
+/// computed over `data`. Mirrors the CLI's `encrypt --fec` post-pass, adapted
+/// to the GUI's in-memory result flow: no need to re-read a finished file
+/// back off disk here, since `data` already holds the exact ciphertext bytes.
+#[cfg(feature = "fec")]
+pub(crate) fn save_result_with_fec(
+    filename: &str,
+    data: &[u8],
+    native_path: Option<std::path::PathBuf>,
+    confirm_overwrite: bool,
+    fec: bool,
+) -> OpStatus {
+    let status = save_result(filename, data, native_path.clone(), confirm_overwrite);
+    if !fec || !matches!(status, OpStatus::Ok(_)) {
+        return status;
+    }
+    match pqfile::fec::generate_sidecar(&mut &data[..]) {
+        Ok(sidecar) => {
+            let fec_name = format!("{filename}.fec");
+            let fec_path = native_path.map(|p| {
+                let mut s = p.into_os_string();
+                s.push(".fec");
+                std::path::PathBuf::from(s)
+            });
+            // The sidecar write never needs its own overwrite confirmation -
+            // the main file's confirmation already covered this operation.
+            match save_result(&fec_name, &sidecar, fec_path, false) {
+                OpStatus::Ok(_) => status,
+                other => OpStatus::Err(format!(
+                    "encrypted successfully, but writing the FEC sidecar failed: {other:?}"
+                )),
+            }
+        }
+        Err(e) => OpStatus::Err(format!(
+            "encrypted successfully, but generating the FEC sidecar failed: {e}"
+        )),
+    }
+}
+
+#[cfg(not(feature = "fec"))]
+pub(crate) fn save_result_with_fec(
+    filename: &str,
+    data: &[u8],
+    native_path: Option<std::path::PathBuf>,
+    confirm_overwrite: bool,
+    _fec: bool,
+) -> OpStatus {
+    save_result(filename, data, native_path, confirm_overwrite)
+}
+
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn download_bytes(filename: &str, data: &[u8]) {
     if let Err(e) = try_download_bytes(filename, data) {

@@ -21,6 +21,9 @@ zeroize = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 pem = "3"
 qrcode = { version = "0.14", default-features = false, features = ["image"] }
+# Fingerprint hashing for the `audit` feature's log records (never touches
+# the wire format); optional so a non-audit build doesn't pay for it.
+blake3 = { version = "1", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
@@ -41,7 +44,9 @@ serde_json = { version = "1", optional = true }
 # platform restriction - it works the same on native and WASM - so it's on
 # by default here (both the desktop and web builds get it for free) even
 # though the underlying pqfile feature is off by default at the library level.
-default = ["stego"]
+# Forward-error-correction (`fec`) is the same shape: pure Rust, no platform
+# restriction, on by default for the same reason.
+default = ["stego", "fec"]
 # FIDO2 hardware-token second factor for v10 passphrase files (desktop only;
 # mirrors pqfile-cli's `fido2` feature). Off by default: pulls in hidapi
 # (needs libudev-dev on Linux) purely for this one opt-in feature.
@@ -49,6 +54,16 @@ fido2 = ["dep:ctap-hid-fido2", "dep:getrandom"]
 # Steganographic key backup (Bury/Exhume panel in the Keys tab). Mirrors
 # pqfile's own `stego` feature (image-codec dependency tree).
 stego = ["pqfile/stego"]
+# Forward-error-correction sidecar for cold-storage resilience (checkbox on
+# the Encrypt/Decrypt tabs). Mirrors pqfile's own `fec` feature.
+fec = ["pqfile/fec"]
+# Encrypted, signed, hash-chained audit log for encrypt/decrypt events
+# (Settings tab). Off by default, unlike stego/fec: native only (an
+# append-only log needs real persistent storage, not a fit for the web
+# build's download-only model) and needs real key setup before it does
+# anything, closer to fido2's shape than stego/fec's. Mirrors pqfile's own
+# `audit` feature.
+audit = ["pqfile/audit", "dep:blake3"]
 # Update check (Settings toggle + About-window button). Off by default,
 # native-only, and never runs unless the user clicks the button or enables
 # automatic checks - mirrors pqfile-cli's `update-check` feature. Forced on
