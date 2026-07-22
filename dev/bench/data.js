@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784656714034,
+  "lastUpdate": 1784733170610,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -4385,6 +4385,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48109,
             "range": "± 235",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "8a1171560e86ab3a834057fbf41554ced3b526a6",
+          "message": "feat: add forward error correction, resumable encryption, and audit logging features\n\n- Introduced `--fec` option for forward error correction using Reed-Solomon, allowing recovery from bit rot in cold storage.\n- Added `--resume` functionality for encryption, enabling continuation from the last checkpoint without restarting.\n- Implemented an encrypted, signed, hash-chained audit log for encrypt/decrypt operations, enhancing traceability and security.\n- Updated documentation to reflect new features and usage instructions, including changes in `README.md`, `CHANGELOG.md`, and `ROADMAP.md`.\n- Added new error codes for handling specific cases related to the new features.",
+          "timestamp": "2026-07-22T11:09:09-04:00",
+          "tree_id": "423f4972c24f2d098488a7898a340ba788257ace",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/8a1171560e86ab3a834057fbf41554ced3b526a6"
+        },
+        "date": 1784733169959,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 43539,
+            "range": "± 640",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 828669,
+            "range": "± 37164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 132017007,
+            "range": "± 5184547",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 72120,
+            "range": "± 2976",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 832687,
+            "range": "± 39200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 106420101,
+            "range": "± 6268530",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 47442,
+            "range": "± 3379",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 833776,
+            "range": "± 40562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 100224340,
+            "range": "± 5120499",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 74401,
+            "range": "± 1536",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 858589,
+            "range": "± 8916",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 97044461,
+            "range": "± 476368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 34865,
+            "range": "± 134",
             "unit": "ns/iter"
           }
         ]
