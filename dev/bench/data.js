@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784733170610,
+  "lastUpdate": 1784812951240,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -4487,6 +4487,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 34865,
             "range": "± 134",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "45be1ae332c498b5a20d4d5cf4382edd08c63e19",
+          "message": "chore(deps): update dependencies and enhance UI features\n\n- Updated `Cargo.lock` to bump versions of several dependencies, including `clap` to 4.6.4, `libc` to 0.2.189, and `quick-xml` to 0.41.0.\n- Introduced a command palette feature for easier navigation between tabs, accessible via Ctrl/Cmd+K.\n- Added toast notifications for success and error messages during encryption and decryption processes.\n- Enhanced settings to allow users to customize the UI scale and accent color, improving accessibility and user experience.\n- Cleaned up the `deny.toml` file by removing outdated advisories related to `quick-xml` and `foreign-types-macros`.",
+          "timestamp": "2026-07-23T09:18:22-04:00",
+          "tree_id": "f11802a9c900dd4de511198f7f7b65769002bac5",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/45be1ae332c498b5a20d4d5cf4382edd08c63e19"
+        },
+        "date": 1784812950271,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66187,
+            "range": "± 1426",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 978267,
+            "range": "± 3673",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 106995061,
+            "range": "± 395869",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 110233,
+            "range": "± 486",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 990514,
+            "range": "± 17254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93985871,
+            "range": "± 295190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 67914,
+            "range": "± 238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 973501,
+            "range": "± 2683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99891612,
+            "range": "± 458424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 114029,
+            "range": "± 669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1037235,
+            "range": "± 12755",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 101616552,
+            "range": "± 583876",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48334,
+            "range": "± 180",
             "unit": "ns/iter"
           }
         ]
