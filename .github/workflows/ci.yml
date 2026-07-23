@@ -202,7 +202,17 @@ jobs:
           auto-push: true
           alert-threshold: '125%'
           comment-on-alert: true
-          fail-on-alert: true
+          # Comment-only, not a merge gate: this job's wall-clock criterion
+          # numbers only ever compare against the single most recent data
+          # point on a shared ubuntu-latest runner, and the natural run-to-run
+          # noise band (observed ~1.6x peak-to-trough across two dozen
+          # otherwise-unremarkable commits, e.g. encrypt_bytes/1024 ranging
+          # 43539-73175 ns) already exceeds the 125% alert-threshold on its
+          # own, independent of any real code change (see the 2026-07-23
+          # false alarm off of 8a11715's outlier-fast run). The deterministic
+          # iai-callgrind job (iai-bench.yml) is the actual regression gate;
+          # this job stays as a human-readable trend/comment.
+          fail-on-alert: false
           alert-comment-cc-users: '@dangel34'
 
   # ── Secret scanning ────────────────────────────────────────────────────────
