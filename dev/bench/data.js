@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784813577403,
+  "lastUpdate": 1784814449495,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -4691,6 +4691,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48479,
             "range": "± 140",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "24051ee117f50cc96396ba6e2cb3003fafbef341",
+          "message": "chore(ci): update CI workflow to change fail-on-alert behavior\n\n- Modified the `fail-on-alert` setting in the CI workflow to `false`, allowing the job to serve as a trend/comment without blocking merges based on alert thresholds.\n- Added detailed comments explaining the rationale behind this change and the job's purpose in monitoring performance trends.",
+          "timestamp": "2026-07-23T09:43:03-04:00",
+          "tree_id": "ddda05ce38b334eda5834b30b8e97b498116c2b2",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/24051ee117f50cc96396ba6e2cb3003fafbef341"
+        },
+        "date": 1784814448589,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67807,
+            "range": "± 472",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 967476,
+            "range": "± 6014",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 106206005,
+            "range": "± 832324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 111711,
+            "range": "± 569",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 987919,
+            "range": "± 3505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93705550,
+            "range": "± 1082464",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 69697,
+            "range": "± 405",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 971863,
+            "range": "± 11833",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 98997152,
+            "range": "± 202143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 112572,
+            "range": "± 474",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1032565,
+            "range": "± 17972",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99819121,
+            "range": "± 210621",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48421,
+            "range": "± 170",
             "unit": "ns/iter"
           }
         ]
