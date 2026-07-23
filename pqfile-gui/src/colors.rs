@@ -1,4 +1,22 @@
 use eframe::egui::Color32;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// User-chosen accent color overriding `D_ACCENT`/`L_ACCENT`, packed as
+/// `0x00RRGGBB`; `u32::MAX` means "no override, use the theme default". A
+/// process-wide atomic rather than app state threaded through every call site,
+/// since `c_accent` is called directly (not via `ctx.style()`) from ~100
+/// places across every tab.
+static ACCENT_OVERRIDE: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// Sets (or clears, with `None`) the custom accent color applied by every
+/// subsequent `c_accent` call, in both dark and light mode alike.
+pub(crate) fn set_accent_override(color: Option<Color32>) {
+    let packed = match color {
+        Some(c) => (u32::from(c.r()) << 16) | (u32::from(c.g()) << 8) | u32::from(c.b()),
+        None => u32::MAX,
+    };
+    ACCENT_OVERRIDE.store(packed, Ordering::Relaxed);
+}
 
 pub(crate) const D_BASE: Color32 = Color32::from_rgb(30, 30, 46);
 pub(crate) const D_MANTLE: Color32 = Color32::from_rgb(24, 24, 37);
@@ -88,6 +106,13 @@ pub(crate) fn c_text(d: bool) -> Color32 {
     }
 }
 pub(crate) fn c_accent(d: bool) -> Color32 {
+    let packed = ACCENT_OVERRIDE.load(Ordering::Relaxed);
+    if packed != u32::MAX {
+        let r = ((packed >> 16) & 0xFF) as u8;
+        let g = ((packed >> 8) & 0xFF) as u8;
+        let b = (packed & 0xFF) as u8;
+        return Color32::from_rgb(r, g, b);
+    }
     if d {
         D_ACCENT
     } else {

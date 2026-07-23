@@ -1,7 +1,5 @@
 use crate::app::PqfileApp;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::colors::c_overlay;
-use crate::colors::{c_card, c_red, c_subtext, c_surface0, c_surface1, c_text};
+use crate::colors::{c_card, c_overlay, c_red, c_subtext, c_surface0, c_surface1, c_text};
 use crate::theme::apply_theme;
 use crate::types::{KeygenAlgorithm, OpStatus, Tab};
 use crate::widgets::{card, section_label, setting_toggle, tab_heading_help};
@@ -66,6 +64,70 @@ impl PqfileApp {
             if self.settings.dark_mode != prev {
                 apply_theme(ctx, self.settings.dark_mode);
             }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Accent color").size(13.0).color(c_text(dark)));
+                let mut rgb = self.settings.accent_color.unwrap_or_else(|| {
+                    let c = crate::colors::c_accent(dark);
+                    (c.r(), c.g(), c.b())
+                });
+                let mut rgb_arr = [rgb.0, rgb.1, rgb.2];
+                if ui.color_edit_button_srgb(&mut rgb_arr).changed() {
+                    rgb = (rgb_arr[0], rgb_arr[1], rgb_arr[2]);
+                    self.settings.accent_color = Some(rgb);
+                    crate::colors::set_accent_override(Some(egui::Color32::from_rgb(
+                        rgb.0, rgb.1, rgb.2,
+                    )));
+                    apply_theme(ctx, self.settings.dark_mode);
+                }
+                if self.settings.accent_color.is_some()
+                    && ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Reset").size(12.0).color(c_overlay(dark)),
+                            )
+                            .fill(c_surface0(dark)),
+                        )
+                        .clicked()
+                {
+                    self.settings.accent_color = None;
+                    crate::colors::set_accent_override(None);
+                    apply_theme(ctx, self.settings.dark_mode);
+                }
+            });
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("UI scale").size(13.0).color(c_text(dark)));
+                let mut scale = self.settings.ui_scale;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut scale, 0.8..=1.5)
+                            .step_by(0.05)
+                            .fixed_decimals(2)
+                            .suffix("x"),
+                    )
+                    .changed()
+                {
+                    self.settings.ui_scale = scale;
+                    ctx.set_zoom_factor(scale);
+                }
+            });
+            ui.label(
+                RichText::new(
+                    "Scales the whole interface up or down - useful for high-DPI \
+                     displays or low vision.",
+                )
+                .size(11.5)
+                .color(c_subtext(dark)),
+            );
         });
         ui.add_space(10.0);
     }

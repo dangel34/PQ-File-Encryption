@@ -337,11 +337,11 @@ version = "1.8.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
-version = "4.6.3"
+version = "4.6.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_derive]]
-version = "4.6.3"
+version = "4.6.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_mangen]]
@@ -646,6 +646,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.font-types]]
 version = "0.11.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.foreign-types-macros]]
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.fsevent-sys]]
@@ -961,7 +965,7 @@ version = "0.13.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.libc]]
-version = "0.2.188"
+version = "0.2.189"
 criteria = "safe-to-deploy"
 
 [[exemptions.libcrux-intrinsics]]
@@ -1385,7 +1389,7 @@ version = "2.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.quick-xml]]
-version = "0.39.4"
+version = "0.41.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.quote]]
@@ -1513,7 +1517,7 @@ version = "0.8.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-pki-types]]
-version = "1.15.0"
+version = "1.15.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-platform-verifier]]
@@ -1713,7 +1717,7 @@ version = "2.0.119"
 criteria = "safe-to-deploy"
 
 [[exemptions.syn]]
-version = "3.0.2"
+version = "3.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.tempfile]]
@@ -1905,11 +1909,11 @@ version = "0.2.126"
 criteria = "safe-to-run"
 
 [[exemptions.wayland-backend]]
-version = "0.3.15"
+version = "0.3.16"
 criteria = "safe-to-deploy"
 
 [[exemptions.wayland-client]]
-version = "0.31.14"
+version = "0.31.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.wayland-csd-frame]]
@@ -1941,7 +1945,7 @@ version = "0.3.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.wayland-scanner]]
-version = "0.31.10"
+version = "0.31.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.wayland-sys]]

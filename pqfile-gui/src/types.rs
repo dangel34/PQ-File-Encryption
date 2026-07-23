@@ -33,6 +33,23 @@ pub(crate) const ADVANCED_TABS: [Tab; 7] = [
     Tab::Clipboard,
 ];
 
+/// Every tab, in nav-row order followed by the "More Tools" order, with
+/// Settings last - the full set the command palette searches over.
+pub(crate) const ALL_TABS: [Tab; 12] = [
+    Tab::Keys,
+    Tab::Keygen,
+    Tab::Encrypt,
+    Tab::Decrypt,
+    Tab::Sign,
+    Tab::Signcrypt,
+    Tab::SealedSender,
+    Tab::Archive,
+    Tab::Shamir,
+    Tab::Inspect,
+    Tab::Clipboard,
+    Tab::Settings,
+];
+
 /// Stable string key (for URL-hash deep-linking and persisted last-tab) and
 /// display label (icon + text, for the nav row and "More Tools" menu) for a
 /// tab. [`tab_key`]/[`tab_label`] are thin accessors over this single match
@@ -508,8 +525,23 @@ pub(crate) enum ShamirSubTab {
     Reconstruct,
 }
 
+/// Sort order for the key-pair list in the Keys tab (native only).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(PartialEq, Default, Clone, Copy)]
+pub(crate) enum KeySortOrder {
+    #[default]
+    NameAsc,
+    NameDesc,
+    ExpirySoonest,
+}
+
 pub(crate) struct Settings {
     pub(crate) dark_mode: bool,
+    /// UI zoom applied via `egui::Context::set_zoom_factor`; 1.0 is egui's default.
+    pub(crate) ui_scale: f32,
+    /// Custom accent color overriding the theme's built-in accent, or `None`
+    /// to use the theme default. Applies to both dark and light mode alike.
+    pub(crate) accent_color: Option<(u8, u8, u8)>,
     pub(crate) auto_clear: bool,
     pub(crate) confirm_overwrite: bool,
     /// Default KEM algorithm selected in the Keygen tab on startup.
@@ -554,6 +586,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             dark_mode: true,
+            ui_scale: 1.0,
+            accent_color: None,
             auto_clear: false,
             confirm_overwrite: false,
             default_algorithm: KeygenAlgorithm::default(),
@@ -575,6 +609,18 @@ impl Default for Settings {
     }
 }
 
+/// Parses a 6-digit hex color string ("RRGGBB") into RGB bytes; returns
+/// `None` for an empty or malformed string (an unset custom accent).
+fn parse_accent_hex(s: &str) -> Option<(u8, u8, u8)> {
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(s.get(0..2)?, 16).ok()?;
+    let g = u8::from_str_radix(s.get(2..4)?, 16).ok()?;
+    let b = u8::from_str_radix(s.get(4..6)?, 16).ok()?;
+    Some((r, g, b))
+}
+
 /// Reads `key` from storage and parses it, falling back to `default` if the
 /// key is absent or fails to parse.
 fn get_or<T: std::str::FromStr>(storage: &dyn eframe::Storage, key: &str, default: T) -> T {
@@ -587,6 +633,10 @@ fn get_or<T: std::str::FromStr>(storage: &dyn eframe::Storage, key: &str, defaul
 impl Settings {
     pub(crate) fn load(storage: &dyn eframe::Storage) -> Self {
         let dark_mode = get_or(storage, "dark_mode", true);
+        let ui_scale = get_or(storage, "ui_scale", 1.0f32).clamp(0.7, 1.6);
+        let accent_color = storage
+            .get_string("accent_color")
+            .and_then(|s| parse_accent_hex(&s));
         let auto_clear = get_or(storage, "auto_clear", false);
         let confirm_overwrite = get_or(storage, "confirm_overwrite", false);
         let default_algorithm = match storage
@@ -622,6 +672,8 @@ impl Settings {
             .unwrap_or_default();
         Self {
             dark_mode,
+            ui_scale,
+            accent_color,
             auto_clear,
             confirm_overwrite,
             default_algorithm,
@@ -644,6 +696,13 @@ impl Settings {
 
     pub(crate) fn save(&self, storage: &mut dyn eframe::Storage) {
         storage.set_string("dark_mode", self.dark_mode.to_string());
+        storage.set_string("ui_scale", self.ui_scale.to_string());
+        storage.set_string(
+            "accent_color",
+            self.accent_color
+                .map(|(r, g, b)| format!("{r:02x}{g:02x}{b:02x}"))
+                .unwrap_or_default(),
+        );
         storage.set_string("auto_clear", self.auto_clear.to_string());
         storage.set_string("confirm_overwrite", self.confirm_overwrite.to_string());
         let alg_str = match self.default_algorithm {

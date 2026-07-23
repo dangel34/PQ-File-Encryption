@@ -21,18 +21,6 @@ ignore = [
     # ttf-parser is unmaintained (RUSTSEC-2026-0192); it is a transitive dependency
     # of eframe/egui and cannot be updated from this repo.
     "RUSTSEC-2026-0192",
-    # quick-xml < 0.41 DoS advisories (quadratic duplicate-attribute check, and
-    # unbounded NsReader namespace allocation). Since zbus_xml 5.2.0 dropped its
-    # quick-xml dependency, the only remaining path is the Linux GUI stack:
-    # wayland-scanner uses quick-xml at BUILD time on bundled Wayland protocol
-    # XML (not attacker-controlled). Impact is CPU/memory DoS only, no memory
-    # unsafety, and no remote input reaches this parser in pqfile. The parent
-    # (wayland-scanner 0.31.10) is at its latest release and still requires
-    # quick-xml ^0.39, so no fix can be applied from this repo yet.
-    # TODO: remove both entries once wayland-scanner moves to quick-xml >= 0.41
-    # and `cargo update` picks it up.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
     # proc-macro-error2 is unmaintained (RUSTSEC-2026-0173); pulled in transitively
     # via two independent paths, both non-wasm32 dev-dependencies only, never
     # compiled into a shipped binary or the WASM bundle: hax-lib-macros ->

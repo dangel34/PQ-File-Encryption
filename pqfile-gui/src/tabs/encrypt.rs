@@ -412,6 +412,20 @@ impl PqfileApp {
         self.encrypt_wasm_done += 1;
 
         if self.encrypt_wasm_queue.is_empty() {
+            let ok = self
+                .encrypt_files
+                .iter()
+                .filter(|e| matches!(e.status, OpStatus::Ok(_)))
+                .count();
+            let err = self.encrypt_files.len() - ok;
+            if err == 0 {
+                self.toasts.success(format!(
+                    "{ok} file{} encrypted successfully.",
+                    if ok == 1 { "" } else { "s" }
+                ));
+            } else {
+                self.toasts.error(format!("{ok} succeeded, {err} failed."));
+            }
             // All done: apply auto-clear if every file succeeded.
             let all_ok = self.settings.auto_clear
                 && self

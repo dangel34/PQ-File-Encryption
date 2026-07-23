@@ -2,12 +2,14 @@ mod app;
 #[cfg(all(not(target_arch = "wasm32"), feature = "audit"))]
 mod audit_log;
 mod colors;
+mod command_palette;
 #[cfg(all(not(target_arch = "wasm32"), feature = "fido2"))]
 mod fido2;
 #[path = "../../pqfile-cli/src/hex_lines.rs"]
 mod hex_lines;
 mod tabs;
 mod theme;
+mod toast;
 mod types;
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 mod update_check;

@@ -436,6 +436,23 @@ pub struct PqfileApp {
     /// `wasm32-unknown-unknown` the same way `SystemTime::now()` does, and a
     /// short client-side auto-clear timer has no need for a monotonic clock.
     pub(crate) clipboard_last_used: Option<u64>,
+
+    // ── Toast notifications ───────────────────────────────────────────────
+    pub(crate) toasts: crate::toast::Toasts,
+
+    // ── Command palette (Ctrl/Cmd+K) ──────────────────────────────────────
+    pub(crate) command_palette_open: bool,
+    pub(crate) command_palette_query: String,
+    pub(crate) command_palette_selected: usize,
+    /// Set when the palette opens; consumed (and cleared) the next frame to
+    /// focus the search box exactly once, rather than every frame.
+    pub(crate) command_palette_focus_pending: bool,
+
+    // ── Keys tab search/sort (native only) ────────────────────────────────
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) keys_filter: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) keys_sort: crate::types::KeySortOrder,
 }
 
 impl Default for PqfileApp {
@@ -721,6 +738,15 @@ impl Default for PqfileApp {
             loader_hidden: false,
             #[cfg(target_arch = "wasm32")]
             wasm_saved_pubkeys: Vec::new(),
+            toasts: crate::toast::Toasts::default(),
+            command_palette_open: false,
+            command_palette_query: String::new(),
+            command_palette_selected: 0,
+            command_palette_focus_pending: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            keys_filter: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            keys_sort: crate::types::KeySortOrder::default(),
         }
     }
 }
@@ -728,7 +754,13 @@ impl Default for PqfileApp {
 impl PqfileApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings = cc.storage.map(Settings::load).unwrap_or_default();
+        crate::colors::set_accent_override(
+            settings
+                .accent_color
+                .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b)),
+        );
         apply_theme(&cc.egui_ctx, settings.dark_mode);
+        cc.egui_ctx.set_zoom_factor(settings.ui_scale);
         #[cfg(not(target_arch = "wasm32"))]
         let keys = cc.storage.map(load_keys).unwrap_or_default();
         #[cfg(target_arch = "wasm32")]
@@ -836,6 +868,7 @@ impl eframe::App for PqfileApp {
         #[cfg(target_arch = "wasm32")]
         self.tick_encrypt_wasm(&ctx);
         self.handle_dropped_files(&ctx);
+        self.toggle_command_palette(&ctx);
 
         // Clipboard auto-clear timer.
         if self.settings.clipboard_auto_clear {
@@ -971,6 +1004,12 @@ impl eframe::App for PqfileApp {
                     });
                 });
             });
+
+        // ── Command palette (Ctrl/Cmd+K) ─────────────────────────────────────
+        self.show_command_palette(&ctx, dark);
+
+        // ── Toast notifications ──────────────────────────────────────────────
+        self.toasts.show(&ctx, dark);
 
         // ── About modal ────────────────────────────────────────────────────
         if self.show_about {
@@ -1284,14 +1323,18 @@ impl PqfileApp {
                 .filter(|e| matches!(e.status, OpStatus::Err(_)))
                 .count();
             if ok + err > 0 {
-                self.encrypt_batch_summary = Some(if err == 0 {
-                    OpStatus::Ok(format!(
+                if err == 0 {
+                    let msg = format!(
                         "{ok} file{} encrypted successfully.",
                         if ok == 1 { "" } else { "s" }
-                    ))
+                    );
+                    self.toasts.success(msg.clone());
+                    self.encrypt_batch_summary = Some(OpStatus::Ok(msg));
                 } else {
-                    OpStatus::Err(format!("{ok} succeeded, {err} failed."))
-                });
+                    let msg = format!("{ok} succeeded, {err} failed.");
+                    self.toasts.error(msg.clone());
+                    self.encrypt_batch_summary = Some(OpStatus::Err(msg));
+                }
             }
             // Record successfully encrypted source files as recent.
             for e in &self.encrypt_files {
@@ -1344,14 +1387,18 @@ impl PqfileApp {
                 .filter(|e| matches!(e.status, OpStatus::Err(_)))
                 .count();
             if ok + err > 0 {
-                self.decrypt_batch_summary = Some(if err == 0 {
-                    OpStatus::Ok(format!(
+                if err == 0 {
+                    let msg = format!(
                         "{ok} file{} decrypted successfully.",
                         if ok == 1 { "" } else { "s" }
-                    ))
+                    );
+                    self.toasts.success(msg.clone());
+                    self.decrypt_batch_summary = Some(OpStatus::Ok(msg));
                 } else {
-                    OpStatus::Err(format!("{ok} succeeded, {err} failed."))
-                });
+                    let msg = format!("{ok} succeeded, {err} failed.");
+                    self.toasts.error(msg.clone());
+                    self.decrypt_batch_summary = Some(OpStatus::Err(msg));
+                }
             }
             // Record successfully decrypted source files as recent.
             for e in &self.decrypt_files {
@@ -1497,6 +1544,15 @@ impl PqfileApp {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref handle) = self.watch_handle {
             while let Ok(msg) = handle.log_rx.try_recv() {
+                // Toasted here (not just appended to `watch_log`) since the
+                // watcher runs in the background - the user may well be on a
+                // different tab than Encrypt's watchfolder panel when a file
+                // lands, with no other way to notice the result.
+                match msg.level {
+                    WatchLogLevel::Ok => self.toasts.success(msg.text.clone()),
+                    WatchLogLevel::Err => self.toasts.error(msg.text.clone()),
+                    WatchLogLevel::Warn => {}
+                }
                 self.watch_log.push(msg);
                 if self.watch_log.len() > 200 {
                     self.watch_log.drain(..100);

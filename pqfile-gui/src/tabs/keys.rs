@@ -155,12 +155,101 @@ impl PqfileApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn show_keys_native(&mut self, ui: &mut egui::Ui, dark: bool) {
-        use crate::types::KeyEntry;
+        use crate::types::{expiry_days_remaining, KeyEntry, KeySortOrder};
         use pqfile::keygen;
 
         section_label(ui, "KEY PAIRS", dark);
 
         let mut action: Option<KeyAction> = None;
+
+        // Search + sort row - only worth showing once there's more than a
+        // couple of keys to scan through.
+        if self.keys.len() > 2 {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.keys_filter)
+                        .hint_text("Filter by name or fingerprint\u{2026}")
+                        .desired_width(220.0),
+                );
+                ui.add_space(8.0);
+                egui::ComboBox::from_id_salt("keys_sort_order")
+                    .selected_text(match self.keys_sort {
+                        KeySortOrder::NameAsc => "Name (A-Z)",
+                        KeySortOrder::NameDesc => "Name (Z-A)",
+                        KeySortOrder::ExpirySoonest => "Expiry (soonest)",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.keys_sort,
+                            KeySortOrder::NameAsc,
+                            "Name (A-Z)",
+                        );
+                        ui.selectable_value(
+                            &mut self.keys_sort,
+                            KeySortOrder::NameDesc,
+                            "Name (Z-A)",
+                        );
+                        ui.selectable_value(
+                            &mut self.keys_sort,
+                            KeySortOrder::ExpirySoonest,
+                            "Expiry (soonest)",
+                        );
+                    });
+            });
+            ui.add_space(8.0);
+        }
+
+        // Read each key's expiry once up front (needed for both the sort and
+        // the row itself), then filter/sort by *original* index so the
+        // actions below (which index into `self.keys` directly) stay correct.
+        let mut rows: Vec<(usize, Option<String>)> = self
+            .keys
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let expiry = std::fs::read_to_string(&entry.pubkey_path)
+                    .ok()
+                    .as_deref()
+                    .and_then(read_pem_expiry);
+                (i, expiry)
+            })
+            .filter(|(i, _)| {
+                if self.keys_filter.is_empty() {
+                    return true;
+                }
+                let needle = self.keys_filter.to_lowercase();
+                let entry = &self.keys[*i];
+                entry.label.to_lowercase().contains(&needle)
+                    || entry.fingerprint.to_lowercase().contains(&needle)
+            })
+            .collect();
+
+        match self.keys_sort {
+            KeySortOrder::NameAsc => {
+                rows.sort_by(|a, b| {
+                    self.keys[a.0]
+                        .label
+                        .to_lowercase()
+                        .cmp(&self.keys[b.0].label.to_lowercase())
+                });
+            }
+            KeySortOrder::NameDesc => {
+                rows.sort_by(|a, b| {
+                    self.keys[b.0]
+                        .label
+                        .to_lowercase()
+                        .cmp(&self.keys[a.0].label.to_lowercase())
+                });
+            }
+            KeySortOrder::ExpirySoonest => {
+                rows.sort_by_key(|(_, expiry)| {
+                    expiry
+                        .as_deref()
+                        .and_then(expiry_days_remaining)
+                        .unwrap_or(i64::MAX)
+                });
+            }
+        }
 
         card(ui, c_card(dark), c_surface1(dark), |ui| {
             if self.keys.is_empty() {
@@ -169,20 +258,22 @@ impl PqfileApp {
                         .size(13.0)
                         .color(c_overlay(dark)),
                 );
+            } else if rows.is_empty() {
+                ui.label(
+                    RichText::new("No keys match this filter.")
+                        .size(13.0)
+                        .color(c_overlay(dark)),
+                );
             } else {
-                for (i, entry) in self.keys.iter().enumerate() {
-                    ui.add_space(if i == 0 { 0.0 } else { 10.0 });
-                    // Read expiry from disk (PEM file comment).
-                    let expiry: Option<String> = std::fs::read_to_string(&entry.pubkey_path)
-                        .ok()
-                        .as_deref()
-                        .and_then(read_pem_expiry);
-
-                    let row_action = key_entry_row(ui, i, entry, expiry.as_deref(), dark);
+                let n = rows.len();
+                for (row_pos, (i, expiry)) in rows.iter().enumerate() {
+                    ui.add_space(if row_pos == 0 { 0.0 } else { 10.0 });
+                    let entry = &self.keys[*i];
+                    let row_action = key_entry_row(ui, *i, entry, expiry.as_deref(), dark);
                     if action.is_none() {
                         action = row_action;
                     }
-                    if i + 1 < self.keys.len() {
+                    if row_pos + 1 < n {
                         ui.add_space(6.0);
                         ui.separator();
                     }
@@ -234,6 +325,8 @@ impl PqfileApp {
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_else(|| "Keys".to_owned());
                         if !self.keys.iter().any(|k| k.pubkey_path == pub_path) {
+                            self.toasts
+                                .success(format!("Imported key pair \"{label}\"."));
                             self.keys.push(KeyEntry {
                                 label,
                                 pubkey_path: pub_path,
