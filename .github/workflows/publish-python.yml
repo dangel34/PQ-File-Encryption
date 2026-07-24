@@ -1,12 +1,5 @@
 name: Publish Python bindings
 
-# Scaffolding only: this has never actually run end-to-end (a "pending
-# publisher" must be registered on PyPI first - see the `publish` job's
-# comment below - and nothing here can trigger a real GitHub Release from
-# this environment to exercise it anyway). Structure and YAML are validated;
-# the maturin-action target aliases follow its documented usage but are
-# unverified against a real run.
-#
 # Publishes via PyPI Trusted Publishing (OIDC) rather than a stored API
 # token - no PYPI_API_TOKEN secret needed, just the one-time PyPI-side
 # "pending publisher" registration.
@@ -21,9 +14,23 @@ name: Publish Python bindings
 # now (whatever actions/setup-python installs) - a full cp39-cp314 matrix, or
 # switching to PyO3's `abi3` feature to build one wheel per platform instead
 # of one per interpreter, is future work, not done here.
+#
+# workflow_dispatch exists for exactly what happened the first time this ran
+# for real (v4.3.3): a newly-added workflow file is disabled by default in
+# the Actions tab until a maintainer enables it, so the `release: published`
+# event fired but the run failed at startup before any job could execute -
+# and a startup_failure run cannot be retried via `gh run rerun` (GitHub
+# rejects it outright), nor can the same `release: published` event be
+# refired without unpublishing/republishing the release. `workflow_dispatch`
+# gives a way to run it directly against an already-published release's tag.
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v4.3.3) - only needed for a manual re-run; release-triggered runs infer it automatically'
+        required: true
 
 jobs:
   build-wheels:
@@ -46,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
           persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -77,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
           persist-credentials: false
 
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
