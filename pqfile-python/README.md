@@ -2,7 +2,7 @@
 
 Python bindings for [`pqfile`](https://github.com/dangel34/PQ-File-Encryption), a
 quantum-resistant file encryption library: ML-KEM (512/768/1024) and hybrid
-X25519+ML-KEM-768 key encapsulation, ChaCha20-Poly1305 authenticated
+X25519+ML-KEM-768 key encapsulation with ChaCha20-Poly1305 authenticated
 encryption. Built with [PyO3](https://pyo3.rs) and packaged with
 [maturin](https://www.maturin.rs); the crypto itself lives entirely in the
 `pqfile` Rust crate, not in this binding layer.

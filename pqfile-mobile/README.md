@@ -3,7 +3,7 @@
 Kotlin (Android) and Swift (iOS) bindings for
 [`pqfile`](https://github.com/dangel34/PQ-File-Encryption), a quantum-resistant
 file encryption library: ML-KEM (512/768/1024) and hybrid X25519+ML-KEM-768
-key encapsulation, ChaCha20-Poly1305 authenticated encryption. Generated from
+key encapsulation with ChaCha20-Poly1305 authenticated encryption. Generated from
 one Rust interface definition with [uniffi-rs](https://mozilla.github.io/uniffi-rs/)
 (the same tool Firefox uses for its Android/iOS bindings); the crypto itself
 lives entirely in the `pqfile` Rust crate, not in this binding layer.
