@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784814449495,
+  "lastUpdate": 1784907521254,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -4793,6 +4793,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48421,
             "range": "± 170",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "91914271282498f530d85699e38ab4d1f6e3d911",
+          "message": "fix: avoid gitleaks false positive on ChaCha20-Poly1305 in binding READMEs\n\n\"key encapsulation, ChaCha20-Poly1305 authenticated\" tripped gitleaks'\ngeneric-api-key rule (comma before a mixed-case/digit/hyphen token reads\nlike a key=value assignment to its entropy heuristic) in all three new\nbinding READMEs, failing CI. Reworded to \"with\" instead of a comma; the\nidentical phrase in the main README.md was never affected because its\nsurrounding sentence structure doesn't trigger the same pattern.\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-24T11:34:30-04:00",
+          "tree_id": "44625d7bc892bce11f081fac09e415f4a5cd6807",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/91914271282498f530d85699e38ab4d1f6e3d911"
+        },
+        "date": 1784907520307,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66137,
+            "range": "± 878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 975587,
+            "range": "± 4575",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 107939595,
+            "range": "± 401618",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 109027,
+            "range": "± 541",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 999885,
+            "range": "± 11368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 94320800,
+            "range": "± 868285",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68507,
+            "range": "± 385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 979730,
+            "range": "± 3178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 100651971,
+            "range": "± 1643659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 111780,
+            "range": "± 531",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1047131,
+            "range": "± 11454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 101551594,
+            "range": "± 717420",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48450,
+            "range": "± 951",
             "unit": "ns/iter"
           }
         ]
