@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784911465916,
+  "lastUpdate": 1784912860436,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -5099,6 +5099,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48296,
             "range": "± 138",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "ce17e2d176759d4fc7f0e217cc365f97b054f4d8",
+          "message": "fix: add workflow_dispatch to publish-python.yml for manual re-runs\n\nThe v4.3.3 release-published event fired this workflow for the first\ntime, but it failed with startup_failure: a newly-added workflow file\nis disabled by default until a maintainer enables it in the Actions\ntab, and a startup_failure run cannot be retried via `gh run rerun`\n(GitHub rejects it outright) or by re-firing the same release event.\n\nAdds a workflow_dispatch trigger with a required `tag` input so an\nalready-published release can be published to PyPI manually without\nneeding to unpublish/republish the GitHub release.\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-24T13:01:48-04:00",
+          "tree_id": "fa9fc9196d9ddc1885a54a264372b32e13b74e11",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/ce17e2d176759d4fc7f0e217cc365f97b054f4d8"
+        },
+        "date": 1784912859643,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67410,
+            "range": "± 438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 982418,
+            "range": "± 2629",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 107163647,
+            "range": "± 419890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 109747,
+            "range": "± 931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 988763,
+            "range": "± 6893",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93676686,
+            "range": "± 306117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68756,
+            "range": "± 271",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 974321,
+            "range": "± 13335",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99611844,
+            "range": "± 246546",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 113263,
+            "range": "± 1011",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1039363,
+            "range": "± 24117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 100541157,
+            "range": "± 653609",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48281,
+            "range": "± 177",
             "unit": "ns/iter"
           }
         ]
