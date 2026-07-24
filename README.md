@@ -780,10 +780,10 @@ See [pqfile-python/README.md](pqfile-python/README.md) for the full API and buil
 
 ### Node.js (`pqfile-node/`)
 
-Built with [napi-rs](https://napi.rs) (package name `pqfile` on npm, once published). Every function returns a `Promise` and runs on libuv's worker thread pool rather than blocking Node's event loop.
+Built with [napi-rs](https://napi.rs) (package name `@dangel34/pqfile` on npm - the unscoped `pqfile` is blocked as too similar to the existing `vfile` package). Every function returns a `Promise` and runs on libuv's worker thread pool rather than blocking Node's event loop.
 
 ```js
-const pqfile = require("pqfile");
+const pqfile = require("@dangel34/pqfile");
 
 const { publicKey, privateKey } = await pqfile.keygen(); // or keygenHybrid(), or keygen(512/1024)
 const ciphertext = await pqfile.encryptBytes(publicKey, Buffer.from("hello, post-quantum world"));

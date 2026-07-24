@@ -1,34 +1,41 @@
 name: Publish Node.js bindings
 
-# Scaffolding only: this has never actually run end-to-end (npm's Trusted
-# Publisher isn't registered for the "pqfile" package yet - see the `publish`
-# job's comment below - nothing here can trigger a real GitHub Release from
-# this environment anyway, and the macOS/cross legs of the build matrix were
-# never exercised locally - only x86_64-pc-windows-msvc and
-# x86_64-unknown-linux-gnu were ever actually built on this machine). YAML and
-# the `napi` CLI command shapes are correct per its documented usage
-# (`napi create-npm-dir` / `napi artifacts` / `napi prepublish`), not verified
-# against a real run.
+# Scaffolding only: this has never actually run end-to-end via CI (npm's
+# Trusted Publisher isn't registered for the "@dangel34/pqfile" package yet -
+# see the `publish` job's comment below - and nothing here can trigger a real
+# GitHub Release from this environment anyway). The macOS/cross legs of the
+# build matrix were never exercised locally - only x86_64-pc-windows-msvc was
+# ever actually built on this machine. YAML and the `napi` CLI command shapes
+# are correct per its documented usage (`napi create-npm-dir` /
+# `napi artifacts` / `napi prepublish`).
 #
 # Fires once a GitHub Release is published (human-gated), mirroring
 # publish.yml's crates.io convention and publish-python.yml. Builds the
-# native addon per platform (matching package.json's `napi.targets`), then
+# native addon per platform (matching package.json's `napi.triples`), then
 # arranges them into napi-rs's standard per-platform optionalDependencies
 # packages (`napi create-npm-dir` / `napi artifacts`) and publishes all of
-# them plus the main `pqfile` package (`napi prepublish`). aarch64-linux-gnu
-# is deliberately not in the target list yet - cross-compiling it needs a
-# zig toolchain step this hasn't been wired up for, see pqfile-node/README.md.
+# them plus the main `@dangel34/pqfile` package (`napi prepublish`).
+# aarch64-linux-gnu is deliberately not in the target list yet -
+# cross-compiling it needs a zig toolchain step this hasn't been wired up
+# for, see pqfile-node/README.md.
 #
 # Publishes via npm Trusted Publishing (OIDC) rather than a stored token -
 # npm's own token-creation UI now warns against a 2FA-bypass automation token
 # for CI and points at Trusted Publishing instead, so there is no NPM_TOKEN
 # secret here at all. Unlike PyPI's "pending publisher" (which can be
 # registered before the project exists), npm's Trusted Publisher is
-# configured from an existing package's own Settings page - "pqfile" doesn't
-# exist on npm yet, so the very first publish will need to happen some other
-# way (a one-off `napi prepublish` run from a maintainer's own authenticated
-# npm login) before Trusted Publishing can be registered and this workflow
-# can take over.
+# configured from an existing package's own Settings page, so the very first
+# publish had to happen manually first: `napi prepublish`'s own automated
+# flow can't complete npm's browser-based OTP challenge either (it shells out
+# to `npm publish` as a non-interactive subprocess, which just errors on
+# EOTP), so that first publish was a plain, interactive `npm publish` per
+# package from a maintainer's own authenticated npm login. That bootstrap
+# publish is also what surfaced the package needing to be renamed to the
+# scoped `@dangel34/pqfile` in the first place (npm rejected the unscoped
+# "pqfile" as too similar to the existing "vfile" package) - the `publish`
+# job's Trusted Publisher target below already reflects that rename, but the
+# publisher itself still needs registering before this workflow can take
+# over.
 on:
   release:
     types: [published]
@@ -98,7 +105,7 @@ jobs:
     # id-token: write lets the npm CLI mint the OIDC token npm's Trusted
     # Publishing exchanges for a short-lived publish credential - no
     # NPM_TOKEN secret needed. Requires npm's "Trusted Publisher" registered
-    # on the pqfile package (npmjs.com -> package -> Settings -> Trusted
+    # on the @dangel34/pqfile package (npmjs.com -> package -> Settings -> Trusted
     # Publisher): GitHub Actions, owner dangel34, repo PQ-File-Encryption,
     # workflow publish-node.yml, environment release.
     permissions:
@@ -143,17 +150,20 @@ jobs:
         id: check
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          http=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/pqfile/${VERSION}")
+          # Scoped package: the registry API needs the `/` between scope and
+          # name URL-encoded (%2f) - an unencoded slash is parsed as a version
+          # segment instead and the request 504s rather than 404ing cleanly.
+          http=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/@dangel34%2fpqfile/${VERSION}")
           if [ "$http" = "200" ]; then
-            echo "pqfile $VERSION already on npm -- skipping"
+            echo "@dangel34/pqfile $VERSION already on npm -- skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "pqfile $VERSION not yet on npm -- will publish"
+            echo "@dangel34/pqfile $VERSION not yet on npm -- will publish"
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       # Creates npm/<platform>/ per-target package directories from the
-      # `napi.targets` list in package.json, then copies each downloaded
+      # `napi.triples` config in package.json, then copies each downloaded
       # .node file into the matching directory.
       - name: Arrange per-platform packages
         if: steps.check.outputs.skip == 'false'
@@ -162,10 +172,23 @@ jobs:
           npx --no-install napi artifacts --dir artifacts
 
       # Bumps every npm/<platform>/package.json to the root version and runs
-      # `npm publish` for each one, then for the root `pqfile` package itself
-      # (which depends on them via optionalDependencies). No NODE_AUTH_TOKEN
-      # here - the pinned npm CLI performs the OIDC exchange itself using the
-      # id-token: write permission above.
-      - name: Publish per-platform packages and the main package
+      # `npm publish` for each one. No NODE_AUTH_TOKEN here - the pinned npm
+      # CLI performs the OIDC exchange itself using the id-token: write
+      # permission above.
+      #
+      # `napi prepublish` only ever publishes the per-platform packages in
+      # this loop - confirmed by reading its source
+      # (@napi-rs/cli/scripts/index.js's PrePublishCommand.execute()) after a
+      # manual bootstrap publish needed an extra `npm publish` step this
+      # command never performed. It does still handle updating the root
+      # package.json's `optionalDependencies` to point at the platform
+      # packages' versions, which the explicit `npm publish` below depends on.
+      - name: Publish per-platform packages
         if: steps.check.outputs.skip == 'false'
         run: npx --no-install napi prepublish -p npm --skip-gh-release
+
+      # napi prepublish (above) never publishes the root package itself - see
+      # its comment. Do that explicitly here.
+      - name: Publish the main package
+        if: steps.check.outputs.skip == 'false'
+        run: npm publish

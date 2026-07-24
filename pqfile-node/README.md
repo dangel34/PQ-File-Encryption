@@ -18,10 +18,13 @@ npm install
 npm run build
 ```
 
+Published on npm as `@dangel34/pqfile` (the unscoped name `pqfile` is blocked -
+npm treats it as too similar to the existing `vfile` package).
+
 ## Quick start
 
 ```js
-const pqfile = require("pqfile");
+const pqfile = require("@dangel34/pqfile");
 
 // Generate a key pair
 const { publicKey, privateKey } = await pqfile.keygen(); // level defaults to 768; also 512, 1024
@@ -76,21 +79,30 @@ every push/PR. `publish-node.yml` is scaffolding for the actual npm release -
 it cross-builds the native addon for Windows/Linux x64 and macOS
 (x86_64 and aarch64), arranges them into napi-rs's standard per-platform
 `optionalDependencies` packages (`napi create-npm-dir`/`napi artifacts`), and
-would publish all of them plus the main `pqfile` package
+would publish all of them plus the main `@dangel34/pqfile` package
 (`napi prepublish`) on a GitHub Release being published. The `artifacts`
 step's file-matching convention has been verified locally (a fake downloaded
-artifact directory was correctly picked up and copied into place); the
-publish step itself has never actually run: it publishes via npm Trusted
-Publishing (OIDC) rather than a stored token, which needs npm's Trusted
-Publisher registered on the `pqfile` package first (npmjs.com -> package ->
-Settings -> Trusted Publisher) - GitHub Actions, owner `dangel34`, repository
-`PQ-File-Encryption`, workflow `publish-node.yml`, environment `release`.
-Unlike PyPI's "pending publisher," npm's Trusted Publisher is configured from
-an *existing* package's own settings page, so the very first publish of
-`pqfile` will need to happen some other way (a one-off authenticated
-`napi prepublish` run from a maintainer's own npm login) before this can be
-registered and the workflow can take over. The macOS/Linux legs of the build
-matrix have only ever been cross-checked by reading napi-rs's own source, not
-built on this repo's Windows dev machine. `aarch64-unknown-linux-gnu` is
-deliberately left out of `napi.triples` for now - cross-compiling it needs a
-zig toolchain step (`napi build --zig`) this hasn't been wired up for.
+artifact directory was correctly picked up and copied into place). It
+publishes via npm Trusted Publishing (OIDC) rather than a stored token, which
+needs npm's Trusted Publisher registered on the `@dangel34/pqfile` package
+first (npmjs.com -> package -> Settings -> Trusted Publisher) - GitHub
+Actions, owner `dangel34`, repository `PQ-File-Encryption`, workflow
+`publish-node.yml`, environment `release`. Unlike PyPI's "pending publisher,"
+npm's Trusted Publisher is configured from an *existing* package's own
+settings page, so the very first publish needed to happen some other way: a
+manual, interactive `npm publish` per package (`napi prepublish`'s automated
+flow can't complete npm's browser-based OTP challenge, since it shells out to
+`npm publish` as a non-interactive subprocess). Two more npm-side blocks
+turned up doing that bootstrap publish, both unrelated to anything in this
+repo: the unscoped name `pqfile` was rejected as too similar to the existing
+`vfile` package (fixed by scoping to `@dangel34/pqfile`, npm's own suggested
+remedy - `publishConfig.access: "public"` was added so a scoped package still
+publishes publicly by default), and the platform-specific package name
+`pqfile-win32-x64-msvc` was separately rejected by npm's spam-detection
+heuristic before the rename (unresolved as of this writing - the scoped
+equivalent, `@dangel34/pqfile-win32-x64-msvc`, has not yet been retried). The
+macOS/Linux legs of the build matrix have only ever been cross-checked by
+reading napi-rs's own source, not built on this repo's Windows dev machine.
+`aarch64-unknown-linux-gnu` is deliberately left out of `napi.triples` for
+now - cross-compiling it needs a zig toolchain step (`napi build --zig`) this
+hasn't been wired up for.
