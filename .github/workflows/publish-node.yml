@@ -1,0 +1,171 @@
+name: Publish Node.js bindings
+
+# Scaffolding only: this has never actually run end-to-end (npm's Trusted
+# Publisher isn't registered for the "pqfile" package yet - see the `publish`
+# job's comment below - nothing here can trigger a real GitHub Release from
+# this environment anyway, and the macOS/cross legs of the build matrix were
+# never exercised locally - only x86_64-pc-windows-msvc and
+# x86_64-unknown-linux-gnu were ever actually built on this machine). YAML and
+# the `napi` CLI command shapes are correct per its documented usage
+# (`napi create-npm-dir` / `napi artifacts` / `napi prepublish`), not verified
+# against a real run.
+#
+# Fires once a GitHub Release is published (human-gated), mirroring
+# publish.yml's crates.io convention and publish-python.yml. Builds the
+# native addon per platform (matching package.json's `napi.targets`), then
+# arranges them into napi-rs's standard per-platform optionalDependencies
+# packages (`napi create-npm-dir` / `napi artifacts`) and publishes all of
+# them plus the main `pqfile` package (`napi prepublish`). aarch64-linux-gnu
+# is deliberately not in the target list yet - cross-compiling it needs a
+# zig toolchain step this hasn't been wired up for, see pqfile-node/README.md.
+#
+# Publishes via npm Trusted Publishing (OIDC) rather than a stored token -
+# npm's own token-creation UI now warns against a 2FA-bypass automation token
+# for CI and points at Trusted Publishing instead, so there is no NPM_TOKEN
+# secret here at all. Unlike PyPI's "pending publisher" (which can be
+# registered before the project exists), npm's Trusted Publisher is
+# configured from an existing package's own Settings page - "pqfile" doesn't
+# exist on npm yet, so the very first publish will need to happen some other
+# way (a one-off `napi prepublish` run from a maintainer's own authenticated
+# npm login) before Trusted Publishing can be registered and this workflow
+# can take over.
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    defaults:
+      run:
+        working-directory: pqfile-node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      # package-manager-cache disabled: this workflow only runs on a published
+      # release (human-gated, touching npm-publish credentials), and
+      # setup-node's automatic caching is a cache-poisoning vector zizmor
+      # flags in that context - a cache entry planted by an earlier,
+      # untrusted run could get restored here.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install npm dependencies
+        run: npm install
+
+      # --no-install: use the @napi-rs/cli devDependency `npm install` just
+      # resolved from package-lock.json, rather than letting npx fetch
+      # whatever "napi" currently resolves to on the registry (and run its
+      # lifecycle scripts) if it weren't already present locally.
+      - name: Build native addon
+        run: npx --no-install napi build --platform --release --target ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bindings-${{ matrix.target }}
+          path: pqfile-node/*.node
+
+  publish:
+    name: Publish to npm
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: release
+    # id-token: write lets the npm CLI mint the OIDC token npm's Trusted
+    # Publishing exchanges for a short-lived publish credential - no
+    # NPM_TOKEN secret needed. Requires npm's "Trusted Publisher" registered
+    # on the pqfile package (npmjs.com -> package -> Settings -> Trusted
+    # Publisher): GitHub Actions, owner dangel34, repo PQ-File-Encryption,
+    # workflow publish-node.yml, environment release.
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: pqfile-node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      # Trusted Publishing needs npm >= 11.5.1; actions/setup-node's Node 22
+      # ships whatever npm shipped with that Node release, which may predate
+      # it - pin an exact, known-sufficient version rather than floating on
+      # `@latest` (which would resolve to a different, unreviewed npm release
+      # on every run) or hoping the bundled version is new enough.
+      - name: Update npm
+        run: npm install -g npm@12.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bindings-*
+          path: pqfile-node/artifacts
+
+      - name: Install npm dependencies
+        run: npm install
+
+      # Idempotency guard, matching publish.yml's crates.io check and
+      # publish-python.yml's PyPI check: skip anything already on npm so
+      # re-running after a partial failure or accidental double-trigger is
+      # always safe.
+      - name: Check whether this version is already on npm
+        id: check
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          http=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/pqfile/${VERSION}")
+          if [ "$http" = "200" ]; then
+            echo "pqfile $VERSION already on npm -- skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pqfile $VERSION not yet on npm -- will publish"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Creates npm/<platform>/ per-target package directories from the
+      # `napi.targets` list in package.json, then copies each downloaded
+      # .node file into the matching directory.
+      - name: Arrange per-platform packages
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          npx --no-install napi create-npm-dir -t .
+          npx --no-install napi artifacts --dir artifacts
+
+      # Bumps every npm/<platform>/package.json to the root version and runs
+      # `npm publish` for each one, then for the root `pqfile` package itself
+      # (which depends on them via optionalDependencies). No NODE_AUTH_TOKEN
+      # here - the pinned npm CLI performs the OIDC exchange itself using the
+      # id-token: write permission above.
+      - name: Publish per-platform packages and the main package
+        if: steps.check.outputs.skip == 'false'
+        run: npx --no-install napi prepublish -p npm --skip-gh-release

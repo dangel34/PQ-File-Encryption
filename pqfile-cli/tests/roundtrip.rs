@@ -2444,6 +2444,84 @@ fn config_file_supplies_default_recipient_and_key() {
 }
 
 #[test]
+fn config_group_expands_r_to_multiple_recipients() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let cfg_root = dir.join("cfg");
+    fs::create_dir_all(cfg_root.join("pqfile")).unwrap();
+
+    let key_a = dir.join("a");
+    let key_b = dir.join("b");
+    fs::create_dir_all(&key_a).unwrap();
+    fs::create_dir_all(&key_b).unwrap();
+    let (pub_a, priv_a) = keygen_in(&key_a);
+    let (pub_b, priv_b) = keygen_in(&key_b);
+
+    fs::write(
+        cfg_root.join("pqfile").join("config.toml"),
+        format!(
+            "[groups]\nteam = [\"{}\", \"{}\"]\n",
+            toml_escape(&pub_a),
+            toml_escape(&pub_b),
+        ),
+    )
+    .unwrap();
+
+    let input = dir.join("note.txt");
+    fs::write(&input, b"group expansion test").unwrap();
+
+    let envs = [
+        ("APPDATA", cfg_root.clone()),
+        ("XDG_CONFIG_HOME", cfg_root.clone()),
+    ];
+
+    // -r team expands to both group members; either private key decrypts.
+    let status = std::process::Command::new(bin())
+        .envs(envs.iter().map(|(k, v)| (*k, v.clone())))
+        .args(["encrypt", "-r", "team", input.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt must expand the -r group name");
+
+    let pqf = dir.join("note.txt.pqf");
+    for (label, priv_key) in [("a", &priv_a), ("b", &priv_b)] {
+        let out = dir.join(format!("decrypted_{label}.txt"));
+        let status = std::process::Command::new(bin())
+            .args([
+                "decrypt",
+                "-k",
+                priv_key.to_str().unwrap(),
+                pqf.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+                "--force",
+            ])
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "recipient {label} must be able to decrypt"
+        );
+        assert_eq!(fs::read(&out).unwrap(), b"group expansion test");
+    }
+
+    // A literal recipient value that isn't a group name still passes through
+    // unchanged (existing pqf1.../path behavior is untouched by group support).
+    let status = std::process::Command::new(bin())
+        .envs(envs.iter().map(|(k, v)| (*k, v.clone())))
+        .args([
+            "encrypt",
+            "-r",
+            pub_a.to_str().unwrap(),
+            "--force",
+            input.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "a non-group -r value must still work");
+}
+
+#[test]
 fn malformed_config_is_a_hard_error() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
@@ -2473,6 +2551,229 @@ fn malformed_config_is_a_hard_error() {
         stderr.contains("config.toml"),
         "error must name the config file, got: {stderr}"
     );
+}
+
+// ── rotate ───────────────────────────────────────────────────────────────
+
+#[test]
+fn rotate_recursive_rekeys_all_pqf_files_in_tree() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let old = dir.join("old");
+    let new = dir.join("new");
+    fs::create_dir_all(&old).unwrap();
+    fs::create_dir_all(&new).unwrap();
+    let (pub_old, priv_old) = keygen_in(&old);
+    let (pub_new, priv_new) = keygen_in(&new);
+
+    let sub = dir.join("sub");
+    fs::create_dir(&sub).unwrap();
+    let plain_a = b"rotate payload a";
+    let plain_b = b"rotate payload b";
+    encrypt_to(&pub_old, plain_a, &dir.join("a.pqf"));
+    encrypt_to(&pub_old, plain_b, &sub.join("b.pqf"));
+    // A non-.pqf file in the tree must be left untouched.
+    fs::write(dir.join("notes.txt"), b"not a pqf file").unwrap();
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "rotate",
+            "--old-key",
+            priv_old.to_str().unwrap(),
+            "--new-key",
+            pub_new.to_str().unwrap(),
+            "--recursive",
+            dir.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "rotate must succeed for rekeyable files");
+
+    assert_eq!(fs::read(dir.join("notes.txt")).unwrap(), b"not a pqf file");
+
+    for (path, plain) in [(dir.join("a.pqf"), plain_a), (sub.join("b.pqf"), plain_b)] {
+        // The new key can decrypt.
+        let out = path.with_extension("recovered");
+        let status = std::process::Command::new(bin())
+            .args([
+                "decrypt",
+                "-k",
+                priv_new.to_str().unwrap(),
+                path.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "new key must decrypt {path:?} after rotate"
+        );
+        assert_eq!(fs::read(&out).unwrap(), plain);
+
+        // The old key can no longer decrypt.
+        let status = std::process::Command::new(bin())
+            .args([
+                "decrypt",
+                "-k",
+                priv_old.to_str().unwrap(),
+                path.to_str().unwrap(),
+                "-o",
+                path.with_extension("stale").to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(
+            !status.success(),
+            "old key must not decrypt {path:?} after rotate"
+        );
+    }
+}
+
+#[test]
+fn rotate_requires_recursive_flag() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let old = dir.join("old");
+    let new = dir.join("new");
+    fs::create_dir_all(&old).unwrap();
+    fs::create_dir_all(&new).unwrap();
+    let (_, priv_old) = keygen_in(&old);
+    let (pub_new, _) = keygen_in(&new);
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "rotate",
+            "--old-key",
+            priv_old.to_str().unwrap(),
+            "--new-key",
+            pub_new.to_str().unwrap(),
+            dir.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!status.success(), "rotate without --recursive must fail");
+}
+
+#[test]
+fn rotate_fails_on_non_directory() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let old = dir.join("old");
+    let new = dir.join("new");
+    fs::create_dir_all(&old).unwrap();
+    fs::create_dir_all(&new).unwrap();
+    let (pub_old, priv_old) = keygen_in(&old);
+    let (pub_new, _) = keygen_in(&new);
+
+    let file = dir.join("single.pqf");
+    encrypt_to(&pub_old, b"x", &file);
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "rotate",
+            "--old-key",
+            priv_old.to_str().unwrap(),
+            "--new-key",
+            pub_new.to_str().unwrap(),
+            "--recursive",
+            file.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        !status.success(),
+        "rotate on a file (not a directory) must fail"
+    );
+}
+
+#[test]
+fn rotate_reports_failure_for_unsupported_pqf_files_but_still_rotates_the_rest() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let old = dir.join("old");
+    let new = dir.join("new");
+    fs::create_dir_all(&old).unwrap();
+    fs::create_dir_all(&new).unwrap();
+    let (pub_old, priv_old) = keygen_in(&old);
+    let (pub_new, priv_new) = keygen_in(&new);
+
+    // A normal, rekeyable v3 file.
+    let plain = b"rotatable";
+    encrypt_to(&pub_old, plain, &dir.join("ok.pqf"));
+
+    // A v4 multi-recipient file: rekey_stream rejects anything but v3/v5,
+    // so this must be reported as a failure, not silently skipped.
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            pub_old.to_str().unwrap(),
+            "-r",
+            pub_new.to_str().unwrap(),
+            "-o",
+            dir.join("multi.pqf").to_str().unwrap(),
+            dir.join("ok.pqf").to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "multi-recipient encrypt must succeed");
+
+    let status = std::process::Command::new(bin())
+        .args([
+            "rotate",
+            "--old-key",
+            priv_old.to_str().unwrap(),
+            "--new-key",
+            pub_new.to_str().unwrap(),
+            "--recursive",
+            dir.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        !status.success(),
+        "rotate must report failure when a .pqf file can't be rekeyed"
+    );
+
+    // The rekeyable file was still rotated despite the other one failing.
+    let out = dir.join("ok.recovered");
+    let status = std::process::Command::new(bin())
+        .args([
+            "decrypt",
+            "-k",
+            priv_new.to_str().unwrap(),
+            dir.join("ok.pqf").to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "the rekeyable file must still be rotated");
+    assert_eq!(fs::read(&out).unwrap(), plain);
+}
+
+/// Encrypts `plain` to `pubkey_path` and writes the result to `out`, using
+/// the default chunk size explicitly (small test payloads would otherwise
+/// adaptive-tune down to a v5 file with a non-default chunk size, which
+/// `rekey`/`rotate` deliberately reject).
+fn encrypt_to(pubkey_path: &std::path::Path, plain: &[u8], out: &std::path::Path) {
+    let input = out.with_extension("src");
+    fs::write(&input, plain).unwrap();
+    let status = std::process::Command::new(bin())
+        .args([
+            "encrypt",
+            "-r",
+            pubkey_path.to_str().unwrap(),
+            "--chunk-size",
+            "65536",
+            "-o",
+            out.to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "encrypt_to setup failed for {out:?}");
 }
 
 // ── archive --recursive ─────────────────────────────────────────────────────

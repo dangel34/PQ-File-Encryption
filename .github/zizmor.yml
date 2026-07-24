@@ -15,3 +15,13 @@ rules:
     # token flow stays for now and this informational finding is accepted.
     ignore:
       - publish.yml
+  adhoc-packages:
+    # publish-node.yml's "Update npm" step (`npm install -g npm@12.0.1`)
+    # upgrades the package manager binary itself, which by definition has no
+    # lockfile to be pinned against - the upgrade only exists because npm
+    # Trusted Publishing needs >= 11.5.1 and actions/setup-node's bundled
+    # Node 22 may ship an older one. Mitigated the way this repo mitigates
+    # every other ad-hoc install (taiki-e/install-action's `tool:` pins
+    # elsewhere in this file): an exact version, not `@latest`.
+    ignore:
+      - publish-node.yml

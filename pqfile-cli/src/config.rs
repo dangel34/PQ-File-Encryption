@@ -1,6 +1,7 @@
 //! User config file (`~/.config/pqfile/config.toml` / `%APPDATA%\pqfile\config.toml`)
 //! supplying default `-r`/`-k` values for `encrypt`/`decrypt`/`check`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use pqfile::error::PqfileError;
@@ -14,6 +15,10 @@ pub(crate) struct CliConfig {
     pub(crate) recipient: Option<String>,
     /// Default private key path for `decrypt` / `check`.
     pub(crate) key: Option<PathBuf>,
+    /// Named recipient sets from the `[groups]` table, e.g. `team-security = [...]`.
+    /// Each value is a list of `pqf1…` strings and/or pubkey.pem paths, expanded
+    /// in place of a `-r` argument that names a group.
+    pub(crate) groups: HashMap<String, Vec<String>>,
     /// Default audit log path for `encrypt`/`decrypt --audit-log`.
     #[cfg(feature = "audit")]
     pub(crate) audit_log: Option<PathBuf>,
@@ -62,21 +67,35 @@ pub(crate) fn load_config(no_config: bool) -> Result<CliConfig, PqfileError> {
 }
 
 /// Parses the strict TOML subset the config file uses: `key = "value"` pairs,
-/// blank lines, and `#` comments. Only basic strings with `\\` and `\"` escapes
-/// are accepted; unknown keys are ignored for forward compatibility.
+/// blank lines, `#` comments, and one recognized table header (`[groups]`)
+/// whose entries are `name = ["value", ...]` string arrays. Only basic
+/// strings with `\\` and `\"` escapes are accepted; unknown keys and unknown
+/// table headers are ignored for forward compatibility.
 fn parse_config_toml(text: &str) -> Result<CliConfig, String> {
     let mut cfg = CliConfig::default();
+    let mut in_groups = false;
     for (idx, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        if let Some(header) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            in_groups = header.trim() == "groups";
+            continue;
+        }
         let Some((k, v)) = line.split_once('=') else {
             return Err(format!("line {}: expected `key = \"value\"`", idx + 1));
         };
+        let key = k.trim();
+        if in_groups {
+            let members =
+                parse_toml_string_array(v.trim()).map_err(|e| format!("line {}: {e}", idx + 1))?;
+            cfg.groups.insert(key.to_owned(), members);
+            continue;
+        }
         let val =
             parse_toml_basic_string(v.trim()).map_err(|e| format!("line {}: {e}", idx + 1))?;
-        match k.trim() {
+        match key {
             "recipient" => cfg.recipient = Some(val),
             "key" => cfg.key = Some(PathBuf::from(val)),
             #[cfg(feature = "audit")]
@@ -89,6 +108,42 @@ fn parse_config_toml(text: &str) -> Result<CliConfig, String> {
         }
     }
     Ok(cfg)
+}
+
+/// Parses a TOML array of basic strings, e.g. `["a", "b"]` or `[]`, with
+/// optional whitespace and a trailing comma before the closing bracket.
+/// A trailing `#` comment after the closing bracket is allowed, matching
+/// `parse_toml_basic_string`.
+fn parse_toml_string_array(v: &str) -> Result<Vec<String>, String> {
+    let inner = v
+        .strip_prefix('[')
+        .ok_or("value must be an array, e.g. [\"a\", \"b\"]")?;
+    let Some(close) = inner.find(']') else {
+        return Err("unterminated array (missing `]`)".to_owned());
+    };
+    let tail = inner[close + 1..].trim_start();
+    if !tail.is_empty() && !tail.starts_with('#') {
+        return Err("unexpected content after closing `]`".to_owned());
+    }
+    let body = inner[..close].trim();
+    if body.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parts: Vec<&str> = body.split(',').collect();
+    let mut out = Vec::with_capacity(parts.len());
+    for (i, item) in parts.iter().enumerate() {
+        let item = item.trim();
+        if item.is_empty() {
+            // Allow only a single trailing comma, e.g. `["a", "b",]`; an
+            // empty element anywhere else, e.g. `["a", , "b"]`, is an error.
+            if i == parts.len() - 1 {
+                continue;
+            }
+            return Err("empty array element".to_owned());
+        }
+        out.push(parse_toml_basic_string(item)?);
+    }
+    Ok(out)
 }
 
 fn parse_toml_basic_string(v: &str) -> Result<String, String> {
@@ -164,5 +219,53 @@ mod tests {
         assert!(parse_config_toml("key = \"unterminated").is_err());
         assert!(parse_config_toml("key = \"bad escape \\n\"").is_err());
         assert!(parse_config_toml("key = \"trailing\" junk").is_err());
+    }
+
+    #[test]
+    fn config_toml_parses_groups_table() {
+        let cfg = parse_config_toml(
+            "recipient = \"pqf1default\"\n\
+             \n\
+             [groups]\n\
+             team-security = [\"pqf1aaa\", \"pqf1bbb\", \"path/to/pubkey.pem\"]  # comment\n\
+             empty-group = []\n\
+             trailing-comma = [\"pqf1ccc\",]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.recipient.as_deref(), Some("pqf1default"));
+        assert_eq!(
+            cfg.groups.get("team-security").cloned(),
+            Some(vec![
+                "pqf1aaa".to_owned(),
+                "pqf1bbb".to_owned(),
+                "path/to/pubkey.pem".to_owned()
+            ])
+        );
+        assert_eq!(cfg.groups.get("empty-group").cloned(), Some(Vec::new()));
+        assert_eq!(
+            cfg.groups.get("trailing-comma").cloned(),
+            Some(vec!["pqf1ccc".to_owned()])
+        );
+    }
+
+    #[test]
+    fn config_toml_ignores_unknown_table_headers() {
+        let cfg = parse_config_toml(
+            "[future_table]\n\
+             some_key = \"ignored\"\n\
+             \n\
+             recipient = \"pqf1default\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.recipient.as_deref(), Some("pqf1default"));
+        assert!(cfg.groups.is_empty());
+    }
+
+    #[test]
+    fn config_toml_rejects_malformed_group_arrays() {
+        assert!(parse_config_toml("[groups]\nteam = \"not-an-array\"\n").is_err());
+        assert!(parse_config_toml("[groups]\nteam = [\"unterminated\n").is_err());
+        assert!(parse_config_toml("[groups]\nteam = [\"a\", , \"b\"]\n").is_err());
+        assert!(parse_config_toml("[groups]\nteam = [\"a\"] junk\n").is_err());
     }
 }

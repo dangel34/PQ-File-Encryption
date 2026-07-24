@@ -1,0 +1,21 @@
+[package]
+name = "pqfile-node"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Node.js bindings for pqfile: quantum-resistant file encryption"
+license = "MIT"
+
+# Deliberately not a member of the parent Cargo workspace (see the root
+# Cargo.toml `exclude` list, same treatment as `fuzz/` and `pqfile-python/`) -
+# `napi build` drives this crate's builds independently.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pqfile = { path = "../pqfile" }
+napi = { version = "2", default-features = false, features = ["napi4"] }
+napi-derive = "2"
+
+[build-dependencies]
+napi-build = "2"

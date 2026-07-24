@@ -34,7 +34,7 @@ use commands::inspect::{inspect, run_calibrate, run_doctor};
 #[cfg(feature = "fido2")]
 use commands::keygen::run_fido2_enroll;
 use commands::keygen::{run_fingerprint, run_import_key, run_keygen};
-use commands::keys::{run_add_recipient, run_rekey, run_repassphrase, run_revoke};
+use commands::keys::{run_add_recipient, run_rekey, run_repassphrase, run_revoke, run_rotate};
 use commands::sealed_sender::{run_identity_keygen, run_seal, run_unseal};
 use commands::shamir::{run_reconstruct_key, run_split_key};
 use commands::sign::{
@@ -613,6 +613,29 @@ enum Command {
         /// is the input file itself, so rekey overwrites the input in place unless -o is given.
         #[arg(long, default_value_t = false)]
         force: bool,
+    },
+    /// Batch-rekey every .pqf file under a directory tree to a new recipient.
+    ///
+    /// A thin wrapper around `rekey`: walks the tree and rewrites each v3/v5
+    /// .pqf file in place, in the same default-chunk-size restriction rekey
+    /// itself has. Distinct from `archive --recursive`, which packs a tree
+    /// into one .pqfa rather than rotating keys across many independent
+    /// .pqf files. Non-.pqf files are left untouched; a .pqf file rekey
+    /// cannot handle (e.g. multi-recipient v4/v7-v9, v6 compressed, v10
+    /// passphrase-only, a non-default chunk size) is reported as failed
+    /// rather than silently skipped.
+    Rotate {
+        /// Old private key used to decrypt each existing file.
+        #[arg(long, value_name = "PRIVKEY")]
+        old_key: PathBuf,
+        /// New recipient public key.
+        #[arg(long, value_name = "PUBKEY")]
+        new_key: PathBuf,
+        /// Directory to walk. Every .pqf file found (recursively) is rewritten in place.
+        input: String,
+        /// Required to confirm rewriting every .pqf file under the directory.
+        #[arg(long, default_value_t = false)]
+        recursive: bool,
     },
     /// Add a recipient to an existing v4/v7/v8 multi-recipient file without
     /// re-encrypting the payload (zero-copy).
@@ -1390,6 +1413,12 @@ fn run(cli: Cli) -> Result<(), PqfileError> {
             output,
             force,
         } => run_rekey(key, recipient, input, output, force, json),
+        Command::Rotate {
+            old_key,
+            new_key,
+            input,
+            recursive,
+        } => run_rotate(old_key, new_key, input, recursive, json),
         Command::AddRecipient {
             key,
             recipient,

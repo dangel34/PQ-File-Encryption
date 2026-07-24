@@ -1,6 +1,11 @@
 [workspace]
 members = ["pqfile", "pqfile-cli", "pqfile-gui", "pqfile-desktop"]
-exclude = ["fuzz"]  # managed by cargo-fuzz, not the main workspace
+exclude = [
+    "fuzz",           # managed by cargo-fuzz, not the main workspace
+    "pqfile-python",  # managed by maturin; keeps Python dev headers out of `cargo build --workspace`
+    "pqfile-node",    # managed by `napi build`; keeps Node.js headers out of `cargo build --workspace`
+    "pqfile-mobile",  # managed by uniffi-bindgen/cargo-ndk/Xcode; keeps Android/iOS cross-compiles out of `cargo build --workspace`
+]
 resolver = "2"
 
 [workspace.dependencies]

@@ -1,0 +1,32 @@
+{
+  "name": "pqfile",
+  "version": "0.1.0",
+  "description": "Quantum-resistant file encryption (ML-KEM, hybrid X25519+ML-KEM-768) - Node.js bindings",
+  "license": "MIT",
+  "repository": "https://github.com/dangel34/PQ-File-Encryption",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "napi": {
+    "name": "pqfile",
+    "triples": {
+      "additional": [
+        "aarch64-apple-darwin"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">= 16"
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2"
+  }
+}

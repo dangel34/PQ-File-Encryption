@@ -295,3 +295,130 @@ jobs:
 
       - name: Run WASM smoke tests (Node.js)
         run: wasm-pack test --node pqfile --test wasm_smoke
+
+  # ── Language bindings ──────────────────────────────────────────────────────
+  # pqfile-python, pqfile-node, and pqfile-mobile are each their own Cargo
+  # workspace (excluded from the root one - see the root Cargo.toml `exclude`
+  # comments) so that a plain `cargo build --workspace` above never needs
+  # Python/Node/Android-NDK toolchains. That exclusion also means nothing
+  # above exercises them, so without these three jobs they'd have zero CI
+  # coverage and could silently bit-rot behind a `pqfile` core change. Ubuntu
+  # only, matching every other job in this file (cross-platform validation
+  # happens in release.yml, not here) - and Linux-only is also simply all
+  # pqfile-mobile could ever cover anyway, since Android/iOS packaging needs
+  # the NDK and Xcode respectively (see pqfile-mobile/README.md).
+  bindings-python:
+    name: pqfile-python (build + test)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: pqfile-python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
+        with:
+          toolchain: stable
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: bindings-python
+
+      # maturin's `develop` command installs into whichever Python is first
+      # on PATH, so a venv + $GITHUB_PATH (rather than sourcing an activate
+      # script, which wouldn't persist to later steps anyway) is enough to
+      # scope it instead of touching the runner's system Python.
+      - name: Create virtualenv
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install maturin and pytest
+        run: pip install maturin pytest
+
+      - name: Build the extension module
+        run: maturin develop --release
+
+      - name: Run tests
+        run: pytest -v
+
+  bindings-node:
+    name: pqfile-node (build + test)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: pqfile-node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
+        with:
+          toolchain: stable
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: bindings-node
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Build the native addon
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+  bindings-mobile:
+    name: pqfile-mobile (build + test)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: pqfile-mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable # zizmor: ignore[ref-version-mismatch]
+        with:
+          toolchain: stable
+
+      - uses: ./.github/actions/cargo-cache
+        with:
+          key-suffix: bindings-mobile
+
+      # The Rust-level tests are the real verification here (they call the
+      # exact functions uniffi exports, directly). There is no Kotlin/Swift
+      # toolchain available to drive the FFI boundary itself from CI - the
+      # bindgen step below only proves the exported interface still generates
+      # valid Kotlin/Swift source, not that either compiles or runs.
+      - name: Run tests
+        run: cargo test --release
+
+      - name: Generate Kotlin and Swift bindings (sanity check only)
+        run: |
+          cargo build --release
+          cargo run --release --bin uniffi-bindgen -- generate \
+            --library target/release/libpqfile_mobile.so \
+            --language kotlin --out-dir bindings/kotlin
+          cargo run --release --bin uniffi-bindgen -- generate \
+            --library target/release/libpqfile_mobile.so \
+            --language swift --out-dir bindings/swift

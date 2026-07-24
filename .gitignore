@@ -19,6 +19,27 @@ pqfile-desktop/packaging/output/
 # Contains mutation testing data
 **/mutants.out*/
 
+# Python (pqfile-python bindings): pytest cache, bytecode, egg metadata, maturin/pip build output
+.pytest_cache/
+__pycache__/
+*.egg-info/
+pqfile-python/python/pqfile/_pqfile*.pyd
+pqfile-python/python/pqfile/_pqfile*.so
+
+# Node.js (pqfile-node bindings): npm deps and the per-platform compiled addon
+# (index.js/index.d.ts are the generic platform-detection loader + types and
+# ARE committed; only the native binary napi build produces per-platform is not)
+pqfile-node/node_modules/
+pqfile-node/*.node
+# `napi create-npm-dir`/`napi artifacts` output (per-platform publish packages) - only ever assembled during publish-node.yml's run
+pqfile-node/npm/
+pqfile-node/artifacts/
+
+# Mobile (pqfile-mobile bindings): uniffi-bindgen's generated Kotlin/Swift output.
+# Regenerated from the compiled library (see pqfile-mobile/README.md) rather than
+# committed, since it's tied to a specific build's FFI checksum.
+pqfile-mobile/bindings/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

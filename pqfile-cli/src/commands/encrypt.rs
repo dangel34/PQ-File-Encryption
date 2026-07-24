@@ -107,21 +107,20 @@ pub(crate) fn run_encrypt(
     recursive: bool,
     #[allow(unused_mut)] mut opts: EncryptOpts,
 ) -> Result<(), PqfileError> {
-    // Merge config-file defaults for --audit-log/--audit-key/--audit-recipient
-    // once, here, before any dispatch branch - so every path below (tlock,
-    // passphrase, recursive, single) sees the same already-resolved fields
-    // and none of them need their own config lookup.
+    // Load the config file once, here, before any dispatch branch - so every
+    // path below (tlock, passphrase, recursive, single) sees the same
+    // already-resolved defaults and none of them need their own config lookup.
+    let cfg = load_config(no_config)?;
     #[cfg(feature = "audit")]
     {
-        let cfg = load_config(no_config)?;
         if opts.audit_log.is_none() {
-            opts.audit_log = cfg.audit_log;
+            opts.audit_log = cfg.audit_log.clone();
         }
         if opts.audit_key.is_none() {
-            opts.audit_key = cfg.audit_key;
+            opts.audit_key = cfg.audit_key.clone();
         }
         if opts.audit_recipient.is_none() {
-            opts.audit_recipient = cfg.audit_recipient;
+            opts.audit_recipient = cfg.audit_recipient.clone();
         }
     }
     if let Some(round) = tlock_round {
@@ -159,9 +158,12 @@ pub(crate) fn run_encrypt(
         return run_encrypt_passphrase(pp.as_str(), &input, output.as_deref(), opts);
     }
     if recipients.is_empty() {
-        if let Some(r) = load_config(no_config)?.recipient {
+        if let Some(r) = cfg.recipient.clone() {
             recipients.push(r);
         }
+    }
+    if !cfg.groups.is_empty() {
+        recipients = expand_recipient_groups(recipients, &cfg.groups);
     }
     if recipients.is_empty() {
         return Err(PqfileError::Io(std::io::Error::new(
@@ -286,6 +288,27 @@ pub(crate) fn run_encrypt(
         }
         run_encrypt_single(&pubkey_pems, &input, output.as_deref(), opts)
     }
+}
+
+/// Expands any `-r` value that names a configured `[groups]` entry (see
+/// `pqfile-cli/src/config.rs`) into that group's member list, in place.
+/// Values that don't match a group name pass through unchanged - bech32
+/// recipient strings and pubkey/cert file paths are not expected to collide
+/// with a group name in practice. Group membership is not resolved
+/// recursively: a member that itself names another group is passed through
+/// literally rather than expanded again, so cycles can't occur.
+fn expand_recipient_groups(
+    recipients: Vec<String>,
+    groups: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut out = Vec::with_capacity(recipients.len());
+    for r in recipients {
+        match groups.get(&r) {
+            Some(members) => out.extend(members.iter().cloned()),
+            None => out.push(r),
+        }
+    }
+    out
 }
 
 /// Resolves the plaintext size and output destination shared by the encrypt

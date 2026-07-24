@@ -120,10 +120,22 @@ PQ-File-Encryption/
 │       ├── widgets.rs              UI helper functions
 │       ├── fido2.rs                CTAP2 enroll/derive (native, feature "fido2")
 │       └── tabs/                   Keys, Keygen, Encrypt, Decrypt, Sign, Signcrypt, Sealed Sender, Archive, Shamir, Inspect, Clipboard, Settings, fido2_ui
-└── pqfile-desktop/               Native desktop binary
-    ├── build.rs                   Embeds icon/metadata via winres (Windows)
-    ├── packaging/                 Inno Setup installer script, .ico asset
-    └── src/main.rs                Native entry point
+├── pqfile-desktop/               Native desktop binary
+│   ├── build.rs                   Embeds icon/metadata via winres (Windows)
+│   ├── packaging/                 Inno Setup installer script, .ico asset
+│   └── src/main.rs                Native entry point
+├── pqfile-python/               Python bindings (PyO3 + maturin, excluded from the main workspace)
+│   ├── src/lib.rs                 Native `_pqfile` extension module
+│   ├── python/pqfile/              Pure-Python wrapper package (pathlib support, docstrings)
+│   └── tests/test_roundtrip.py    pytest suite
+├── pqfile-node/                 Node.js bindings (napi-rs, excluded from the main workspace)
+│   ├── src/lib.rs                 Native addon: AsyncTask-wrapped keygen/encrypt/decrypt
+│   ├── index.js, index.d.ts       Generated platform-detection loader + TypeScript types
+│   └── __test__/roundtrip.test.js Node built-in test-runner suite
+└── pqfile-mobile/               Kotlin/Swift bindings (uniffi-rs, excluded from the main workspace)
+    ├── src/lib.rs                 #[uniffi::export]-annotated keygen/encrypt/decrypt
+    ├── src/bin/uniffi-bindgen.rs  uniffi-bindgen entry point (generates bindings/kotlin, bindings/swift)
+    └── tests/roundtrip.rs         Rust-level round-trip tests (no Kotlin/Swift toolchain to test through)
 ```
 
 The `pqfile` crate is a library. The `pqfile-cli` crate provides the CLI binary. The `pqfile-gui` crate compiles to a `cdylib` for WASM and an `rlib` for the native binary. `pqfile-desktop` is the thin native entry point. This follows the official eframe template pattern.
@@ -386,6 +398,15 @@ pqfile rekey -k old_privkey.pem -r new_pubkey.pem -o new.pqf old.pqf
 ```
 
 Decapsulates the session key with the old private key, re-encapsulates it under the new public key, and rewrites only the header. Payload bytes are not decrypted. Useful for key rotation.
+
+### Rotate a whole directory tree
+
+```bash
+# Rekey every .pqf file under a directory (recursively) to a new recipient
+pqfile rotate --old-key old_privkey.pem --new-key new_pubkey.pem --recursive backups/
+```
+
+A batch wrapper around `rekey`: walks the directory, rewrites each `.pqf` file in place, and prints a succeeded/failed/skipped-non-pqf summary. Inherits `rekey`'s own restrictions (v3/v5 input only, default chunk size only), so a file `rekey` can't handle is reported as a failure for that one file rather than aborting the whole batch - the command still exits non-zero if any file failed. Distinct from `archive --recursive`, which packs a tree into one `.pqfa` rather than rotating keys across many already-independent `.pqf` files.
 
 ### Revoke
 
@@ -659,9 +680,14 @@ key = "/home/me/.keys/privkey.pem"
 audit_log = "/home/me/.pqfile/audit.log"
 audit_key = "/home/me/.keys/sign_privkey.pem"
 audit_recipient = "/home/me/.keys/auditor_pubkey.pem"
+
+# Named recipient sets: pass the group name to -r and it expands to every
+# member (mixing pqf1… strings and pubkey.pem/certificate paths freely).
+[groups]
+team-security = ["pqf1aaa...", "pqf1bbb...", "/home/me/.keys/carol_pubkey.pem"]
 ```
 
-With this in place, `pqfile encrypt notes.txt` and `pqfile decrypt notes.txt.pqf` just work. Explicit flags always override the config. Pass the global `--no-config` flag to ignore the file entirely (recommended in scripts). A malformed config is a hard error, never silently ignored. Only `key = "value"` pairs, `#` comments, and `\\`/`\"` escapes are accepted.
+With this in place, `pqfile encrypt notes.txt` and `pqfile decrypt notes.txt.pqf` just work, and `pqfile encrypt -r team-security notes.txt` fans out to every member of the group. Explicit flags always override the config. Pass the global `--no-config` flag to ignore the file entirely (recommended in scripts). A malformed config is a hard error, never silently ignored. Only `key = "value"` pairs, the `[groups]` table (`name = ["value", ...]` string arrays), `#` comments, and `\\`/`\"` escapes are accepted; group expansion is one level deep (a group member that names another group is passed through literally, not expanded further).
 
 ### Shell completions
 
@@ -729,6 +755,50 @@ The desktop GUI (`pqfile-desktop`) and web app (`pqfile-gui`) share the same egu
 - **⚙ Settings**: theme, default output directory, confirm-before-overwrite, clipboard auto-clear, (native, `audit` cargo feature, off by default) an audit-log section - log path, your signing key, the auditor's public key, and an in-memory-only signing-key passphrase - that engages automatically once all three paths are set, and (native, `update-check` cargo feature) an opt-in "Check for updates on startup" toggle plus a "Check for Updates now" button that works regardless of the toggle
 
 Hardware-backed keys, the folder watcher, SSH key import, passphrase change, and revocation are native-only (not available in the WASM build, which cannot access the OS credential store or filesystem watch APIs). The update check is also native-only, but for a different reason: it has no `ureq` target for wasm32, and a web app is always whatever's currently deployed, so a version check makes no sense there anyway.
+
+---
+
+## Language bindings
+
+All three wrap the same core single-recipient `keygen`/`encrypt`/`decrypt` streaming path and produce/read the same `.pqf` wire format as the CLI/GUI, so files are interchangeable in every direction. None is a Cargo workspace member - all three are excluded from the root `Cargo.toml` (like `fuzz/`) so a plain `cargo build --workspace` never needs Python, Node.js, or Android/iOS toolchains. Multi-recipient encryption, signing, Shamir sharing, and certificates aren't exposed in any of them yet - see `docs/ROADMAP.md`, "Python, Node.js, and mobile bindings", for status.
+
+### Python (`pqfile-python/`)
+
+Built with [PyO3](https://pyo3.rs) / [maturin](https://www.maturin.rs) (package name `pqfile` on PyPI, once published).
+
+```python
+import pqfile
+
+pub_pem, priv_pem = pqfile.keygen()  # or keygen_hybrid(), or keygen(level=512/1024)
+ciphertext = pqfile.encrypt_bytes(pub_pem, b"hello, post-quantum world")
+pqfile.decrypt_bytes(priv_pem, ciphertext)  # b"hello, post-quantum world"
+
+pqfile.encrypt_file(pub_pem, "report.pdf", "report.pdf.pqf")  # streams; flat memory use
+```
+
+See [pqfile-python/README.md](pqfile-python/README.md) for the full API and build instructions.
+
+### Node.js (`pqfile-node/`)
+
+Built with [napi-rs](https://napi.rs) (package name `pqfile` on npm, once published). Every function returns a `Promise` and runs on libuv's worker thread pool rather than blocking Node's event loop.
+
+```js
+const pqfile = require("pqfile");
+
+const { publicKey, privateKey } = await pqfile.keygen(); // or keygenHybrid(), or keygen(512/1024)
+const ciphertext = await pqfile.encryptBytes(publicKey, Buffer.from("hello, post-quantum world"));
+await pqfile.decryptBytes(privateKey, ciphertext); // <Buffer ...> "hello, post-quantum world"
+
+await pqfile.encryptFile(publicKey, "report.pdf", "report.pdf.pqf"); // streams; flat memory use
+```
+
+See [pqfile-node/README.md](pqfile-node/README.md) for the full API and build instructions.
+
+### Mobile: Kotlin / Swift (`pqfile-mobile/`)
+
+Built with [uniffi-rs](https://mozilla.github.io/uniffi-rs/) (the same tool Firefox uses for its Android/iOS bindings), generating both languages from one Rust interface definition. Every function is synchronous - there's no single async runtime shared by Kotlin coroutines and Swift's `async`/`await`, so callers dispatch off the main thread themselves, same as any other blocking native call.
+
+**The Rust binding layer is built and tested (`cargo test`, 7 passing cases) and `uniffi-bindgen` generates valid Kotlin and Swift source from it; the Android/iOS packaging (cross-compiled `.so`/XCFramework, Gradle/SPM distribution) is not done** - it needs the Android NDK and a macOS/Xcode machine respectively, neither available in this repo's dev environment. See [pqfile-mobile/README.md](pqfile-mobile/README.md) for exactly what's verified versus what's left.
 
 ---
 

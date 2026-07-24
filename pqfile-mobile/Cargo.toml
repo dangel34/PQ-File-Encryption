@@ -1,0 +1,29 @@
+[package]
+name = "pqfile-mobile"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Kotlin/Swift bindings for pqfile: quantum-resistant file encryption"
+license = "MIT"
+
+# Deliberately not a member of the parent Cargo workspace (see the root
+# Cargo.toml `exclude` list, same treatment as `fuzz/`, `pqfile-python/`, and
+# `pqfile-node/`) - Android/iOS builds and `uniffi-bindgen` drive this crate
+# independently, and cross-compiling to aarch64-linux-android /
+# aarch64-apple-ios has no business happening as part of a normal
+# `cargo build --workspace`.
+[lib]
+name = "pqfile_mobile"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+pqfile = { path = "../pqfile" }
+uniffi = { version = "0.28", features = ["cli"] }
+thiserror = "2"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dev-dependencies]
+tempfile = "3"

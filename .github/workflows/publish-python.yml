@@ -1,0 +1,128 @@
+name: Publish Python bindings
+
+# Scaffolding only: this has never actually run end-to-end (a "pending
+# publisher" must be registered on PyPI first - see the `publish` job's
+# comment below - and nothing here can trigger a real GitHub Release from
+# this environment to exercise it anyway). Structure and YAML are validated;
+# the maturin-action target aliases follow its documented usage but are
+# unverified against a real run.
+#
+# Publishes via PyPI Trusted Publishing (OIDC) rather than a stored API
+# token - no PYPI_API_TOKEN secret needed, just the one-time PyPI-side
+# "pending publisher" registration.
+#
+# Fires once a GitHub Release is published (human-gated), mirroring
+# publish.yml's crates.io convention: release.yml builds artifacts and opens a
+# *draft* release on tag push, a human clicks "Publish release", only then
+# does anything here touch the (also human-gated) `release` environment.
+# Builds a wheel per platform via PyO3/maturin-action (manylinux is handled
+# automatically by its bundled Docker image on the Linux leg) plus an sdist,
+# then uploads everything to PyPI. One CPython interpreter per wheel for
+# now (whatever actions/setup-python installs) - a full cp39-cp314 matrix, or
+# switching to PyO3's `abi3` feature to build one wheel per platform instead
+# of one per interpreter, is future work, not done here.
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-wheels:
+    name: Build wheel (${{ matrix.platform.os }} / ${{ matrix.platform.target }})
+    runs-on: ${{ matrix.platform.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: windows-latest
+            target: x64
+          - os: macos-latest
+            target: x86_64
+          - os: macos-latest
+            target: aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      # manylinux: auto is a no-op (ignored) on the Windows/macOS legs;
+      # only the ubuntu-latest leg actually builds inside the manylinux
+      # Docker image this triggers.
+      - name: Build wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: pqfile-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          manylinux: auto
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-${{ matrix.platform.os }}-${{ matrix.platform.target }}
+          path: pqfile-python/dist
+
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: pqfile-python
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: pqfile-python/dist
+
+  publish:
+    name: Publish to PyPI
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    environment: release
+    # id-token: write is what lets pypa/gh-action-pypi-publish mint the OIDC
+    # token PyPI's Trusted Publishing exchanges for a short-lived upload
+    # credential - no PYPI_API_TOKEN secret needed at all. Requires a
+    # "pending publisher" registered on PyPI for project "pqfile", owner
+    # "dangel34", repo "PQ-File-Encryption", workflow "publish-python.yml",
+    # environment "release" (pypi.org -> your account -> Publishing).
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdist
+          path: dist
+          merge-multiple: true
+
+      # skip-existing makes this safe to re-run after a partial failure or
+      # accidental double-trigger: anything already on PyPI is silently
+      # skipped rather than erroring the whole job.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          packages-dir: dist
+          skip-existing: true

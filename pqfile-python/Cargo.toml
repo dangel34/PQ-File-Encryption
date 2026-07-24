@@ -1,0 +1,22 @@
+[package]
+name = "pqfile-python"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Python bindings for pqfile: quantum-resistant file encryption"
+license = "MIT"
+
+# Deliberately not a member of the parent Cargo workspace (see the root
+# Cargo.toml `exclude` list) - maturin drives this crate's builds and a plain
+# `cargo build --workspace` should not need Python dev headers installed.
+[lib]
+name = "_pqfile"
+crate-type = ["cdylib"]
+
+[dependencies]
+pqfile = { path = "../pqfile" }
+
+[dependencies.pyo3]
+# 0.24 caps out at Python 3.13; 0.25+ added 3.14 support.
+version = "0.29"
+features = ["extension-module"]
