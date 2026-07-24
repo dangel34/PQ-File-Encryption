@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784907521254,
+  "lastUpdate": 1784909355230,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -4895,6 +4895,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48450,
             "range": "± 951",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "a3c06c76cd29092116582072a4619002eb37a293",
+          "message": "fix: rename npm package to @dangel34/pqfile, fix missing root publish step\n\nThe unscoped name \"pqfile\" was rejected by npm as too similar to the\nexisting \"vfile\" package, and separately the platform-specific package\n\"pqfile-win32-x64-msvc\" was rejected by npm's spam-detection heuristic.\nRenaming to the scope-qualified @dangel34/pqfile (npm's own suggested\nremedy) resolved both. publishConfig.access is set to \"public\" so the\nscoped package still defaults to public.\n\nAlso fixes a real gap in publish-node.yml found while doing the manual\nbootstrap publish: napi prepublish only ever publishes the per-platform\npackages in its internal loop (confirmed by reading @napi-rs/cli's\nsource) - it never runs npm publish for the root package itself. Every\nfuture automated release would have shipped new platform binaries while\nsilently never updating the root package. Added an explicit npm publish\nstep after napi prepublish.\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-24T12:05:24-04:00",
+          "tree_id": "af074222ff6ae37ad5c02da4fbcaaafb078dd5e6",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/a3c06c76cd29092116582072a4619002eb37a293"
+        },
+        "date": 1784909354080,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 56546,
+            "range": "± 561",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 825596,
+            "range": "± 5648",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 91866625,
+            "range": "± 152324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 93904,
+            "range": "± 377",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 838872,
+            "range": "± 1642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 81980425,
+            "range": "± 133566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 57297,
+            "range": "± 393",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 847997,
+            "range": "± 2334",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 87023939,
+            "range": "± 1748925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 93501,
+            "range": "± 516",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 882640,
+            "range": "± 2289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 86142822,
+            "range": "± 333432",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 41915,
+            "range": "± 1218",
             "unit": "ns/iter"
           }
         ]
