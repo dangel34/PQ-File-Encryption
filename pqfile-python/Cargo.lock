@@ -782,7 +782,7 @@ checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
 
 [[package]]
 name = "pqfile"
-version = "4.3.2"
+version = "4.3.3"
 dependencies = [
  "aes-gcm",
  "apple-native-keyring-store",
