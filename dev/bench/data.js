@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785155448661,
+  "lastUpdate": 1785156317517,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -5303,6 +5303,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48293,
             "range": "± 834",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "5c733a2030a90036693862c000a45755b30e41b3",
+          "message": "fix: harden npm install steps per SonarQube findings\n\nSonarQube flagged every `npm install` in ci.yml and publish-node.yml for\ntwo things: omitting --ignore-scripts (lets lifecycle scripts run during\ninstall) and not locking resolved versions (npm install can silently\nupdate the lockfile; npm ci fails instead if it's out of sync).\n\nSwitched all three to `npm ci --ignore-scripts`, and added\n--ignore-scripts to the npm@12.0.1 self-update in publish-node.yml too.\nVerified --ignore-scripts is safe here: zero packages in the whole\ndependency tree (just @napi-rs/cli) have an install-time lifecycle\nscript, confirmed via package-lock.json's hasInstallScript markers.\n\nRegenerating the lockfile to actually satisfy `npm ci`'s stricter sync\ncheck surfaced a pre-existing drift in pqfile-node/package-lock.json's\noptionalDependencies (unrelated to this fix - some of the four platform\npackages don't exist on npm yet). Re-verified build + all 9 tests pass\nafter the fix.\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-27T08:41:47-04:00",
+          "tree_id": "ac4009213b85ba8b426b34dbc8ec5d87e352faa7",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/5c733a2030a90036693862c000a45755b30e41b3"
+        },
+        "date": 1785156316636,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 62130,
+            "range": "± 438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1052341,
+            "range": "± 36128",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 135185908,
+            "range": "± 574468",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 103095,
+            "range": "± 410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1024784,
+            "range": "± 30311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 111315334,
+            "range": "± 392623",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 64383,
+            "range": "± 772",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1021602,
+            "range": "± 18234",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 115739647,
+            "range": "± 500378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 106750,
+            "range": "± 730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1072471,
+            "range": "± 8324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 115029817,
+            "range": "± 899231",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 49048,
+            "range": "± 125",
             "unit": "ns/iter"
           }
         ]
