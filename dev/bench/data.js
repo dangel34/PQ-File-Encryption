@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785156317517,
+  "lastUpdate": 1785159043954,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -5405,6 +5405,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 49048,
             "range": "± 125",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "861bef9931c4544cd5fb8ebb935c0fa0262107ed",
+          "message": "fix: harden pip/cargo commands per additional SonarQube findings\n\nSonarQube flagged the bindings-python job's `pip install maturin pytest`\n(floating versions, and no --only-binary :all: so pip could fall back to\nbuilding a source distribution and running its setup.py/build backend)\nand the bindings-mobile job's `cargo build`/`cargo run` calls (no\n--locked, so a Cargo.lock drift could silently re-resolve dependencies).\n\nPinned maturin==1.14.1 and pytest==9.1.1 (current latest, both ship\nmanylinux/universal wheels) with --only-binary \":all:\" - quoted because\na bare `:all:` in a single-line `run:` value trips YAML's colon parsing\n(\"mapping values are not allowed here\"). Added --locked to every cargo\ninvocation in the bindings-mobile job.\n\nRegenerating pqfile-mobile/Cargo.lock to actually satisfy --locked\nsurfaced the same version-bump drift already fixed in pqfile-node's\nlockfile (pqfile 4.3.2 -> 4.3.3). Verified locally: the exact pip\ncommand installs cleanly wheel-only, and pqfile-mobile's cargo\ntest/build --locked all still pass (7 tests).\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-27T09:27:10-04:00",
+          "tree_id": "608050067c6ca52d303c4ca812a5d4e959f6b231",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/861bef9931c4544cd5fb8ebb935c0fa0262107ed"
+        },
+        "date": 1785159043053,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 71743,
+            "range": "± 1244",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1054564,
+            "range": "± 4931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 113552015,
+            "range": "± 2159620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 119770,
+            "range": "± 696",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1077430,
+            "range": "± 6268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 103133266,
+            "range": "± 2138102",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 74097,
+            "range": "± 341",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1101772,
+            "range": "± 6482",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 110572714,
+            "range": "± 167526",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 126134,
+            "range": "± 789",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1157626,
+            "range": "± 9564",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 110396043,
+            "range": "± 1473251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 53557,
+            "range": "± 976",
             "unit": "ns/iter"
           }
         ]
