@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784912860436,
+  "lastUpdate": 1785155448661,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -5201,6 +5201,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48281,
             "range": "± 177",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "5adc2266fce840642acfb61df6caa213982a30f7",
+          "message": "docs: update all bindings docs to reflect confirmed live PyPI/npm publishes\n\nMultiple docs still said publishing was \"scaffolding, not yet functional\"\nor \"has never run\" - true when originally written, false since v4.3.3\nactually published successfully to both registries. Updated:\n\n- pqfile-python/README.md, pqfile-node/README.md: real install\n  instructions (pip install pqfile / npm install @dangel34/pqfile)\n  instead of \"build from source until published\"\n- Root README.md: same, plus links to the live package pages\n- docs/ROADMAP.md item 7: appended confirmation that both registries\n  are live end-to-end, plus the workflow_dispatch and Actions\n  allow-list fixes that got there\n- docs/CHANGELOG.md: new [Unreleased] entry for the same (these fixes\n  landed after the v4.3.3 tag, so they're not part of that release)\n- publish-node.yml / publish-python.yml header comments: no longer\n  claim the workflows have never run\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-27T08:26:42-04:00",
+          "tree_id": "a584b833e431e36cdfb8bff4e48950399d81f760",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/5adc2266fce840642acfb61df6caa213982a30f7"
+        },
+        "date": 1785155448328,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 67371,
+            "range": "± 845",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 973951,
+            "range": "± 17860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 105859718,
+            "range": "± 1631789",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 113812,
+            "range": "± 636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1000358,
+            "range": "± 14282",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93708605,
+            "range": "± 1465913",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68552,
+            "range": "± 554",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 975881,
+            "range": "± 7396",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99822935,
+            "range": "± 480335",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 112232,
+            "range": "± 581",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1036883,
+            "range": "± 10779",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 101299315,
+            "range": "± 417744",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48293,
+            "range": "± 834",
             "unit": "ns/iter"
           }
         ]
