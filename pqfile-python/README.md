@@ -7,7 +7,17 @@ encryption. Built with [PyO3](https://pyo3.rs) and packaged with
 [maturin](https://www.maturin.rs); the crypto itself lives entirely in the
 `pqfile` Rust crate, not in this binding layer.
 
-## Install (from source, until wheels are published)
+## Install
+
+```sh
+pip install pqfile
+```
+
+Published on [PyPI](https://pypi.org/project/pqfile/) with prebuilt wheels for
+Windows, macOS (x86_64 and arm64), and Linux (manylinux) - no Rust toolchain
+needed to install it.
+
+To build from source instead (e.g. to work on the bindings themselves):
 
 ```sh
 pip install maturin
@@ -69,14 +79,13 @@ GUI (see `docs/FORMAT.md`), so files are interchangeable in both directions.
 ## CI and publishing
 
 `ci.yml`'s `bindings-python` job builds this crate and runs the pytest suite
-on every push/PR. `publish-python.yml` is scaffolding for the actual PyPI
-release - it builds wheels for Linux (manylinux, via `PyO3/maturin-action`'s
-bundled Docker image)/Windows/macOS (x86_64 and aarch64) plus an sdist, and
-would publish them to PyPI on a GitHub Release being published. It has never
-actually run: publishing uses PyPI Trusted Publishing (OIDC) rather than a
-stored token, which needs a one-time "pending publisher" registered on PyPI
-first (pypi.org -> your account -> Publishing -> Add a new pending
-publisher) - project name `pqfile`, owner `dangel34`, repository
-`PQ-File-Encryption`, workflow `publish-python.yml`, environment `release`.
-Until that's registered, the publish job's `id-token: write` permission has
-nothing to authenticate against and the upload step fails.
+on every push/PR. `publish-python.yml` builds wheels for Linux (manylinux,
+via `PyO3/maturin-action`'s bundled Docker image)/Windows/macOS (x86_64 and
+aarch64) plus an sdist, and publishes them to PyPI on a GitHub Release being
+published, via PyPI Trusted Publishing (OIDC) - no stored token anywhere.
+First ran for real with the `v4.3.3` release (2026-07-24) and published
+successfully. Also has a `workflow_dispatch` trigger (with a required `tag`
+input) so an already-published release can be published manually if needed -
+added after that first run hit a `startup_failure` (GitHub disables a
+newly-added workflow file until a maintainer enables it in the Actions tab,
+and a `startup_failure` run can't be retried any other way).

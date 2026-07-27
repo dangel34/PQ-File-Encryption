@@ -4,6 +4,16 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [Unreleased]
+
+### Fixes
+
+- **`publish-python.yml` couldn't be retried after a `startup_failure`**: the v4.3.3 release-published event fired this brand-new workflow for the first time, but GitHub disables a newly-added workflow file in the Actions tab until a maintainer enables it, so it failed at startup before any job ran - and a `startup_failure` run can't be retried via `gh run rerun`, nor can the same `release: published` event be re-fired without unpublishing/republishing the release. Added a `workflow_dispatch` trigger (with a required `tag` input, falling back from `github.event.release.tag_name`) so an already-published release can be published to PyPI manually.
+- **Repo Actions allow-list was missing `pypa/*`** (had `pypa/` with no wildcard, so it matched nothing) and had `pyo3/*` lower-cased against the real `PyO3` org - both found while diagnosing why `publish-python.yml` still failed startup after being enabled. `pypa/*` was corrected; `pyo3/*` turned out to still work despite the case mismatch (GitHub's allow-list matching is case-insensitive), so it's left as a minor cosmetic inconsistency rather than a functional bug.
+- **First real end-to-end publish, confirmed working**: with both fixes above and the PyPI/npm Trusted Publisher registrations in place, `v4.3.3` became the first release actually published all the way through - `pqfile` 0.1.0 is live on PyPI (all four wheels: Windows, macOS x86_64/arm64, manylinux, plus an sdist) and `@dangel34/pqfile` / `@dangel34/pqfile-win32-x64-msvc` 0.1.0 are live on npm, both via OIDC Trusted Publishing with no stored token. The other three npm platform packages (darwin-x64, darwin-arm64, linux-x64-gnu) still don't exist - same bootstrap gap as before, unrelated to this fix.
+
+---
+
 ## [4.3.3] - 2026-07-24
 
 ### New features

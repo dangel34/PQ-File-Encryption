@@ -1,41 +1,44 @@
 name: Publish Node.js bindings
 
-# Scaffolding only: this has never actually run end-to-end via CI (npm's
-# Trusted Publisher isn't registered for the "@dangel34/pqfile" package yet -
-# see the `publish` job's comment below - and nothing here can trigger a real
-# GitHub Release from this environment anyway). The macOS/cross legs of the
-# build matrix were never exercised locally - only x86_64-pc-windows-msvc was
-# ever actually built on this machine. YAML and the `napi` CLI command shapes
-# are correct per its documented usage (`napi create-npm-dir` /
-# `napi artifacts` / `napi prepublish`).
+# Ran for real for the first time with the v4.3.3 release (2026-07-24):
+# `@dangel34/pqfile` and `@dangel34/pqfile-win32-x64-msvc` are published and
+# live on npm via this workflow's OIDC Trusted Publishing, no stored token.
+# The macOS/Linux legs of the *build* matrix have still only ever been
+# cross-checked by reading napi-rs's own source, not built on this repo's
+# Windows dev machine - only x86_64-pc-windows-msvc has actually been built
+# here. The other three platform packages (darwin-x64, darwin-arm64,
+# linux-x64-gnu) don't exist on npm yet; each needs its own one-off manual
+# bootstrap publish (see pqfile-node/README.md) from a machine that can
+# build for that platform before this workflow can publish it automatically -
+# same reason `@dangel34/pqfile-win32-x64-msvc` itself needed one first.
 #
 # Fires once a GitHub Release is published (human-gated), mirroring
 # publish.yml's crates.io convention and publish-python.yml. Builds the
 # native addon per platform (matching package.json's `napi.triples`), then
 # arranges them into napi-rs's standard per-platform optionalDependencies
 # packages (`napi create-npm-dir` / `napi artifacts`) and publishes all of
-# them plus the main `@dangel34/pqfile` package (`napi prepublish`).
-# aarch64-linux-gnu is deliberately not in the target list yet -
-# cross-compiling it needs a zig toolchain step this hasn't been wired up
-# for, see pqfile-node/README.md.
+# them plus the main `@dangel34/pqfile` package (`napi prepublish`, plus an
+# explicit `npm publish` for the root package - see the `publish` job below
+# for why that's separate). aarch64-linux-gnu is deliberately not in the
+# target list yet - cross-compiling it needs a zig toolchain step this
+# hasn't been wired up for, see pqfile-node/README.md.
 #
 # Publishes via npm Trusted Publishing (OIDC) rather than a stored token -
 # npm's own token-creation UI now warns against a 2FA-bypass automation token
 # for CI and points at Trusted Publishing instead, so there is no NPM_TOKEN
 # secret here at all. Unlike PyPI's "pending publisher" (which can be
-# registered before the project exists), npm's Trusted Publisher is
+# registered before the project exists), npm's Trusted Publisher can only be
 # configured from an existing package's own Settings page, so the very first
-# publish had to happen manually first: `napi prepublish`'s own automated
-# flow can't complete npm's browser-based OTP challenge either (it shells out
-# to `npm publish` as a non-interactive subprocess, which just errors on
-# EOTP), so that first publish was a plain, interactive `npm publish` per
-# package from a maintainer's own authenticated npm login. That bootstrap
-# publish is also what surfaced the package needing to be renamed to the
-# scoped `@dangel34/pqfile` in the first place (npm rejected the unscoped
-# "pqfile" as too similar to the existing "vfile" package) - the `publish`
-# job's Trusted Publisher target below already reflects that rename, but the
-# publisher itself still needs registering before this workflow can take
-# over.
+# publish of each package name has to happen manually first: `napi
+# prepublish`'s own automated flow can't complete npm's browser-based OTP
+# challenge either (it shells out to `npm publish` as a non-interactive
+# subprocess, which just errors on EOTP), so that first publish is a plain,
+# interactive `npm publish` per package from a maintainer's own authenticated
+# npm login. That bootstrap is also what surfaced the package needing to be
+# renamed to the scoped `@dangel34/pqfile` in the first place (npm rejected
+# the unscoped "pqfile" as too similar to the existing "vfile" package, and
+# separately flagged the platform-specific unscoped name via its
+# spam-detection heuristic - the scoped rename fixed both at once).
 on:
   release:
     types: [published]

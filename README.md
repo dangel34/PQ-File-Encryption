@@ -764,7 +764,7 @@ All three wrap the same core single-recipient `keygen`/`encrypt`/`decrypt` strea
 
 ### Python (`pqfile-python/`)
 
-Built with [PyO3](https://pyo3.rs) / [maturin](https://www.maturin.rs) (package name `pqfile` on PyPI, once published).
+Built with [PyO3](https://pyo3.rs) / [maturin](https://www.maturin.rs). Published on [PyPI as `pqfile`](https://pypi.org/project/pqfile/) - `pip install pqfile`, prebuilt wheels for Windows/macOS/Linux.
 
 ```python
 import pqfile
@@ -780,7 +780,7 @@ See [pqfile-python/README.md](pqfile-python/README.md) for the full API and buil
 
 ### Node.js (`pqfile-node/`)
 
-Built with [napi-rs](https://napi.rs) (package name `@dangel34/pqfile` on npm - the unscoped `pqfile` is blocked as too similar to the existing `vfile` package). Every function returns a `Promise` and runs on libuv's worker thread pool rather than blocking Node's event loop.
+Built with [napi-rs](https://napi.rs). Published on [npm as `@dangel34/pqfile`](https://www.npmjs.com/package/@dangel34/pqfile) - `npm install @dangel34/pqfile` (the unscoped `pqfile` is blocked as too similar to the existing `vfile` package). Every function returns a `Promise` and runs on libuv's worker thread pool rather than blocking Node's event loop. Prebuilt binary currently covers Windows only - see `pqfile-node/README.md` for the macOS/Linux status.
 
 ```js
 const pqfile = require("@dangel34/pqfile");

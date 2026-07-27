@@ -23,6 +23,10 @@ name: Publish Python bindings
 # rejects it outright), nor can the same `release: published` event be
 # refired without unpublishing/republishing the release. `workflow_dispatch`
 # gives a way to run it directly against an already-published release's tag.
+# Used exactly that way to recover from the v4.3.3 startup_failure (after
+# also fixing this repo's Actions allow-list, which had `pypa/` with no
+# wildcard - matched nothing); the retry succeeded and `pqfile` 0.1.0 is live
+# on PyPI.
 on:
   release:
     types: [published]

@@ -11,15 +11,24 @@ Every function returns a `Promise` and runs on libuv's worker thread pool
 and ML-KEM operations are CPU-heavy enough that running them inline would
 block the event loop for the duration.
 
-## Install (from source, until prebuilt binaries are published)
+## Install
+
+```sh
+npm install @dangel34/pqfile
+```
+
+Published on npm as [`@dangel34/pqfile`](https://www.npmjs.com/package/@dangel34/pqfile)
+(the unscoped name `pqfile` is blocked - npm treats it as too similar to the
+existing `vfile` package). Prebuilt binary currently available for Windows
+x64 only; macOS/Linux installs will get no working native binary until those
+platform packages are bootstrapped (see "CI and publishing" below).
+
+To build from source instead (e.g. to work on the bindings themselves):
 
 ```sh
 npm install
 npm run build
 ```
-
-Published on npm as `@dangel34/pqfile` (the unscoped name `pqfile` is blocked -
-npm treats it as too similar to the existing `vfile` package).
 
 ## Quick start
 
@@ -75,34 +84,39 @@ GUI (see `docs/FORMAT.md`), so files are interchangeable in both directions.
 ## CI and publishing
 
 `ci.yml`'s `bindings-node` job builds this crate and runs the test suite on
-every push/PR. `publish-node.yml` is scaffolding for the actual npm release -
-it cross-builds the native addon for Windows/Linux x64 and macOS
-(x86_64 and aarch64), arranges them into napi-rs's standard per-platform
-`optionalDependencies` packages (`napi create-npm-dir`/`napi artifacts`), and
-would publish all of them plus the main `@dangel34/pqfile` package
-(`napi prepublish`) on a GitHub Release being published. The `artifacts`
-step's file-matching convention has been verified locally (a fake downloaded
-artifact directory was correctly picked up and copied into place). It
-publishes via npm Trusted Publishing (OIDC) rather than a stored token, which
-needs npm's Trusted Publisher registered on the `@dangel34/pqfile` package
-first (npmjs.com -> package -> Settings -> Trusted Publisher) - GitHub
-Actions, owner `dangel34`, repository `PQ-File-Encryption`, workflow
-`publish-node.yml`, environment `release`. Unlike PyPI's "pending publisher,"
-npm's Trusted Publisher is configured from an *existing* package's own
-settings page, so the very first publish needed to happen some other way: a
-manual, interactive `npm publish` per package (`napi prepublish`'s automated
-flow can't complete npm's browser-based OTP challenge, since it shells out to
-`npm publish` as a non-interactive subprocess). Two more npm-side blocks
-turned up doing that bootstrap publish, both unrelated to anything in this
-repo: the unscoped name `pqfile` was rejected as too similar to the existing
-`vfile` package (fixed by scoping to `@dangel34/pqfile`, npm's own suggested
-remedy - `publishConfig.access: "public"` was added so a scoped package still
-publishes publicly by default), and the platform-specific package name
-`pqfile-win32-x64-msvc` was separately rejected by npm's spam-detection
-heuristic before the rename (unresolved as of this writing - the scoped
-equivalent, `@dangel34/pqfile-win32-x64-msvc`, has not yet been retried). The
-macOS/Linux legs of the build matrix have only ever been cross-checked by
-reading napi-rs's own source, not built on this repo's Windows dev machine.
+every push/PR. `publish-node.yml` cross-builds the native addon for
+Windows/Linux x64 and macOS (x86_64 and aarch64), arranges them into
+napi-rs's standard per-platform `optionalDependencies` packages
+(`napi create-npm-dir`/`napi artifacts`), and publishes all of them plus the
+main `@dangel34/pqfile` package on a GitHub Release being published, via npm
+Trusted Publishing (OIDC) - no stored token anywhere.
+
+**Status as of the `v4.3.3` release (2026-07-24)**: `@dangel34/pqfile` and
+`@dangel34/pqfile-win32-x64-msvc` are published and live on npm. Getting there
+needed a manual bootstrap first, since npm's Trusted Publisher (unlike
+PyPI's "pending publisher") can only be configured from an *already-existing*
+package's settings page: a one-off, interactive `npm publish` per package
+from a maintainer's own npm login (`napi prepublish`'s own automated flow
+can't complete npm's browser-based OTP challenge, since it shells out to
+`npm publish` as a non-interactive subprocess). That bootstrap is also what
+surfaced two real bugs, both fixed: the package needed renaming from the
+unscoped `pqfile` (rejected as too similar to the existing `vfile` package,
+and separately hit npm's spam-detection heuristic on the platform-specific
+name) to the scoped `@dangel34/pqfile` - npm's own suggested remedy, which
+resolved both issues at once; and `napi prepublish` turned out to only ever
+publish the per-platform packages in its internal loop, never the root
+package itself, so `publish-node.yml` gained an explicit `npm publish` step
+after it.
+
+**Still open**: the other three platform packages (`@dangel34/pqfile-darwin-x64`,
+`@dangel34/pqfile-darwin-arm64`, `@dangel34/pqfile-linux-x64-gnu`) don't exist
+yet - each needs the same one-off manual bootstrap publish from a machine
+that can actually build for that platform before CI can take over publishing
+it automatically. Until then, `npm install @dangel34/pqfile` on macOS/Linux
+succeeds but has no working native binary (a soft `optionalDependencies`
+failure, not a hard install error). The macOS/Linux legs of the *build*
+matrix (as opposed to publish) have only ever been cross-checked by reading
+napi-rs's own source, not built on this repo's Windows dev machine.
 `aarch64-unknown-linux-gnu` is deliberately left out of `napi.triples` for
 now - cross-compiling it needs a zig toolchain step (`napi build --zig`) this
 hasn't been wired up for.
