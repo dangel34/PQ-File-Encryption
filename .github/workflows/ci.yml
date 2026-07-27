@@ -341,8 +341,12 @@ jobs:
           python -m venv .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
+      # Exact version pins (not floating on "latest") plus --only-binary
+      # :all: so pip only ever installs prebuilt wheels, never a source
+      # distribution that could run arbitrary code from its own setup.py/
+      # build backend during install.
       - name: Install maturin and pytest
-        run: pip install maturin pytest
+        run: pip install --only-binary ":all:" maturin==1.14.1 pytest==9.1.1
 
       - name: Build the extension module
         run: maturin develop --release
@@ -414,15 +418,18 @@ jobs:
       # toolchain available to drive the FFI boundary itself from CI - the
       # bindgen step below only proves the exported interface still generates
       # valid Kotlin/Swift source, not that either compiles or runs.
+      # --locked on every cargo invocation in this job: fail instead of
+      # silently re-resolving dependencies if pqfile-mobile/Cargo.lock ever
+      # drifts out of sync with Cargo.toml.
       - name: Run tests
-        run: cargo test --release
+        run: cargo test --release --locked
 
       - name: Generate Kotlin and Swift bindings (sanity check only)
         run: |
-          cargo build --release
-          cargo run --release --bin uniffi-bindgen -- generate \
+          cargo build --release --locked
+          cargo run --release --locked --bin uniffi-bindgen -- generate \
             --library target/release/libpqfile_mobile.so \
             --language kotlin --out-dir bindings/kotlin
-          cargo run --release --bin uniffi-bindgen -- generate \
+          cargo run --release --locked --bin uniffi-bindgen -- generate \
             --library target/release/libpqfile_mobile.so \
             --language swift --out-dir bindings/swift
