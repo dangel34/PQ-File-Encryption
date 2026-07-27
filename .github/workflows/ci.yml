@@ -375,8 +375,12 @@ jobs:
         with:
           key-suffix: bindings-node
 
+      # npm ci (not install): fails rather than silently updating the
+      # lockfile if package.json/package-lock.json ever drift out of sync.
+      # --ignore-scripts: nothing in this dependency tree (just
+      # @napi-rs/cli) has an install-time lifecycle script.
       - name: Install npm dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
 
       - name: Build the native addon
         run: npm run build

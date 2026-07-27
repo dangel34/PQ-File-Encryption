@@ -85,10 +85,16 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
+      # npm ci (not install): fails rather than silently updating the lockfile
+      # if package.json and package-lock.json ever drift out of sync.
+      # --ignore-scripts: nothing in this dependency tree (just @napi-rs/cli)
+      # has an install-time lifecycle script, confirmed by checking
+      # package-lock.json's hasInstallScript markers - so this only removes a
+      # supply-chain execution surface, it doesn't change what gets installed.
       - name: Install npm dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
 
-      # --no-install: use the @napi-rs/cli devDependency `npm install` just
+      # --no-install: use the @napi-rs/cli devDependency `npm ci` just
       # resolved from package-lock.json, rather than letting npx fetch
       # whatever "napi" currently resolves to on the registry (and run its
       # lifecycle scripts) if it weren't already present locally.
@@ -134,16 +140,19 @@ jobs:
       # it - pin an exact, known-sufficient version rather than floating on
       # `@latest` (which would resolve to a different, unreviewed npm release
       # on every run) or hoping the bundled version is new enough.
+      # --ignore-scripts: npm's own package has no install-time lifecycle
+      # scripts; harmless to disable here too for consistency.
       - name: Update npm
-        run: npm install -g npm@12.0.1
+        run: npm install -g npm@12.0.1 --ignore-scripts
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: bindings-*
           path: pqfile-node/artifacts
 
+      # npm ci --ignore-scripts, same reasoning as the build job above.
       - name: Install npm dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
 
       # Idempotency guard, matching publish.yml's crates.io check and
       # publish-python.yml's PyPI check: skip anything already on npm so
