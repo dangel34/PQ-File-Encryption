@@ -18,7 +18,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 pqfile = { path = "../pqfile" }
-uniffi = { version = "0.28", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }
 thiserror = "2"
 
 [[bin]]
