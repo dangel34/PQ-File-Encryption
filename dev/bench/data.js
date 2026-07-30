@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785160088355,
+  "lastUpdate": 1785418189725,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -5609,6 +5609,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 53228,
             "range": "± 90",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "7688f423f24a9d6d52359348482cc940f51f74cb",
+          "message": "chore(deps): update trusted criteria and dependency versions in audits.toml and config.toml\n\nAdded new trusted criteria for `displaydoc`, `http`, and `tokio-macros` in audits.toml, specifying user IDs and date ranges. Updated versions for several exemptions in config.toml, including `clang-sys` (1.9.1), `enum-ordinalize` (4.4.2), `rustls` (0.23.43), and `schemars` (1.2.2). Also removed deprecated entries for `displaydoc` and `http`. Updated publisher versions in imports.lock for `clap_complete` (4.6.8), `displaydoc` (0.2.7), `http` (1.5.0), and `tokio-macros` (2.7.2) to ensure compatibility with the latest features.",
+          "timestamp": "2026-07-30T09:26:01-04:00",
+          "tree_id": "dee212d9b30c6cb8d32ecad3b03f620358e1f83b",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/7688f423f24a9d6d52359348482cc940f51f74cb"
+        },
+        "date": 1785418189078,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 66523,
+            "range": "± 795",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 965017,
+            "range": "± 14688",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 106577144,
+            "range": "± 269257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 109583,
+            "range": "± 1938",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 981284,
+            "range": "± 21362",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 93560548,
+            "range": "± 1729938",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 68843,
+            "range": "± 415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 975679,
+            "range": "± 9803",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 99928414,
+            "range": "± 481410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 112046,
+            "range": "± 618",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1023380,
+            "range": "± 6707",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 99354935,
+            "range": "± 459858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 48266,
+            "range": "± 1372",
             "unit": "ns/iter"
           }
         ]
