@@ -333,7 +333,7 @@ version = "0.5.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.clang-sys]]
-version = "1.8.1"
+version = "1.9.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
@@ -524,10 +524,6 @@ criteria = "safe-to-deploy"
 version = "0.3.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.displaydoc]]
-version = "0.2.6"
-criteria = "safe-to-deploy"
-
 [[exemptions.dlib]]
 version = "0.5.3"
 criteria = "safe-to-deploy"
@@ -593,7 +589,7 @@ version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.enum-ordinalize]]
-version = "4.4.1"
+version = "4.4.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.enum-ordinalize-derive]]
@@ -798,10 +794,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.hmac]]
 version = "0.13.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.http]]
-version = "1.4.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.httparse]]
@@ -1441,7 +1433,7 @@ version = "0.5.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.redox_syscall]]
-version = "0.9.0"
+version = "0.9.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.reed-solomon]]
@@ -1509,7 +1501,7 @@ version = "1.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls]]
-version = "0.23.42"
+version = "0.23.43"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-native-certs]]
@@ -1549,7 +1541,7 @@ version = "0.1.29"
 criteria = "safe-to-deploy"
 
 [[exemptions.schemars]]
-version = "1.2.1"
+version = "1.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.scoped-tls]]
@@ -1780,10 +1772,6 @@ criteria = "safe-to-deploy"
 version = "1.53.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.tokio-macros]]
-version = "2.7.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.toml]]
 version = "0.5.11"
 criteria = "safe-to-deploy"
@@ -1961,7 +1949,7 @@ version = "1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.webbrowser]]
-version = "1.2.1"
+version = "1.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.webpki-root-certs]]
