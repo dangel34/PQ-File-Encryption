@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785418189725,
+  "lastUpdate": 1785766114034,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -5711,6 +5711,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48266,
             "range": "± 1372",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "6012b3e871741a04df953f120588857c7fb10af6",
+          "message": "fix: sync lockfiles in workspace-excluded crates after dep bump\n\npqfile-mobile, fuzz, pqfile-node, and pqfile-python each carry their own\nCargo.lock (excluded from the main workspace) and had drifted out of\nsync with pqfile's Cargo.toml after the pem 3->4 bump, breaking CI's\n--locked invocations (e.g. bindings-mobile's `cargo test --release\n--locked`). Also picks up cargo-vet's auto-pruned stale exemption\nentries for the old dependency versions.",
+          "timestamp": "2026-08-03T10:03:55-04:00",
+          "tree_id": "28d550dc08655c5d569af75dd57e4d59e3f0c2c8",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/6012b3e871741a04df953f120588857c7fb10af6"
+        },
+        "date": 1785766113109,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 61456,
+            "range": "± 737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 1038135,
+            "range": "± 10200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 132632522,
+            "range": "± 1553060",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 102166,
+            "range": "± 486",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 1009952,
+            "range": "± 10378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 110374423,
+            "range": "± 411559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 64365,
+            "range": "± 242",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 1015259,
+            "range": "± 11063",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 114898926,
+            "range": "± 552005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 105013,
+            "range": "± 2721",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 1062718,
+            "range": "± 10340",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 113536023,
+            "range": "± 500239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 49031,
+            "range": "± 243",
             "unit": "ns/iter"
           }
         ]
