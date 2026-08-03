@@ -19,7 +19,7 @@ jiff = { version = "0.2", default-features = false }
 rfd = "0.17"
 zeroize = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
-pem = "3"
+pem = "4"
 qrcode = { version = "0.14", default-features = false, features = ["image"] }
 # Fingerprint hashing for the `audit` feature's log records (never touches
 # the wire format); optional so a non-audit build doesn't pay for it.
