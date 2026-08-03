@@ -22,7 +22,7 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # v1 (pinned for 1.96.0) # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@191af2e1955bbe165f9bbacff2d2438002dff4d4 # v1 (pinned for 1.96.0) # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: 1.96.0
 
@@ -64,7 +64,7 @@ jobs:
 
       - name: Install cargo-semver-checks
         if: steps.check.outputs.pqfile_published == 'false'
-        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
         with:
           tool: cargo-semver-checks
 

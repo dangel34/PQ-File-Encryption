@@ -21,7 +21,7 @@ ml-kem = { version = "0.3", features = ["getrandom", "zeroize"] }
 chacha20poly1305 = "0.11"
 getrandom = { workspace = true }
 zeroize = { version = "1", features = ["derive"] }
-pem = "3"
+pem = "4"
 thiserror = "2"
 sha3 = "0.12"
 argon2 = { version = "0.5", features = ["zeroize"] }
