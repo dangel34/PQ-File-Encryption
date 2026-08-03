@@ -89,10 +89,6 @@ version = "0.8.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.aho-corasick]]
-version = "1.1.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.aho-corasick]]
 version = "1.1.5"
 criteria = "safe-to-deploy"
 
@@ -345,10 +341,6 @@ version = "1.9.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
-version = "4.6.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.clap]]
 version = "4.6.5"
 criteria = "safe-to-deploy"
 
@@ -489,10 +481,6 @@ version = "0.23.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.data-encoding]]
-version = "2.11.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.data-encoding]]
 version = "2.11.1"
 criteria = "safe-to-deploy"
 
@@ -606,10 +594,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.enum-ordinalize]]
 version = "4.4.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.enum-ordinalize-derive]]
-version = "4.4.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.enum-ordinalize-derive]]
@@ -821,10 +805,6 @@ version = "1.10.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.hybrid-array]]
-version = "0.4.13"
-criteria = "safe-to-deploy"
-
-[[exemptions.hybrid-array]]
 version = "0.4.14"
 criteria = "safe-to-deploy"
 
@@ -1018,10 +998,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.libm]]
 version = "0.2.16"
-criteria = "safe-to-deploy"
-
-[[exemptions.libredox]]
-version = "0.1.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.libredox]]
@@ -1274,10 +1250,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.pastey]]
 version = "0.2.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.pem]]
-version = "3.0.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.pem]]
@@ -1765,10 +1737,6 @@ version = "0.11.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.time]]
-version = "0.3.54"
-criteria = "safe-to-deploy"
-
-[[exemptions.time]]
 version = "0.3.55"
 criteria = "safe-to-deploy"
 
@@ -2246,10 +2214,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.x509-parser]]
 version = "0.18.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.xcursor]]
-version = "0.3.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.xcursor]]

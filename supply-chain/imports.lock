@@ -51,8 +51,8 @@ user-login = "emilio"
 user-name = "Emilio Cobos Álvarez"
 
 [[publisher.clap_builder]]
-version = "4.6.2"
-when = "2026-07-15"
+version = "4.6.5"
+when = "2026-07-31"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
