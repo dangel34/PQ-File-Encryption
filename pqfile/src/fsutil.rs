@@ -181,10 +181,7 @@ mod tests {
         assert_eq!(observed, "old placeholder");
 
         // The new file, reached by path, is both correct and now restricted.
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            b"replacement secret content"
-        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement secret content");
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }
