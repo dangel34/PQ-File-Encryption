@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788112110944,
+  "lastUpdate": 1788115968758,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -5915,6 +5915,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 41918,
             "range": "± 277",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "ed76beb28e58df711e0687d0713267e02ccc8915",
+          "message": "fix: simplify assertion in test for private key content\n\nThis commit refines the assertion in the test case within `fsutil.rs` by removing unnecessary line breaks, enhancing readability while ensuring the test still verifies the correct private key content and file permissions.",
+          "timestamp": "2026-08-30T14:48:57-04:00",
+          "tree_id": "7e86fa811946c87ed977132541a10426b3d75d21",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/ed76beb28e58df711e0687d0713267e02ccc8915"
+        },
+        "date": 1788115967975,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 50625,
+            "range": "± 256",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 948706,
+            "range": "± 15611",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 118713089,
+            "range": "± 2090505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 85193,
+            "range": "± 263",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 929007,
+            "range": "± 22227",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 98549521,
+            "range": "± 3056155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 54093,
+            "range": "± 381",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 942727,
+            "range": "± 9092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 107862645,
+            "range": "± 1390882",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 88148,
+            "range": "± 1436",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 981790,
+            "range": "± 6985",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 107557839,
+            "range": "± 986940",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 41188,
+            "range": "± 250",
             "unit": "ns/iter"
           }
         ]
