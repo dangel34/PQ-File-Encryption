@@ -81,6 +81,13 @@ pub enum PqfileError {
         slots_tried: usize,
     },
 
+    /// A multi-recipient encryption call was given zero recipient public keys.
+    /// Rejected before any KEM work or output, rather than silently producing
+    /// a `.pqf` file whose session key is wrapped for nobody and can never be
+    /// decrypted by any key.
+    #[error("multi-recipient encryption requires at least one recipient public key")]
+    NoRecipients,
+
     /// The key has been explicitly revoked.
     #[error("key has been revoked (fingerprint: {fingerprint}): {reason}")]
     KeyRevoked {
@@ -124,6 +131,24 @@ pub enum PqfileError {
         max_m_kib: u32,
         /// Maximum time cost the caller will allow.
         max_t: u32,
+    },
+
+    /// Argon2id parallelism (`p_cost`) in a v10 passphrase-only file exceeds the
+    /// fixed ceiling.
+    ///
+    /// Unlike memory and time, no public API or CLI flag raises this ceiling: every
+    /// pqfile encoder always writes the same compiled-in `p_cost` default, so a header
+    /// claiming more is necessarily crafted, not a legitimate file that needs a higher
+    /// limit. Checked before the KDF runs, for the same reason as
+    /// [`KdfLimitExceeded`](PqfileError::KdfLimitExceeded): the header is not yet
+    /// authenticated at this point (that happens only after key derivation), so a
+    /// crafted `p_cost` must not be allowed to drive Argon2's own cost unbounded.
+    #[error("KDF parallelism in file (p={p}) exceeds ceiling (max_p={max_p})")]
+    KdfParallelismLimitExceeded {
+        /// Parallelism (lane count) requested by the file.
+        p: u32,
+        /// Maximum parallelism the caller will allow.
+        max_p: u32,
     },
 
     /// The `.pqf` stream ended without a terminal chunk (is_last flag never seen).
@@ -388,6 +413,8 @@ impl PqfileError {
             PqfileError::FecSidecarInvalid(_) => 42,
             #[cfg(feature = "audit")]
             PqfileError::AuditLogInvalid(_) => 43,
+            PqfileError::NoRecipients => 44,
+            PqfileError::KdfParallelismLimitExceeded { .. } => 45,
         }
     }
 }

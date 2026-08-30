@@ -11,7 +11,7 @@
 /// |-----------|----------|---------|
 /// | `BACKEND_CREDENTIAL_STORE` (1) | Windows | Windows Credential Manager |
 /// | `BACKEND_CREDENTIAL_STORE` (1) | macOS | macOS Keychain |
-/// | `BACKEND_CREDENTIAL_STORE` (1) | Linux | Secret Service (GNOME/KDE) |
+/// | `BACKEND_CREDENTIAL_STORE` (1) | Linux | Kernel keyutils session keyring (not the D-Bus Secret Service used by gnome-keyring/kwallet; no daemon required, but the entry does not survive logout or reboot the way the Windows/macOS backends' entries do) |
 ///
 /// PKCS#11 hardware token support (YubiKey, smart cards) is tracked as a
 /// future backend.

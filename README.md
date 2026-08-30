@@ -48,9 +48,9 @@ The optional **hybrid mode** (`--hybrid`) adds X25519 Diffie-Hellman to the key 
 | Key derivation (passphrase)       | Argon2id (m=64 MiB, t=3, p=4)                            |
 | Key wrapping (passphrase)         | AES-256-GCM                                              |
 | Digital signatures                | ML-DSA-65 (FIPS 204); optional SLH-DSA-SHAKE-192f (FIPS 205) |
-| Key fingerprints                  | SHA3-256 (first 8 bytes, colon-separated hex)            |
+| Key fingerprints                  | SHA3-256 (first 16 bytes, colon-separated hex)           |
 | Threshold key splitting           | Shamir's Secret Sharing over GF(256)                     |
-| Hardware-backed key storage       | OS credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service) - unrelated to the FIDO2 hardware token second factor below, which is a physical USB security key |
+| Hardware-backed key storage       | OS credential store (Windows Credential Manager, macOS Keychain, Linux kernel keyutils session keyring) - unrelated to the FIDO2 hardware token second factor below, which is a physical USB security key |
 
 ---
 
@@ -171,7 +171,7 @@ pqfile keygen --out ./keys --hardware --label my-pqfile-key
 pqfile keygen --out ./keys --qr
 ```
 
-Key files written: `pubkey.pem` (share freely) and `privkey.pem` (keep secret; written with owner-only permissions on Unix). The fingerprint (SHA3-256, first 8 bytes) is printed at generation time, along with a compact `pqf1…` Bech32m recipient string that can be passed directly to `-r` without distributing a PEM file. `--hardware` stores the seed in Windows Credential Manager / macOS Keychain / Linux Secret Service instead of writing it to `privkey.pem`, and is mutually exclusive with `--passphrase` and `--expiry`. The same `--hardware --label <LABEL>` flags work on `sign-keygen`.
+Key files written: `pubkey.pem` (share freely) and `privkey.pem` (keep secret; written with owner-only permissions on Unix). The fingerprint (SHA3-256, first 16 bytes) is printed at generation time, along with a compact `pqf1…` Bech32m recipient string that can be passed directly to `-r` without distributing a PEM file. `--hardware` stores the seed in Windows Credential Manager / macOS Keychain / the Linux kernel keyutils session keyring instead of writing it to `privkey.pem`, and is mutually exclusive with `--passphrase` and `--expiry`. The same `--hardware --label <LABEL>` flags work on `sign-keygen`.
 
 ```bash
 # Print fingerprint and recipient string for an existing key (accepts PEM path or pqf1… string)
@@ -1206,7 +1206,7 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 | keyring-core     | 1       | Cross-platform OS credential store abstraction (hardware keys, native only) |
 | windows-native-keyring-store | 1 | Windows Credential Manager backend (Windows only)         |
 | apple-native-keyring-store   | 1 | macOS Keychain backend (macOS only)                       |
-| linux-keyutils-keyring-store | 1 | Linux Secret Service backend (Linux only)                 |
+| linux-keyutils-keyring-store | 1 | Linux kernel keyutils session-keyring backend (Linux only) |
 | tokio            | 1       | Async runtime backing `async_io` (optional, feature `"async"`)  |
 | memsec           | 0.7     | `mlock`/`VirtualLock` for in-flight secrets (`secret.rs`'s `LockedSecret`)  |
 | libcrux-ml-kem   | 0.0.10  | Optional F*-verified ML-KEM backend (`kem-libcrux` feature); agrees byte-for-byte with the default RustCrypto `ml-kem` on FIPS 203, proven by a cross-implementation oracle test |

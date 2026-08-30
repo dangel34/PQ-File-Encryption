@@ -18,8 +18,9 @@ use crate::format::{
     make_chunk_aad, PqfHeader, PqfHeaderV4, PqfHeaderV8, RecipientEntryV4, RecipientEntryV8,
     BASE_NONCE_LEN, CHUNK_SIZE, COMPRESSION_NONE, EK_LEN_1024, EK_LEN_512, EK_LEN_768,
     HEADER_LEN_768, HYBRID_CT_LEN_768, HYBRID_EK_LEN_768, KEM_VARIANT_1024, KEM_VARIANT_512,
-    KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, NONCE_LEN, PADDED_CT_LEN, VERSION, VERSION_AUTH_BIT,
-    VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V8, VERSION_V9, WRAPPED_KEY_LEN,
+    KEM_VARIANT_768, KEM_VARIANT_HYBRID_768, MAX_CHUNK_SIZE, MAX_ORIGINAL_SIZE, NONCE_LEN,
+    PADDED_CT_LEN, VERSION, VERSION_AUTH_BIT, VERSION_V3, VERSION_V4, VERSION_V5, VERSION_V8,
+    VERSION_V9, WRAPPED_KEY_LEN,
 };
 // Used only in the native compressed-encrypt path and its tests.
 #[cfg(not(target_arch = "wasm32"))]
@@ -100,6 +101,37 @@ fn fresh_stream_nonce() -> Result<[u8; NONCE_LEN], PqfileError> {
     Ok(nonce_bytes)
 }
 
+/// Validates `original_size` and `chunk_size` against the exact same bounds
+/// the v3/v5/v6 header reader (`format::read_nonce_and_size`,
+/// `format::validate_chunk_size`) enforces on the way back in, and returns
+/// `chunk_size` narrowed to `u32` via a checked conversion rather than a
+/// lossy `as` cast. Every public single-recipient encoder must call this
+/// before writing any header bytes: without it, an out-of-range call
+/// (`original_size` over 1 TiB, `chunk_size` of 0 or over 256 MiB, or a
+/// `chunk_size` above `u32::MAX` silently truncated by the old `as u32` cast)
+/// returned `Ok` and produced a `.pqf` file pqfile's own reader rejects.
+fn validate_stream_bounds(original_size: u64, chunk_size: usize) -> Result<u32, PqfileError> {
+    if original_size > MAX_ORIGINAL_SIZE {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("original_size {original_size} exceeds maximum ({MAX_ORIGINAL_SIZE})"),
+        )));
+    }
+    let chunk_size_u32 = u32::try_from(chunk_size).map_err(|_| {
+        PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("chunk_size {chunk_size} exceeds maximum ({MAX_CHUNK_SIZE})"),
+        ))
+    })?;
+    if chunk_size_u32 == 0 || chunk_size_u32 > MAX_CHUNK_SIZE {
+        return Err(PqfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("chunk_size {chunk_size_u32} is out of valid range (1..={MAX_CHUNK_SIZE})"),
+        )));
+    }
+    Ok(chunk_size_u32)
+}
+
 /// Encapsulates to `pubkey_pem` and writes the authenticated v3/v5 header,
 /// returning the secrets needed to encrypt the chunk stream that follows.
 pub(crate) fn begin_single_recipient_stream(
@@ -108,9 +140,7 @@ pub(crate) fn begin_single_recipient_stream(
     chunk_size: usize,
     writer: &mut dyn Write,
 ) -> Result<SingleRecipientStream, PqfileError> {
-    if chunk_size == 0 {
-        return Err(PqfileError::EncryptionFailure);
-    }
+    let chunk_size_u32 = validate_stream_bounds(original_size, chunk_size)?;
     let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
     let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
 
@@ -128,7 +158,7 @@ pub(crate) fn begin_single_recipient_stream(
         kem_ciphertext: kem_ct_bytes,
         nonce: nonce_bytes,
         original_size,
-        chunk_size: chunk_size as u32,
+        chunk_size: chunk_size_u32,
         compression_algo: COMPRESSION_NONE,
     };
     header.write(writer)?;
@@ -137,7 +167,7 @@ pub(crate) fn begin_single_recipient_stream(
         version,
         &nonce_bytes,
         original_size,
-        chunk_size as u32,
+        chunk_size_u32,
         COMPRESSION_NONE,
     );
     let base_nonce: [u8; BASE_NONCE_LEN] = nonce_bytes[..BASE_NONCE_LEN]
@@ -436,6 +466,9 @@ pub fn encrypt_stream_multi(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
+    if pubkey_pems.is_empty() {
+        return Err(PqfileError::NoRecipients);
+    }
     let mut session_key = LockedSecret::<32>::zeroed();
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
@@ -471,8 +504,12 @@ pub fn encrypt_stream_multi(
 }
 
 /// Encapsulates `session_key` to each recipient as a uniform-size v8 slot:
-/// the KEM ciphertext is zero-padded to `PADDED_CT_LEN` so slot size reveals
-/// nothing about the recipient's key type.
+/// the KEM ciphertext is padded to `PADDED_CT_LEN` with random bytes so slot
+/// contents reveal nothing about the recipient's key type. The padding must
+/// be random, not zero: each KEM variant has a distinct ciphertext length, so
+/// a zero suffix of a fixed length would itself identify the variant (and,
+/// against v9's random dummy slots, identify which slots are real) - see
+/// `pqfile/tests/anon_metadata.rs` for the regression coverage.
 fn build_v8_recipients(
     pubkey_pems: &[&str],
     session_key: &[u8; 32],
@@ -483,6 +520,7 @@ fn build_v8_recipients(
         let (kem_ct, ss) = encapsulate(ek)?;
         let wrapped_key = wrap_session_key(session_key, &ss)?;
         let mut padded_ct = [0u8; PADDED_CT_LEN];
+        getrandom::fill(&mut padded_ct).map_err(|_| PqfileError::EncryptionFailure)?;
         padded_ct[..kem_ct.len()].copy_from_slice(&kem_ct);
         recipients.push(RecipientEntryV8 {
             padded_ct,
@@ -531,6 +569,9 @@ pub fn encrypt_stream_multi_anon(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
+    if pubkey_pems.is_empty() {
+        return Err(PqfileError::NoRecipients);
+    }
     let mut session_key = LockedSecret::<32>::zeroed();
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
@@ -572,6 +613,12 @@ pub fn encrypt_stream_multi_anon_padded(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
 ) -> Result<(), PqfileError> {
+    if pubkey_pems.is_empty() {
+        // Without this, an empty real-recipient set would still pad to one
+        // random dummy slot and report success - a v9 file with zero real
+        // recipients that nonetheless "encrypts" cleanly.
+        return Err(PqfileError::NoRecipients);
+    }
     let mut session_key = LockedSecret::<32>::zeroed();
     getrandom::fill(session_key.as_mut()).map_err(|_| PqfileError::EncryptionFailure)?;
 
@@ -776,9 +823,7 @@ pub fn encrypt_stream_compressed(
 ) -> Result<(), PqfileError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if chunk_size == 0 {
-            return Err(PqfileError::EncryptionFailure);
-        }
+        let chunk_size_u32 = validate_stream_bounds(original_size, chunk_size)?;
         let (ek, kem_variant) = parse_encapsulation_key(pubkey_pem)?;
         let (kem_ct_bytes, ss_bytes) = encapsulate(ek)?;
 
@@ -793,7 +838,7 @@ pub fn encrypt_stream_compressed(
             kem_ciphertext: kem_ct_bytes,
             nonce: nonce_bytes,
             original_size,
-            chunk_size: chunk_size as u32,
+            chunk_size: chunk_size_u32,
             compression_algo: COMPRESSION_ZSTD,
         };
         header.write(writer)?;
@@ -802,7 +847,7 @@ pub fn encrypt_stream_compressed(
             version,
             &nonce_bytes,
             original_size,
-            chunk_size as u32,
+            chunk_size_u32,
             COMPRESSION_ZSTD,
         );
 
@@ -1655,7 +1700,10 @@ mod tests {
         let mut reader: &[u8] = b"data";
         let mut writer = Vec::new();
         let result = encrypt_stream(&pub_pem, 4, 0, &mut reader, &mut writer);
-        assert!(matches!(result, Err(PqfileError::EncryptionFailure)));
+        // Now routed through `validate_stream_bounds`, mirroring the reader's
+        // own `validate_chunk_size` (format.rs), which also reports
+        // out-of-range chunk sizes as `Io`, not `EncryptionFailure`.
+        assert!(matches!(result, Err(PqfileError::Io(_))));
     }
 
     #[test]
@@ -1865,7 +1913,7 @@ mod tests {
         let mut reader: &[u8] = b"data";
         let mut writer = Vec::new();
         let result = encrypt_stream_compressed(&pub_pem, 4, 0, 3, &mut reader, &mut writer);
-        assert!(matches!(result, Err(PqfileError::EncryptionFailure)));
+        assert!(matches!(result, Err(PqfileError::Io(_))));
     }
 
     // ── Parallel encryption ───────────────────────────────────────────────────

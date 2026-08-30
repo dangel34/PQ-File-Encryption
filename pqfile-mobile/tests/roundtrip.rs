@@ -86,6 +86,54 @@ fn file_roundtrip() {
     assert_eq!(std::fs::read(&decrypted).unwrap(), plaintext);
 }
 
+/// Regression: a `decrypt_file` call that fails partway through (here, a
+/// tampered final byte breaking the last chunk's AEAD tag) must not leave an
+/// authenticated-so-far plaintext prefix at `output_path`, and must not
+/// touch a pre-existing file at that path either.
+#[test]
+fn decrypt_file_is_atomic_on_failure() {
+    let pair = keygen(768, None).unwrap();
+    // Multiple chunks, so a tampered final chunk leaves earlier chunks
+    // already authenticated and written before the failure.
+    let plaintext = b"streamed to disk, multiple chunks worth".repeat(10_000);
+
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("input.bin");
+    let encrypted = dir.path().join("input.bin.pqf");
+    let decrypted = dir.path().join("output.bin");
+    std::fs::write(&src, &plaintext).unwrap();
+    std::fs::write(&decrypted, b"pre-existing destination").unwrap();
+
+    encrypt_file(
+        pair.public_key,
+        src.to_str().unwrap().to_string(),
+        encrypted.to_str().unwrap().to_string(),
+    )
+    .unwrap();
+
+    let mut tampered = std::fs::read(&encrypted).unwrap();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 1;
+    std::fs::write(&encrypted, &tampered).unwrap();
+
+    let result = decrypt_file(
+        pair.private_key,
+        encrypted.to_str().unwrap().to_string(),
+        decrypted.to_str().unwrap().to_string(),
+        None,
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        std::fs::read(&decrypted).unwrap(),
+        b"pre-existing destination",
+        "failed decryption must leave the pre-existing destination untouched"
+    );
+
+    // No leftover temp file either.
+    let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert_eq!(entries.len(), 3, "src, ciphertext, and destination only");
+}
+
 #[test]
 fn invalid_pem_fails() {
     assert!(encrypt_bytes("not a pem".to_string(), b"data".to_vec()).is_err());

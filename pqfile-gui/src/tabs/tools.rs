@@ -145,7 +145,10 @@ impl PqfileApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     if let Some(path) = self.repassphrase_key.path.as_ref() {
-                        match crate::widgets::atomic_write(path, result.privkey_pem.as_bytes()) {
+                        match crate::widgets::atomic_write_private(
+                            path,
+                            result.privkey_pem.as_bytes(),
+                        ) {
                             Ok(()) => {
                                 let note = if from_legacy {
                                     " (upgraded to Argon2id p=4)"

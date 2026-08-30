@@ -103,6 +103,11 @@ pub(crate) mod passphrase;
 pub(crate) mod progress;
 pub(crate) mod secret;
 
+/// Atomic file-write helper for callers who write encrypt/decrypt output
+/// directly to a destination path (rather than an in-memory buffer or an
+/// arbitrary `dyn Write`): see [`atomic_output::AtomicFileWriter`].
+pub mod atomic_output;
+
 /// Streaming decryptor: `PqfReader<R>` implements `std::io::Read`.
 pub mod reader;
 

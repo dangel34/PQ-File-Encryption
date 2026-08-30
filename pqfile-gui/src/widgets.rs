@@ -706,6 +706,87 @@ pub(crate) fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Resu
     }
 }
 
+/// Like [`atomic_write`], but for private key material: the temp file is
+/// created already restricted to its owner (mode 0600 on Unix, an owner-only
+/// ACL on Windows applied while it is still empty) rather than at the
+/// process's default create permissions. `atomic_write` alone is not
+/// sufficient for a private key - a typical Unix umask (022) would leave the
+/// renamed-into-place file world-readable even when it's replacing a key the
+/// core library originally wrote at 0600 (SSH import, expiry rewriting, and
+/// in-place passphrase changes all rewrite an existing private key file this
+/// way). Every GUI code path that writes private key or Shamir share bytes to
+/// disk should call this instead of `atomic_write`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn atomic_write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let pid = std::process::id();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let mut tmp_name = path.file_name().unwrap_or_default().to_owned();
+    tmp_name.push(format!(".{pid}-{ts}.tmp"));
+    let tmp = path.with_file_name(tmp_name);
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = create_restricted(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()
+    })();
+    match write_result {
+        Ok(()) => std::fs::rename(&tmp, path),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
+/// Creates `path` for writing with its final owner-only permissions already
+/// in place, mirroring `pqfile::fsutil`'s internal helper of the same name
+/// (not reusable directly: that one is `pub(crate)` to the `pqfile` crate).
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+fn create_restricted(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(all(not(target_arch = "wasm32"), windows))]
+fn create_restricted(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::process::CommandExt;
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", "*S-1-3-4:F"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()?;
+    if status.success() {
+        Ok(f)
+    } else {
+        Err(std::io::Error::other(format!(
+            "icacls exited with {status} while restricting '{}' to owner-only access",
+            path.display()
+        )))
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(any(unix, windows))))]
+fn create_restricted(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
 pub(crate) fn save_result(
     filename: &str,
     data: &[u8],
@@ -1019,6 +1100,55 @@ pub(crate) fn show_status(ui: &mut egui::Ui, status: &OpStatus, dark: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    #[test]
+    fn atomic_write_private_sets_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("privkey.pem");
+        atomic_write_private(&path, b"secret").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// Regression for the finding this function fixes: rewriting an existing
+    /// 0600 private key through the generic `atomic_write` (as SSH import,
+    /// expiry rewriting, and repassphrase used to) silently downgraded it to
+    /// the process umask - typically 0644. `atomic_write_private` must not.
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    #[test]
+    fn atomic_write_private_does_not_widen_an_existing_key_under_a_permissive_umask() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("privkey.pem");
+        std::fs::write(&path, b"original").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        atomic_write_private(&path, b"rewritten, e.g. with an expiry comment prepended").unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"rewritten, e.g. with an expiry comment prepended"
+        );
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), windows))]
+    #[test]
+    fn atomic_write_private_restricts_acl_to_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("privkey.pem");
+        atomic_write_private(&path, b"secret").unwrap();
+        let out = std::process::Command::new("icacls")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let listing = String::from_utf8_lossy(&out.stdout).to_string();
+        let ace_count = listing.matches(":(").count();
+        assert_eq!(ace_count, 1, "expected exactly one ACE, got: {listing}");
+    }
 
     /// Runs `add_contents` inside a fresh, AccessKit-enabled `egui::Context`
     /// for one pass and returns every resulting AccessKit node's role and

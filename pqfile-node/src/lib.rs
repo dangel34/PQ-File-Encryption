@@ -13,10 +13,12 @@
 #![deny(clippy::all)]
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Cursor};
+use std::io::{BufReader, Cursor};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+
+use pqfile::atomic_output::AtomicFileWriter;
 
 /// Converts a `pqfile::PqfileError` into a `napi::Error`, preserving the
 /// human-readable message. The stable numeric code from `PqfileError::code()`
@@ -185,14 +187,16 @@ impl Task for EncryptFileTask {
             let input = File::open(&self.input_path)?;
             let original_size = input.metadata()?.len();
             let mut reader = BufReader::new(input);
-            let mut writer = BufWriter::new(File::create(&self.output_path)?);
+            let mut writer = AtomicFileWriter::new(self.output_path.as_ref())?;
             pqfile::encrypt::encrypt_stream(
                 &self.pubkey_pem,
                 original_size,
                 pqfile::CHUNK_SIZE,
                 &mut reader,
                 &mut writer,
-            )
+            )?;
+            writer.commit()?;
+            Ok(())
         };
         run().map_err(map_err)
     }
@@ -231,13 +235,15 @@ impl Task for DecryptFileTask {
     fn compute(&mut self) -> Result<Self::Output> {
         let run = || -> std::result::Result<(), pqfile::PqfileError> {
             let mut reader = BufReader::new(File::open(&self.input_path)?);
-            let mut writer = BufWriter::new(File::create(&self.output_path)?);
+            let mut writer = AtomicFileWriter::new(self.output_path.as_ref())?;
             pqfile::decrypt::decrypt_stream(
                 &self.privkey_pem,
                 &mut reader,
                 &mut writer,
                 self.passphrase.as_deref(),
-            )
+            )?;
+            writer.commit()?;
+            Ok(())
         };
         run().map_err(map_err)
     }

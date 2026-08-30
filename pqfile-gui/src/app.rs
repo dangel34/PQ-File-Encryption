@@ -2105,8 +2105,11 @@ fn tab_help_content(tab: Tab) -> (&'static str, &'static [&'static str]) {
             "## ANONYMOUS MODE",
             "When you use multiple recipients, pqfile automatically uses the v8 anonymous \
              format. This hides which key type each recipient uses and randomizes the order \
-             of recipient entries, so an observer cannot tell how many or what kind of keys \
-             were used.",
+             of recipient entries, so an observer cannot tell what kind of keys were used or \
+             which slot belongs to which recipient. The exact recipient count is still stored \
+             in the clear in v8 - check \"Pad recipient count\" (v9) if hiding the count itself \
+             also matters to you; v9 rounds the slot count up to the next power of two with \
+             random dummy slots so an observer learns only that bound, not the real count.",
             "## PADDING & STEALTH MODE",
             "The Padding checkbox rounds the ciphertext length to a coarser bucket (at most \
              ~12% overhead) so an observer watching file sizes cannot determine the exact \

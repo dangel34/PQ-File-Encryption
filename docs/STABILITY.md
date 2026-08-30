@@ -61,6 +61,7 @@ surface.
 | `pqfile::recipient_string` | `encode_pubkey`, `decode_pubkey`, `is_recipient_string` |
 | `pqfile::error` | `PqfileError` (all variants; new variants may be added in minor releases) |
 | `pqfile::distrust` | `check`, `check_against`, `check_kem_variant`, `check_key_pem`, `kem_variant_algorithm_name`, `key_pem_algorithm_name`, `DistrustEntry`, `DISTRUSTED_ALGORITHMS` |
+| `pqfile::atomic_output` | `AtomicFileWriter` (added 4.3.4) |
 
 ### Format constants
 

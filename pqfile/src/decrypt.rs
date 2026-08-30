@@ -722,6 +722,15 @@ fn decrypt_stream_passphrase_inner(
             max_t,
         });
     }
+    // See `PqfileError::KdfParallelismLimitExceeded` for why this ceiling is
+    // fixed rather than caller-supplied like max_m_kib/max_t.
+    const MAX_P_COST: u32 = crate::passphrase::ARGON2_P_COST;
+    if header.p_cost > MAX_P_COST {
+        return Err(PqfileError::KdfParallelismLimitExceeded {
+            p: header.p_cost,
+            max_p: MAX_P_COST,
+        });
+    }
 
     let session_key = derive_key_with_params_and_secret(
         passphrase,

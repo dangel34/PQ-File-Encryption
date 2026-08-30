@@ -58,3 +58,5 @@ Code `0` is a catch-all for errors that do not map to a known variant (should no
 | 41 | `ResumeCheckpointInvalid` | Resume checkpoint or the partial output it describes is unusable (corrupt, too short, or its last chunk fails to authenticate) |
 | 42 | `FecSidecarInvalid` | `--fec` parity sidecar could not be read (missing, corrupt header, or wrong version) - not the same as an uncorrectable block, which isn't an error at all |
 | 43 | `AuditLogInvalid` | Audit log is malformed, a record's signature does not verify, the hash chain does not link correctly, or (with `--expect-tip`) the log's final chain hash does not match |
+| 44 | `NoRecipients` | Multi-recipient encryption was called with zero recipient public keys; rejected up front rather than producing a `.pqf` file nothing can ever decrypt |
+| 45 | `KdfParallelismLimitExceeded` | v10 file's Argon2id `p_cost` (parallelism) exceeds the fixed ceiling; unlike memory/time this has no caller-adjustable flag, since no legitimate pqfile encoder ever writes a `p_cost` above the compiled-in default |

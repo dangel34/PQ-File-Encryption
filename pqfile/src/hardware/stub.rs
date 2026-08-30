@@ -17,7 +17,9 @@
 use crate::error::PqfileError;
 
 /// Backend ID for the OS credential store (Windows Credential Manager,
-/// macOS Keychain, or Linux Secret Service).
+/// macOS Keychain, or the Linux kernel keyutils session keyring - see the
+/// [parent module][super] docs for the exact per-platform backend and its
+/// persistence characteristics).
 pub const BACKEND_CREDENTIAL_STORE: u8 = 0x01;
 
 /// Backend ID reserved for a future PKCS#11 hardware token backend.

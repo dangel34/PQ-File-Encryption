@@ -66,3 +66,35 @@ def test_file_roundtrip(tmp_path):
 def test_invalid_pem_raises():
     with pytest.raises(pqfile.PqfileError):
         pqfile.encrypt_bytes("not a pem", b"data")
+
+
+def test_decrypt_file_is_atomic_on_failure(tmp_path):
+    """A decrypt_file call that fails partway through (here, a tampered
+    final byte breaking the last chunk's AEAD tag) must not leave an
+    authenticated-so-far plaintext prefix at the destination, and must not
+    touch a pre-existing file at that path either."""
+    pub_pem, priv_pem = pqfile.keygen()
+    # Multiple chunks, so a tampered final chunk leaves earlier chunks
+    # already authenticated and written before the failure.
+    plaintext = b"streamed to disk, multiple chunks worth" * 10_000
+
+    src = tmp_path / "input.bin"
+    encrypted = tmp_path / "input.bin.pqf"
+    output = tmp_path / "output.bin"
+    src.write_bytes(plaintext)
+    output.write_bytes(b"pre-existing destination")
+
+    pqfile.encrypt_file(pub_pem, src, encrypted)
+
+    damaged = bytearray(encrypted.read_bytes())
+    damaged[-1] ^= 1
+    encrypted.write_bytes(damaged)
+
+    with pytest.raises(pqfile.PqfileError):
+        pqfile.decrypt_file(priv_pem, encrypted, output)
+
+    assert output.read_bytes() == b"pre-existing destination"
+    # No leftover temp file either: src, ciphertext, and destination only.
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+        [src.name, encrypted.name, output.name]
+    )

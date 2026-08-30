@@ -4,7 +4,7 @@ use crate::colors::{c_accent, c_card, c_chrome, c_green, c_red, c_subtext, c_sur
 use crate::colors::{c_overlay, c_text};
 use crate::types::{KeygenAlgorithm, OpStatus, Tab};
 #[cfg(not(target_arch = "wasm32"))]
-use crate::widgets::atomic_write;
+use crate::widgets::{atomic_write, atomic_write_private};
 use crate::widgets::{card, section_label, show_status, tab_heading_help};
 use eframe::egui::{self, RichText, Vec2};
 use pqfile::keygen;
@@ -149,7 +149,8 @@ impl PqfileApp {
                     ui.label(
                         RichText::new(
                             "The seed is stored in Windows Credential Manager / macOS Keychain \
-                             / Linux Secret Service. No seed bytes are written to disk.",
+                             / the Linux kernel keyutils session keyring. No seed bytes are \
+                             written to disk.",
                         )
                         .size(12.0)
                         .color(c_subtext(dark)),
@@ -435,7 +436,7 @@ impl PqfileApp {
 
                 let fp = pqfile::keygen::fingerprint_pem(&pub_pem);
                 if let Err(e) = atomic_write(&pub_path, pub_pem.as_bytes())
-                    .and_then(|_| atomic_write(&priv_path, priv_pem.as_bytes()))
+                    .and_then(|_| atomic_write_private(&priv_path, priv_pem.as_bytes()))
                 {
                     self.keygen_status = OpStatus::Err(e.to_string());
                 } else {
@@ -514,13 +515,16 @@ impl PqfileApp {
                             .then(|| self.keygen_expiry_date.trim().to_owned())
                             .filter(|s| !s.is_empty());
                         if let Some(ref date) = expiry {
-                            for name in &["pubkey.pem", "privkey.pem"] {
+                            for (name, is_private) in [("pubkey.pem", false), ("privkey.pem", true)]
+                            {
                                 let p = dir.join(name);
                                 if let Ok(pem_str) = std::fs::read_to_string(&p) {
-                                    let _ = atomic_write(
-                                        &p,
-                                        format!("# Expires: {date}\n{pem_str}").as_bytes(),
-                                    );
+                                    let bytes = format!("# Expires: {date}\n{pem_str}");
+                                    let _ = if is_private {
+                                        atomic_write_private(&p, bytes.as_bytes())
+                                    } else {
+                                        atomic_write(&p, bytes.as_bytes())
+                                    };
                                 }
                             }
                         }

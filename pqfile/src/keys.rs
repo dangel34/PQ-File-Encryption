@@ -18,7 +18,10 @@
 ///   println!("fingerprint: {}", pubkey.fingerprint());
 ///   ```
 use crate::error::PqfileError;
-use crate::format::{KEM_VARIANT_1024, KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768};
+use crate::format::{
+    EK_LEN_1024, EK_LEN_512, EK_LEN_768, HYBRID_EK_LEN_768, HYBRID_SEED_LEN_768, KEM_VARIANT_1024,
+    KEM_VARIANT_512, KEM_VARIANT_768, KEM_VARIANT_HYBRID_768,
+};
 use crate::keygen::{
     fingerprint, PRIV_ENC_TAG, PRIV_ENC_TAG_1024, PRIV_ENC_TAG_512, PRIV_ENC_TAG_HYBRID_768,
     PRIV_TAG, PRIV_TAG_1024, PRIV_TAG_512, PRIV_TAG_HYBRID_768, PUB_TAG, PUB_TAG_1024, PUB_TAG_512,
@@ -43,17 +46,20 @@ impl PqfPublicKey {
     /// tag, or if the key bytes have the wrong length.
     pub fn from_pem(pem_str: &str) -> Result<Self, PqfileError> {
         let parsed = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
-        let kem_variant = match parsed.tag() {
-            t if t == PUB_TAG_512 => KEM_VARIANT_512,
-            t if t == PUB_TAG => KEM_VARIANT_768,
-            t if t == PUB_TAG_1024 => KEM_VARIANT_1024,
-            t if t == PUB_TAG_HYBRID_768 => KEM_VARIANT_HYBRID_768,
+        let (kem_variant, expected_len) = match parsed.tag() {
+            t if t == PUB_TAG_512 => (KEM_VARIANT_512, EK_LEN_512),
+            t if t == PUB_TAG => (KEM_VARIANT_768, EK_LEN_768),
+            t if t == PUB_TAG_1024 => (KEM_VARIANT_1024, EK_LEN_1024),
+            t if t == PUB_TAG_HYBRID_768 => (KEM_VARIANT_HYBRID_768, HYBRID_EK_LEN_768),
             tag => {
                 return Err(PqfileError::InvalidPem(format!(
                     "unrecognised public key tag: {tag}"
                 )))
             }
         };
+        if parsed.contents().len() != expected_len {
+            return Err(bad_len(expected_len, parsed.contents().len()));
+        }
         let fp = fingerprint(parsed.contents());
         Ok(PqfPublicKey {
             pem: pem_str.to_owned(),
@@ -126,22 +132,31 @@ impl PqfPrivateKey {
     /// the corresponding public key from an encrypted private key, use
     /// [`PqfPrivateKey::to_public_key`] with the passphrase.
     pub fn from_pem(pem_str: &str) -> Result<Self, PqfileError> {
+        use crate::passphrase::{ENCRYPTED_BODY_LEN, ENCRYPTED_HYBRID_BODY_LEN};
+
+        const SEED_LEN: usize = 64;
+
         let parsed = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
-        let (kem_variant, encrypted) = match parsed.tag() {
-            t if t == PRIV_TAG_512 => (KEM_VARIANT_512, false),
-            t if t == PRIV_TAG => (KEM_VARIANT_768, false),
-            t if t == PRIV_TAG_1024 => (KEM_VARIANT_1024, false),
-            t if t == PRIV_TAG_HYBRID_768 => (KEM_VARIANT_HYBRID_768, false),
-            t if t == PRIV_ENC_TAG_512 => (KEM_VARIANT_512, true),
-            t if t == PRIV_ENC_TAG => (KEM_VARIANT_768, true),
-            t if t == PRIV_ENC_TAG_1024 => (KEM_VARIANT_1024, true),
-            t if t == PRIV_ENC_TAG_HYBRID_768 => (KEM_VARIANT_HYBRID_768, true),
+        let (kem_variant, encrypted, expected_len) = match parsed.tag() {
+            t if t == PRIV_TAG_512 => (KEM_VARIANT_512, false, SEED_LEN),
+            t if t == PRIV_TAG => (KEM_VARIANT_768, false, SEED_LEN),
+            t if t == PRIV_TAG_1024 => (KEM_VARIANT_1024, false, SEED_LEN),
+            t if t == PRIV_TAG_HYBRID_768 => (KEM_VARIANT_HYBRID_768, false, HYBRID_SEED_LEN_768),
+            t if t == PRIV_ENC_TAG_512 => (KEM_VARIANT_512, true, ENCRYPTED_BODY_LEN),
+            t if t == PRIV_ENC_TAG => (KEM_VARIANT_768, true, ENCRYPTED_BODY_LEN),
+            t if t == PRIV_ENC_TAG_1024 => (KEM_VARIANT_1024, true, ENCRYPTED_BODY_LEN),
+            t if t == PRIV_ENC_TAG_HYBRID_768 => {
+                (KEM_VARIANT_HYBRID_768, true, ENCRYPTED_HYBRID_BODY_LEN)
+            }
             tag => {
                 return Err(PqfileError::InvalidPem(format!(
                     "unrecognised private key tag: {tag}"
                 )))
             }
         };
+        if parsed.contents().len() != expected_len {
+            return Err(bad_len(expected_len, parsed.contents().len()));
+        }
         Ok(PqfPrivateKey {
             pem: pem_str.to_owned(),
             kem_variant,
@@ -208,18 +223,26 @@ pub struct PqfSigningKey {
 impl PqfSigningKey {
     /// Parse a signing key PEM string (ML-DSA-65 or SLH-DSA-SHAKE-192f).
     pub fn from_pem(pem_str: &str) -> Result<Self, PqfileError> {
+        use crate::passphrase::{ENCRYPTED_SIGNING_BODY_LEN, ENCRYPTED_SLH_SIGNING_BODY_LEN};
+        use crate::sign::{SK_SEED_LEN, SLH_SK_SEED_LEN};
+
         let parsed = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
-        let (encrypted, algorithm) = match parsed.tag() {
-            t if t == crate::sign::SK_TAG => (false, "ML-DSA-65"),
-            t if t == crate::sign::SK_ENC_TAG => (true, "ML-DSA-65"),
-            t if t == crate::sign::SLH_SK_TAG => (false, "SLH-DSA-SHAKE-192f"),
-            t if t == crate::sign::SLH_SK_ENC_TAG => (true, "SLH-DSA-SHAKE-192f"),
+        let (encrypted, algorithm, expected_len) = match parsed.tag() {
+            t if t == crate::sign::SK_TAG => (false, "ML-DSA-65", SK_SEED_LEN),
+            t if t == crate::sign::SK_ENC_TAG => (true, "ML-DSA-65", ENCRYPTED_SIGNING_BODY_LEN),
+            t if t == crate::sign::SLH_SK_TAG => (false, "SLH-DSA-SHAKE-192f", SLH_SK_SEED_LEN),
+            t if t == crate::sign::SLH_SK_ENC_TAG => {
+                (true, "SLH-DSA-SHAKE-192f", ENCRYPTED_SLH_SIGNING_BODY_LEN)
+            }
             tag => {
                 return Err(PqfileError::InvalidPem(format!(
                     "unrecognised signing key tag: {tag}"
                 )))
             }
         };
+        if parsed.contents().len() != expected_len {
+            return Err(bad_len(expected_len, parsed.contents().len()));
+        }
         Ok(PqfSigningKey {
             pem: pem_str.to_owned(),
             encrypted,
@@ -263,10 +286,12 @@ pub struct PqfVerifyingKey {
 impl PqfVerifyingKey {
     /// Parse a verifying key PEM string (ML-DSA-65 or SLH-DSA-SHAKE-192f).
     pub fn from_pem(pem_str: &str) -> Result<Self, PqfileError> {
+        use crate::sign::{SLH_VK_LEN, VK_LEN};
+
         let parsed = pem::parse(pem_str).map_err(|e| PqfileError::InvalidPem(e.to_string()))?;
-        let algorithm = match parsed.tag() {
-            t if t == crate::sign::VK_TAG => "ML-DSA-65",
-            t if t == crate::sign::SLH_VK_TAG => "SLH-DSA-SHAKE-192f",
+        let (algorithm, expected_len) = match parsed.tag() {
+            t if t == crate::sign::VK_TAG => ("ML-DSA-65", VK_LEN),
+            t if t == crate::sign::SLH_VK_TAG => ("SLH-DSA-SHAKE-192f", SLH_VK_LEN),
             tag => {
                 return Err(PqfileError::InvalidPem(format!(
                     "expected '{}' or '{}', got '{tag}'",
@@ -275,6 +300,9 @@ impl PqfVerifyingKey {
                 )))
             }
         };
+        if parsed.contents().len() != expected_len {
+            return Err(bad_len(expected_len, parsed.contents().len()));
+        }
         let fp = fingerprint(parsed.contents());
         Ok(PqfVerifyingKey {
             pem: pem_str.to_owned(),
@@ -600,5 +628,112 @@ mod tests {
         let (pub_pem, _) = keygen_bytes(768, None).unwrap();
         let k = PqfPublicKey::from_pem(&pub_pem).unwrap();
         assert_eq!(k.as_pem(), pub_pem);
+    }
+
+    // ── Wrong-length bodies: every constructor's documented "or if the key
+    // bytes have the wrong length" promise, exercised one byte short and one
+    // byte long for every tag it recognises. ────────────────────────────────
+
+    fn pem_with_body(tag: &str, len: usize) -> String {
+        pem::encode(&pem::Pem::new(tag, vec![0u8; len]))
+    }
+
+    #[test]
+    fn public_key_rejects_wrong_length_body_for_every_variant() {
+        use crate::format::{EK_LEN_1024, EK_LEN_512, EK_LEN_768, HYBRID_EK_LEN_768};
+        for (tag, correct_len) in [
+            (PUB_TAG_512, EK_LEN_512),
+            (PUB_TAG, EK_LEN_768),
+            (PUB_TAG_1024, EK_LEN_1024),
+            (PUB_TAG_HYBRID_768, HYBRID_EK_LEN_768),
+        ] {
+            assert!(
+                PqfPublicKey::from_pem(&pem_with_body(tag, correct_len - 1)).is_err(),
+                "{tag}: one byte short must be rejected"
+            );
+            assert!(
+                PqfPublicKey::from_pem(&pem_with_body(tag, correct_len + 1)).is_err(),
+                "{tag}: one byte long must be rejected"
+            );
+            assert!(
+                PqfPublicKey::from_pem(&pem_with_body(tag, correct_len)).is_ok(),
+                "{tag}: exact length must still be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn private_key_rejects_wrong_length_body_for_every_variant() {
+        use crate::passphrase::{ENCRYPTED_BODY_LEN, ENCRYPTED_HYBRID_BODY_LEN};
+        const SEED_LEN: usize = 64;
+        for (tag, correct_len) in [
+            (PRIV_TAG_512, SEED_LEN),
+            (PRIV_TAG, SEED_LEN),
+            (PRIV_TAG_1024, SEED_LEN),
+            (PRIV_TAG_HYBRID_768, HYBRID_SEED_LEN_768),
+            (PRIV_ENC_TAG_512, ENCRYPTED_BODY_LEN),
+            (PRIV_ENC_TAG, ENCRYPTED_BODY_LEN),
+            (PRIV_ENC_TAG_1024, ENCRYPTED_BODY_LEN),
+            (PRIV_ENC_TAG_HYBRID_768, ENCRYPTED_HYBRID_BODY_LEN),
+        ] {
+            assert!(
+                PqfPrivateKey::from_pem(&pem_with_body(tag, correct_len - 1)).is_err(),
+                "{tag}: one byte short must be rejected"
+            );
+            assert!(
+                PqfPrivateKey::from_pem(&pem_with_body(tag, correct_len + 1)).is_err(),
+                "{tag}: one byte long must be rejected"
+            );
+            assert!(
+                PqfPrivateKey::from_pem(&pem_with_body(tag, correct_len)).is_ok(),
+                "{tag}: exact length must still be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn signing_key_rejects_wrong_length_body_for_every_variant() {
+        use crate::passphrase::{ENCRYPTED_SIGNING_BODY_LEN, ENCRYPTED_SLH_SIGNING_BODY_LEN};
+        use crate::sign::{
+            SK_ENC_TAG, SK_SEED_LEN, SK_TAG, SLH_SK_ENC_TAG, SLH_SK_SEED_LEN, SLH_SK_TAG,
+        };
+        for (tag, correct_len) in [
+            (SK_TAG, SK_SEED_LEN),
+            (SK_ENC_TAG, ENCRYPTED_SIGNING_BODY_LEN),
+            (SLH_SK_TAG, SLH_SK_SEED_LEN),
+            (SLH_SK_ENC_TAG, ENCRYPTED_SLH_SIGNING_BODY_LEN),
+        ] {
+            assert!(
+                PqfSigningKey::from_pem(&pem_with_body(tag, correct_len - 1)).is_err(),
+                "{tag}: one byte short must be rejected"
+            );
+            assert!(
+                PqfSigningKey::from_pem(&pem_with_body(tag, correct_len + 1)).is_err(),
+                "{tag}: one byte long must be rejected"
+            );
+            assert!(
+                PqfSigningKey::from_pem(&pem_with_body(tag, correct_len)).is_ok(),
+                "{tag}: exact length must still be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn verifying_key_rejects_wrong_length_body_for_every_variant() {
+        use crate::sign::{SLH_VK_LEN, SLH_VK_TAG, VK_LEN, VK_TAG};
+        for (tag, correct_len) in [(VK_TAG, VK_LEN), (SLH_VK_TAG, SLH_VK_LEN)] {
+            assert!(
+                PqfVerifyingKey::from_pem(&pem_with_body(tag, correct_len - 1)).is_err(),
+                "{tag}: one byte short must be rejected"
+            );
+            assert!(
+                PqfVerifyingKey::from_pem(&pem_with_body(tag, correct_len + 1)).is_err(),
+                "{tag}: one byte long must be rejected"
+            );
+            assert!(
+                PqfVerifyingKey::from_pem(&pem_with_body(tag, correct_len)).is_ok(),
+                "{tag}: exact length must still be accepted"
+            );
+        }
     }
 }

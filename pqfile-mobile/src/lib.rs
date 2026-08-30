@@ -12,7 +12,9 @@
 //! either platform.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Cursor};
+use std::io::{BufReader, Cursor};
+
+use pqfile::atomic_output::AtomicFileWriter;
 
 uniffi::setup_scaffolding!();
 
@@ -104,7 +106,8 @@ pub fn encrypt_file(
     let input = File::open(input_path).map_err(pqfile::PqfileError::from)?;
     let original_size = input.metadata().map_err(pqfile::PqfileError::from)?.len();
     let mut reader = BufReader::new(input);
-    let mut writer = BufWriter::new(File::create(output_path).map_err(pqfile::PqfileError::from)?);
+    let mut writer =
+        AtomicFileWriter::new(output_path.as_ref()).map_err(pqfile::PqfileError::from)?;
     pqfile::encrypt::encrypt_stream(
         &pubkey_pem,
         original_size,
@@ -112,6 +115,7 @@ pub fn encrypt_file(
         &mut reader,
         &mut writer,
     )?;
+    writer.commit().map_err(pqfile::PqfileError::from)?;
     Ok(())
 }
 
@@ -125,7 +129,9 @@ pub fn decrypt_file(
     passphrase: Option<String>,
 ) -> Result<(), PqfileMobileError> {
     let mut reader = BufReader::new(File::open(input_path).map_err(pqfile::PqfileError::from)?);
-    let mut writer = BufWriter::new(File::create(output_path).map_err(pqfile::PqfileError::from)?);
+    let mut writer =
+        AtomicFileWriter::new(output_path.as_ref()).map_err(pqfile::PqfileError::from)?;
     pqfile::decrypt::decrypt_stream(&privkey_pem, &mut reader, &mut writer, passphrase.as_deref())?;
+    writer.commit().map_err(pqfile::PqfileError::from)?;
     Ok(())
 }

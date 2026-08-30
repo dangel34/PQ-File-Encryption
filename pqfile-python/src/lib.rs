@@ -6,10 +6,12 @@
 //! (built as `_pqfile`) with a friendlier surface (pathlib support, docstrings).
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Cursor};
+use std::io::{BufReader, Cursor};
 
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+
+use pqfile::atomic_output::AtomicFileWriter;
 
 /// Converts a `pqfile::PqfileError` into a Python exception, preserving the
 /// human-readable message. The stable numeric code from `PqfileError::code()`
@@ -100,14 +102,16 @@ fn encrypt_file(
         let input = File::open(input_path)?;
         let original_size = input.metadata()?.len();
         let mut reader = BufReader::new(input);
-        let mut writer = BufWriter::new(File::create(output_path)?);
+        let mut writer = AtomicFileWriter::new(output_path.as_ref())?;
         pqfile::encrypt::encrypt_stream(
             pubkey_pem,
             original_size,
             pqfile::CHUNK_SIZE,
             &mut reader,
             &mut writer,
-        )
+        )?;
+        writer.commit()?;
+        Ok(())
     })
     .map_err(map_err)
 }
@@ -125,13 +129,15 @@ fn decrypt_file(
 ) -> PyResult<()> {
     py.detach(|| {
         let mut reader = BufReader::new(File::open(input_path)?);
-        let mut writer = BufWriter::new(File::create(output_path)?);
+        let mut writer = AtomicFileWriter::new(output_path.as_ref())?;
         pqfile::decrypt::decrypt_stream(
             privkey_pem,
             &mut reader,
             &mut writer,
             passphrase.as_deref(),
-        )
+        )?;
+        writer.commit()?;
+        Ok(())
     })
     .map_err(map_err)
 }

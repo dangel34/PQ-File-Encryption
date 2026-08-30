@@ -21,8 +21,8 @@ pub(crate) const SK_TAG: &str = "ML-DSA-65 SIGNING KEY";
 pub(crate) const SK_ENC_TAG: &str = "ML-DSA-65 ENCRYPTED SIGNING KEY";
 const SIG_TAG: &str = "ML-DSA-65 SIGNATURE";
 
-const VK_LEN: usize = 1952;
-const SK_SEED_LEN: usize = 32;
+pub(crate) const VK_LEN: usize = 1952;
+pub(crate) const SK_SEED_LEN: usize = 32;
 const SIG_LEN: usize = 3309;
 
 pub(crate) const SLH_VK_TAG: &str = "SLH-DSA-SHAKE-192F VERIFYING KEY";
@@ -33,7 +33,7 @@ const SLH_SIG_TAG: &str = "SLH-DSA-SHAKE-192F SIGNATURE";
 /// FIPS 205 security parameter n for the SHAKE-192 parameter sets.
 const SLH_N: usize = 24;
 /// Verifying key is PK.seed ‖ PK.root.
-const SLH_VK_LEN: usize = 2 * SLH_N;
+pub(crate) const SLH_VK_LEN: usize = 2 * SLH_N;
 /// The stored private key is the seed triple SK.seed ‖ SK.prf ‖ PK.seed;
 /// the full signing key is deterministically recomputed from it (FIPS 205
 /// `slh_keygen_internal`), which also revalidates PK.root on every load.
@@ -77,7 +77,7 @@ pub struct SignKeygenResult {
     pub vk_pem: String,
     /// PEM-encoded signing (private) key, optionally passphrase-encrypted.
     pub sk_pem: String,
-    /// SHA3-256 fingerprint of the verifying key (first 8 bytes, colon-separated hex).
+    /// SHA3-256 fingerprint of the verifying key (first 16 bytes, colon-separated hex).
     pub vk_fingerprint: String,
 }
 

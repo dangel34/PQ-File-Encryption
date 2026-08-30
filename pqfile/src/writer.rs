@@ -368,6 +368,6 @@ mod tests {
     fn writer_rejects_zero_chunk_size() {
         let (pub_pem, _) = keygen_bytes(768, None).unwrap();
         let result = PqfWriter::new(Vec::<u8>::new(), &pub_pem, 0, 0);
-        assert!(matches!(result, Err(PqfileError::EncryptionFailure)));
+        assert!(matches!(result, Err(PqfileError::Io(_))));
     }
 }

@@ -34,7 +34,7 @@ pub(crate) const PRIV_ENC_TAG_HYBRID_768: &str = "X25519+ML-KEM-768 ENCRYPTED PR
 
 /// Generates a key pair and writes it to `out_dir`.
 /// `level` must be 768 or 1024. Set `hybrid` for X25519+ML-KEM-768 hybrid mode.
-/// Returns the SHA3-256 fingerprint of the public key (first 8 bytes, colon-separated hex).
+/// Returns the SHA3-256 fingerprint of the public key (first 16 bytes, colon-separated hex).
 /// Errors with `OutputExists` if either key file already exists and `force` is false.
 /// If `passphrase` is `Some`, the private key is encrypted before writing.
 #[must_use = "keygen result must be used"]
@@ -322,7 +322,7 @@ fn encode_private_key(
     }
 }
 
-/// SHA3-256 fingerprint of `raw_bytes`, formatted as the first 8 bytes in colon-separated hex.
+/// SHA3-256 fingerprint of `raw_bytes`, formatted as the first 16 bytes in colon-separated hex.
 #[must_use]
 pub fn fingerprint(raw_bytes: &[u8]) -> String {
     Sha3_256::digest(raw_bytes)

@@ -167,7 +167,10 @@ fn add_to_v8(
     let (new_kem_ct, new_kem_variant, new_wrapped_key) =
         encapsulate_for_rekey(new_pubkey_pem, &session_key)?;
 
+    // Random padding, not zero: see `build_v8_recipients` in encrypt.rs for why
+    // a zero suffix would leak the new recipient's KEM variant.
     let mut padded_ct = [0u8; PADDED_CT_LEN];
+    getrandom::fill(&mut padded_ct).map_err(|_| PqfileError::EncryptionFailure)?;
     padded_ct[..new_kem_ct.len()].copy_from_slice(&new_kem_ct);
 
     let mut recipients = header.recipients;

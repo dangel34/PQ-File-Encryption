@@ -419,13 +419,19 @@ Each recipient entry (fixed 1616 bytes):
 
 ```
 Len   Field
-1568  PADDED_CT (actual KEM CT zero-padded on the right to 1568 bytes)
+1568  PADDED_CT (actual KEM CT followed by random padding bytes, to 1568 bytes)
 48    WRAPPED_KEY
 ```
 
 Note: the `KEM_VARIANT` field present in v7 is absent in v8. The decryptor
 determines which prefix of the padded CT to use based on its own private
-key's variant (e.g. 1088 bytes for ML-KEM-768).
+key's variant (e.g. 1088 bytes for ML-KEM-768); the padding bytes after that
+prefix are never inspected. The padding **must** be random, not zero: each
+KEM variant has a distinct ciphertext length, so a fixed-length zero suffix
+would itself identify the variant (and, against v9's random dummy slots,
+identify which slots are real at all) - encoders MUST fill the full
+`PADDED_CT` field with CSPRNG output before overwriting its prefix with the
+real ciphertext.
 
 **Decryption algorithm:**
 
