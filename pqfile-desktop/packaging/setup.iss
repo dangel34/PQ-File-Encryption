@@ -19,7 +19,7 @@
 ; Overridable from the command line (release.yml passes /DAppVersion=X.Y.Z);
 ; the value below is the fallback for local/manual builds.
 #ifndef AppVersion
-#define AppVersion   "4.3.3"
+#define AppVersion   "4.3.4"
 #endif
 #define AppPublisher "Derek"
 #define AppExeName   "pqfile-desktop.exe"
