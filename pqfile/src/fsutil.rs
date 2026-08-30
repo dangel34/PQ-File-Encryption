@@ -173,7 +173,7 @@ mod tests {
         // the replacement contents through, but a rename cannot.
         let mut observer = std::fs::File::open(&path).unwrap();
 
-        write_private_file(&path, b"-----BEGIN PRIVATE KEY-----new secret").unwrap();
+        write_private_file(&path, b"replacement secret content").unwrap();
 
         observer.seek(SeekFrom::Start(0)).unwrap();
         let mut observed = String::new();
@@ -183,7 +183,7 @@ mod tests {
         // The new file, reached by path, is both correct and now restricted.
         assert_eq!(
             std::fs::read(&path).unwrap(),
-            b"-----BEGIN PRIVATE KEY-----new secret"
+            b"replacement secret content"
         );
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
