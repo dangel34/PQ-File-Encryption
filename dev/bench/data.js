@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785766114034,
+  "lastUpdate": 1788112110944,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -5813,6 +5813,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 49031,
             "range": "± 243",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "2b8e8678abe89757d44cfa2ffa509e6e5979aa53",
+          "message": "chore(deps): update dependency versions and refresh GitHub Actions pins\n\nBumped several dependencies across the project, including `aes` (0.9.2 -> 0.9.3), `aes-gcm` (0.11.0 -> 0.11.1), `eframe` (0.35 -> 0.36), and others. Updated the `cpufeatures` version from 0.3.0 to 0.3.1. Additionally, refreshed GitHub Actions pins for `dtolnay/rust-toolchain` and `taiki-e/install-action` to their latest stable releases. This ensures compatibility with the latest features and security improvements across the project.",
+          "timestamp": "2026-08-30T13:44:31-04:00",
+          "tree_id": "6c199006302769e5c349f8f97bba016a487f28ba",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/2b8e8678abe89757d44cfa2ffa509e6e5979aa53"
+        },
+        "date": 1788112110226,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 57778,
+            "range": "± 471",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 825745,
+            "range": "± 17712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 93047925,
+            "range": "± 983943",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 93621,
+            "range": "± 965",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 840822,
+            "range": "± 2187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 82074277,
+            "range": "± 4498795",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 57391,
+            "range": "± 1076",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 848350,
+            "range": "± 2966",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 86795867,
+            "range": "± 218522",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 95174,
+            "range": "± 559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 885104,
+            "range": "± 12966",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 86496503,
+            "range": "± 2342106",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 41918,
+            "range": "± 277",
             "unit": "ns/iter"
           }
         ]
