@@ -1035,7 +1035,11 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
         ctx.enable_accesskit();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| add_contents(ui));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| add_contents(ui));
+        // egui 0.36 panics on drop if a frame's TexturesDelta goes unhandled;
+        // this harness never stands up a renderer to apply it, so discard it
+        // explicitly instead of paying for one just to satisfy the assert.
+        output.textures_delta.clear();
         let update = output
             .platform_output
             .accesskit_update
@@ -1072,9 +1076,10 @@ mod tests {
             let ctx = egui::Context::default();
             ctx.set_fonts(egui::FontDefinitions::empty());
             ctx.enable_accesskit();
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 setting_toggle(ui, &mut on, "Auto-clear", "desc", false);
             });
+            output.textures_delta.clear();
             let update = output.platform_output.accesskit_update.unwrap();
             let node = update
                 .nodes

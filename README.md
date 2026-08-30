@@ -1197,7 +1197,7 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 | getrandom        | 0.4     | OS CSPRNG for nonces and key generation                         |
 | zeroize          | 1       | Overwrite secret bytes on drop                                  |
 | argon2           | 0.5     | Argon2id KDF for passphrase-protected keys                      |
-| pem              | 3       | PEM encoding/decoding for key files                             |
+| pem              | 4       | PEM encoding/decoding for key files                             |
 | bech32           | 0.12    | Bech32m encoding/decoding for compact recipient strings (`pqf1…`) |
 | rayon            | 1       | Parallel chunk processing (`--parallel`)                        |
 | thiserror        | 2       | Custom error type derivation                                    |
@@ -1223,7 +1223,7 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 
 | Crate                    | Version | Purpose                                              |
 |--------------------------|---------|--------------------------------------------------------|
-| eframe                   | 0.35    | egui app framework (native rlib + WASM cdylib)         |
+| eframe                   | 0.36    | egui app framework (native rlib + WASM cdylib)         |
 | rfd                      | 0.17    | Native sync and WASM async file dialogs                |
 | image                    | 0.25    | PNG decoding for icons and QR codes                     |
 | qrcode                   | 0.14    | QR code generation (Shamir share air-gapped transfer)   |

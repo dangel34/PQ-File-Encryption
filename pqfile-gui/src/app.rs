@@ -149,6 +149,13 @@ pub struct PqfileApp {
     #[cfg(target_arch = "wasm32")]
     loader_hidden: bool,
 
+    /// Drag-and-drop reads finished by an in-flight `bytes_async()` task
+    /// (egui 0.36's `DroppedFile` trait made web reads asynchronous, unlike
+    /// the eagerly-populated bytes native gets from `file.bytes()`), drained
+    /// and routed by `handle_dropped_files` on the next frame.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) dropped_files_pending: Arc<Mutex<Vec<(Tab, String, Vec<u8>)>>>,
+
     pub(crate) decrypt_privkey: FileInput,
     pub(crate) decrypt_files: Vec<MultiFileEntry>,
     pub(crate) decrypt_batch_pending: BatchPending,
@@ -737,6 +744,8 @@ impl Default for PqfileApp {
             #[cfg(target_arch = "wasm32")]
             loader_hidden: false,
             #[cfg(target_arch = "wasm32")]
+            dropped_files_pending: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(target_arch = "wasm32")]
             wasm_saved_pubkeys: Vec::new(),
             toasts: crate::toast::Toasts::default(),
             command_palette_open: false,
@@ -1092,40 +1101,67 @@ impl eframe::App for PqfileApp {
 
 impl PqfileApp {
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        // Drain reads that an async `bytes_async()` task (spawned below on a
+        // previous frame) finished since we last polled; egui 0.36 made web
+        // drops asynchronous, unlike native's eagerly-available `bytes()`.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let finished = std::mem::take(&mut *self.dropped_files_pending.lock().unwrap());
+            for (tab, name, data) in finished {
+                self.route_drop_for_tab(tab, name, data, None);
+            }
+        }
+
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for file in dropped {
-            let name = if !file.name.is_empty() {
-                file.name.clone()
-            } else {
-                file.path
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            };
+            let name = file
+                .path()
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
 
-            let data = if let Some(bytes) = file.bytes {
-                Some(bytes.to_vec())
-            } else {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    file.path.as_ref().and_then(|p| std::fs::read(p).ok())
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    None
-                }
-            };
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let path = file.path().to_path_buf();
+                let Ok(data) = file.bytes() else { continue };
+                self.route_drop(name, data, Some(path));
+            }
 
-            let Some(data) = data else { continue };
-            self.route_drop(name, data, file.path);
+            #[cfg(target_arch = "wasm32")]
+            {
+                let tab = self.tab;
+                let pending = self.dropped_files_pending.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Ok(data) = file.bytes_async().await {
+                        pending.lock().unwrap().push((tab, name, data));
+                    }
+                });
+            }
         }
     }
 
-    /// Route a dropped file into the correct slot based on the active tab and
-    /// the file's extension. Pure logic with no egui dependency; testable directly.
+    /// Route a dropped file into the correct slot based on the currently
+    /// active tab and the file's extension. Pure logic with no egui
+    /// dependency; testable directly. Only `handle_dropped_files`'s native
+    /// branch calls this outside of tests; wasm32 goes through
+    /// `route_drop_for_tab` directly since its read is asynchronous.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn route_drop(
         &mut self,
+        name: String,
+        data: Vec<u8>,
+        path: Option<std::path::PathBuf>,
+    ) {
+        self.route_drop_for_tab(self.tab, name, data, path);
+    }
+
+    /// Same as [`Self::route_drop`], but routes against an explicitly given
+    /// tab rather than `self.tab` — needed on wasm, where the read that
+    /// produced `data` may have finished a frame or more after the drop, by
+    /// which point the user could have switched tabs.
+    fn route_drop_for_tab(
+        &mut self,
+        tab: Tab,
         name: String,
         data: Vec<u8>,
         path: Option<std::path::PathBuf>,
@@ -1137,7 +1173,7 @@ impl PqfileApp {
             path,
             error: None,
         };
-        match self.tab {
+        match tab {
             Tab::Encrypt => {
                 if ext == "pem" {
                     *self.encrypt_pubkey.pending.lock().unwrap() = Some(picked);

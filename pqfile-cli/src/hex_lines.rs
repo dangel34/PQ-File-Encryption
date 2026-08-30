@@ -27,7 +27,9 @@ pub(crate) fn from_hex(s: &str) -> Option<Vec<u8>> {
     // screen, so a panic here would crash the whole egui event loop, not just
     // one operation.
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
         .collect()
 }

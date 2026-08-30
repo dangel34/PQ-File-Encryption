@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 pqfile = { workspace = true }
 eframe = { workspace = true }
-egui_extras = { version = "0.35", default-features = false, features = ["datepicker"] }
+egui_extras = { version = "0.36", default-features = false, features = ["datepicker"] }
 # Only used for the jiff::civil::Date type accepted by egui_extras's DatePickerButton;
 # no clock/timezone features needed here, but this must be a direct dependency for the
 # type path to be nameable (Cargo doesn't expose transitive deps' items).

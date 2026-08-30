@@ -8,9 +8,14 @@
 use pqfile::decrypt::{decrypt_stream, decrypt_stream_passphrase};
 use pqfile::encrypt::{encrypt_stream, encrypt_stream_passphrase};
 use pqfile::format::{
-    is_header_authenticated, version_layout, CHUNK_SIZE, COMPRESSION_NONE, KEM_CT_LEN_768,
-    NONCE_LEN, VERSION_AUTH_BIT, VERSION_V3, VERSION_V4,
+    is_header_authenticated, version_layout, CHUNK_SIZE, KEM_CT_LEN_768, NONCE_LEN,
+    VERSION_AUTH_BIT, VERSION_V3, VERSION_V4,
 };
+// Only used by `v6_compression_flag_flip_is_rejected`, which is itself
+// `not(wasm32)` (see below) - kept separate so a wasm32 build doesn't warn
+// about an unused import.
+#[cfg(not(target_arch = "wasm32"))]
+use pqfile::format::COMPRESSION_NONE;
 use pqfile::keygen::keygen_bytes;
 
 const PLAINTEXT: &[u8] = b"authenticated header test payload";
