@@ -70,7 +70,7 @@ getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 wasm-bindgen-test = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-zstd = { version = "0.13.3", features = ["zstdmt"] }
+zstd = { version = "0.14.0", features = ["zstdmt"] }
 # Core types for hardware-backed key credential storage.
 keyring-core = "1"
 # Memory-mapped I/O for zero-copy file encryption.
