@@ -91,6 +91,22 @@ jobs:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
           persist-credentials: false
 
+      # Bindings are versioned in lockstep with the core crate (see
+      # docs/RELEASING.md). Before 4.3.5 they were stuck at 0.1.0, so the
+      # v4.3.4 run "succeeded" only because skip-existing silently skipped a
+      # version that was already on PyPI, and the 4.3.4 binding fix never
+      # shipped. Fail loudly instead whenever the manifests don't match the tag.
+      - name: Check binding version matches the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          PY=$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-python/pyproject.toml)
+          CARGO=$(grep -m1 -oP '(?<=^version = ")[^"]+' pqfile-python/Cargo.toml)
+          if [ "$PY" != "${TAG#v}" ] || [ "$CARGO" != "${TAG#v}" ]; then
+            echo "::error::pqfile-python is pyproject.toml=$PY / Cargo.toml=$CARGO but the release tag is $TAG - run scripts/bump-version.ps1, which bumps the bindings too"
+            exit 1
+          fi
+
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: pqfile-python

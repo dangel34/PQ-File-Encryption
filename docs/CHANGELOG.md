@@ -4,6 +4,22 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [Unreleased]
+
+### Fixes
+
+- **Language bindings now actually ship with every release**: `pqfile-python` (PyPI `pqfile`), `pqfile-node` (npm `@dangel34/pqfile`) and `pqfile-mobile` were still versioned `0.1.0`, so the v4.3.4 runs of `publish-python.yml` and `publish-node.yml` both reported success while publishing nothing (each correctly skipped a version already on its registry). That meant the 4.3.4 binding fix (`decrypt_file`/`encrypt_file` no longer truncating the destination up front) never reached PyPI or npm users. The bindings are now versioned in lockstep with the core crate, starting at 4.3.5. `scripts/bump-version.ps1` bumps every binding manifest (including `pqfile-node`'s per-platform `optionalDependencies` pins, the version checks embedded in its generated `index.js`, and `package-lock.json`) and regenerates all four workspace-excluded `Cargo.lock` files, which also removes the follow-up "update Cargo.lock files" commit v4.3.4 needed. `release.yml`'s version gate now covers the binding manifests, and both publish workflows fail loudly on a tag/manifest mismatch instead of silently skipping.
+- **`publish-node.yml` could never have published**: it still called `@napi-rs/cli` 2.x commands (`napi create-npm-dir`, `napi prepublish --skip-gh-release`) and read the 2.x `napi.triples` config, all removed in the 3.x CLI the package depends on. With `triples.additional` the 3.x CLI would only have generated the darwin-arm64 package, not the win32 one that actually exists on npm. This never surfaced because every earlier run stopped at the "already on npm" guard. `package.json` now uses `napi.binaryName`/`napi.targets` (all four built targets listed explicitly), the workflow uses `create-npm-dirs` + `artifacts`, and platform packages are published by a plain `npm publish` loop that skips (with a warning) any package that has never been bootstrapped on npm, since Trusted Publishing can't create a new package.
+
+### Dependency updates
+
+- **Two direct-dependency major bumps in `pqfile`, no source changes needed**: `argon2` 0.5 -> 0.6 (pulls `password-hash` 0.6 and `blake2` 0.11, and drops the legacy `digest` 0.10 / `generic-array` 0.14 / `rand_core` 0.6 stack from the binding crates' lockfiles entirely) and `zstd` 0.13 -> 0.14 (`zstd-safe` 8, same bundled libzstd 1.5.7). The KAT and compat-vector suites confirm Argon2id output is byte-identical, and `cargo semver-checks` reports no public API change.
+- **`cargo update` across the root workspace and all four workspace-excluded crates** (`fuzz`, `pqfile-python`, `pqfile-node`, `pqfile-mobile`): ~80 patch/point releases (`egui`/`eframe` 0.36.1 -> 0.36.2, `wasm-bindgen` 0.2.127 -> 0.2.129, `rustls` 0.23.43 -> 0.23.45, `uniffi` 0.32.0 -> 0.32.2, `napi` 3.12.2 -> 3.13.0, `darling` 0.23 -> 0.24, etc.). `minicov` resolves back to 0.3.8 because `wasm-bindgen-test` 0.3.79 pins `=0.3.8` upstream (wasm coverage builds only). `pqfile-node`'s `@napi-rs/cli` devDependency 3.8.6 -> 3.10.5; `npm audit` clean.
+- **GitHub Actions pins refreshed**: `taiki-e/install-action` v2.87.2 -> v2.87.21, `SonarSource/sonarqube-scan-action` v8.2.1 -> v8.2.2, `benchmark-action/github-action-benchmark` v1.22.1 -> v1.22.2, both `dtolnay/rust-toolchain` pins (`stable` and `v1`) advanced to their current heads, and `publish.yml`'s `toolchain: 1.98.0` advanced to `1.98.1`. Every other action was already on its latest release SHA.
+- **`cargo vet`**: imports refreshed (Mozilla audits now cover `shlex` 2.0.1 and `simdutf8` 0.1.5, replacing their exemptions), exemptions regenerated for the newly bumped versions, and pruned.
+
+---
+
 ## [4.3.4] - 2026-08-30
 
 ### Security fixes

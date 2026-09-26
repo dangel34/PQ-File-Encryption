@@ -1,25 +1,22 @@
 name: Publish Node.js bindings
 
-# Ran for real for the first time with the v4.3.3 release (2026-07-24):
-# `@dangel34/pqfile` and `@dangel34/pqfile-win32-x64-msvc` are published and
-# live on npm via this workflow's OIDC Trusted Publishing, no stored token.
-# The macOS/Linux legs of the *build* matrix have still only ever been
-# cross-checked by reading napi-rs's own source, not built on this repo's
-# Windows dev machine - only x86_64-pc-windows-msvc has actually been built
-# here. The other three platform packages (darwin-x64, darwin-arm64,
-# linux-x64-gnu) don't exist on npm yet; each needs its own one-off manual
-# bootstrap publish (see pqfile-node/README.md) from a machine that can
-# build for that platform before this workflow can publish it automatically -
-# same reason `@dangel34/pqfile-win32-x64-msvc` itself needed one first.
+# `@dangel34/pqfile` and `@dangel34/pqfile-win32-x64-msvc` 0.1.0 were
+# bootstrapped onto npm by hand for v4.3.3 (2026-07-24). The v4.3.3 and v4.3.4
+# runs of this workflow both stopped at the "already on npm" guard because the
+# binding version never moved, so 4.3.5 (bindings now versioned in lockstep
+# with the core crate) is the first run that actually publishes anything. The
+# other three platform packages (darwin-x64, darwin-arm64, linux-x64-gnu)
+# still don't exist on npm; each needs its own one-off manual bootstrap
+# publish (see pqfile-node/README.md) before this workflow can publish it
+# automatically - until then the publish step skips them with a warning.
 #
 # Fires once a GitHub Release is published (human-gated), mirroring
 # publish.yml's crates.io convention and publish-python.yml. Builds the
-# native addon per platform (matching package.json's `napi.triples`), then
+# native addon per platform (matching package.json's `napi.targets`), then
 # arranges them into napi-rs's standard per-platform optionalDependencies
-# packages (`napi create-npm-dir` / `napi artifacts`) and publishes all of
-# them plus the main `@dangel34/pqfile` package (`napi prepublish`, plus an
-# explicit `npm publish` for the root package - see the `publish` job below
-# for why that's separate). aarch64-linux-gnu is deliberately not in the
+# packages (`napi create-npm-dirs` / `napi artifacts`) and publishes each of
+# them plus the main `@dangel34/pqfile` package with plain `npm publish` -
+# see the `publish` job below. aarch64-linux-gnu is deliberately not in the
 # target list yet - cross-compiling it needs a zig toolchain step this
 # hasn't been wired up for, see pqfile-node/README.md.
 #
@@ -29,10 +26,9 @@ name: Publish Node.js bindings
 # secret here at all. Unlike PyPI's "pending publisher" (which can be
 # registered before the project exists), npm's Trusted Publisher can only be
 # configured from an existing package's own Settings page, so the very first
-# publish of each package name has to happen manually first: `napi
-# prepublish`'s own automated flow can't complete npm's browser-based OTP
-# challenge either (it shells out to `npm publish` as a non-interactive
-# subprocess, which just errors on EOTP), so that first publish is a plain,
+# publish of each package name has to happen manually first: an automated
+# `npm publish` can't complete npm's browser-based OTP challenge either (a
+# non-interactive run just errors on EOTP), so that first publish is a plain,
 # interactive `npm publish` per package from a maintainer's own authenticated
 # npm login. That bootstrap is also what surfaced the package needing to be
 # renamed to the scoped `@dangel34/pqfile` in the first place (npm rejected
@@ -70,7 +66,7 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
@@ -154,6 +150,28 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --ignore-scripts
 
+      # Bindings are versioned in lockstep with the core crate (see
+      # docs/RELEASING.md). Before 4.3.5 they were stuck at 0.1.0, so the
+      # v4.3.4 run "succeeded" by skipping a version that already existed
+      # and the 4.3.4 binding fix never shipped. Fail loudly instead of
+      # silently skipping whenever the manifest doesn't match the tag.
+      - name: Check package.json version matches the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "$VERSION" != "${TAG#v}" ]; then
+            echo "::error::pqfile-node/package.json is $VERSION but the release tag is $TAG - run scripts/bump-version.ps1, which bumps the bindings too"
+            exit 1
+          fi
+          # Every optionalDependencies entry must point at this same version,
+          # or the root package would install a stale native addon.
+          node -e '
+            const p = require("./package.json");
+            const bad = Object.entries(p.optionalDependencies || {}).filter(([, v]) => v !== p.version);
+            if (bad.length) { console.log("::error::optionalDependencies out of sync: " + JSON.stringify(bad)); process.exit(1); }
+          '
+
       # Idempotency guard, matching publish.yml's crates.io check and
       # publish-python.yml's PyPI check: skip anything already on npm so
       # re-running after a partial failure or accidental double-trigger is
@@ -174,33 +192,52 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Creates npm/<platform>/ per-target package directories from the
-      # `napi.triples` config in package.json, then copies each downloaded
-      # .node file into the matching directory.
+      # Creates npm/<platform>/ per-target package directories (versioned to
+      # match the root package.json) from the `napi.targets` list, then copies
+      # each downloaded .node file into the matching directory. `napi
+      # artifacts` errors out if any configured target's .node is missing, so
+      # a failed build leg can't produce a partial publish.
+      #
+      # @napi-rs/cli 3.x renamed `create-npm-dir` -> `create-npm-dirs` and
+      # `prepublish` -> `pre-publish`, and dropped the old `napi.triples`
+      # config. Neither publish path had actually executed in CI before 4.3.5
+      # (both earlier runs hit the "already on npm" skip above), so the old
+      # commands were never caught failing.
       - name: Arrange per-platform packages
         if: steps.check.outputs.skip == 'false'
         run: |
-          npx --no-install napi create-npm-dir -t .
-          npx --no-install napi artifacts --dir artifacts
+          npx --no-install napi create-npm-dirs
+          npx --no-install napi artifacts
 
-      # Bumps every npm/<platform>/package.json to the root version and runs
-      # `npm publish` for each one. No NODE_AUTH_TOKEN here - the pinned npm
-      # CLI performs the OIDC exchange itself using the id-token: write
+      # Publishes each npm/<platform>/ package directly rather than through
+      # `napi pre-publish`, so a platform package that has never existed on npm
+      # is skipped with a warning instead of failing the job: npm Trusted
+      # Publishing can only be configured on an existing package, so each new
+      # platform package needs a one-off manual bootstrap publish first (see
+      # pqfile-node/README.md). No NODE_AUTH_TOKEN here - the pinned npm CLI
+      # performs the OIDC exchange itself using the id-token: write
       # permission above.
-      #
-      # `napi prepublish` only ever publishes the per-platform packages in
-      # this loop - confirmed by reading its source
-      # (@napi-rs/cli/scripts/index.js's PrePublishCommand.execute()) after a
-      # manual bootstrap publish needed an extra `npm publish` step this
-      # command never performed. It does still handle updating the root
-      # package.json's `optionalDependencies` to point at the platform
-      # packages' versions, which the explicit `npm publish` below depends on.
       - name: Publish per-platform packages
         if: steps.check.outputs.skip == 'false'
-        run: npx --no-install napi prepublish -p npm --skip-gh-release
+        run: |
+          for dir in npm/*/; do
+            name=$(node -p "require('./${dir}package.json').name")
+            version=$(node -p "require('./${dir}package.json').version")
+            encoded="${name/\//%2f}"
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${encoded}/${version}")" = "200" ]; then
+              echo "$name@$version already on npm -- skipping"
+              continue
+            fi
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${encoded}")" != "200" ]; then
+              echo "::warning::$name has never been published to npm. Trusted Publishing cannot create a new package, so it needs a one-off manual bootstrap publish (see pqfile-node/README.md). Skipping it for this release."
+              continue
+            fi
+            (cd "$dir" && npm publish)
+          done
 
-      # napi prepublish (above) never publishes the root package itself - see
-      # its comment. Do that explicitly here.
+      # The platform loop above never publishes the root package itself. Do
+      # that explicitly here, last, so it never points at a platform package
+      # version that failed to publish.
       - name: Publish the main package
         if: steps.check.outputs.skip == 'false'
         run: npm publish

@@ -87,36 +87,39 @@ GUI (see `docs/FORMAT.md`), so files are interchangeable in both directions.
 every push/PR. `publish-node.yml` cross-builds the native addon for
 Windows/Linux x64 and macOS (x86_64 and aarch64), arranges them into
 napi-rs's standard per-platform `optionalDependencies` packages
-(`napi create-npm-dir`/`napi artifacts`), and publishes all of them plus the
-main `@dangel34/pqfile` package on a GitHub Release being published, via npm
+(`napi create-npm-dirs`/`napi artifacts`, driven by `napi.targets` in
+`package.json`), and publishes each of them plus the main `@dangel34/pqfile`
+package with plain `npm publish` on a GitHub Release being published, via npm
 Trusted Publishing (OIDC) - no stored token anywhere.
 
-**Status as of the `v4.3.3` release (2026-07-24)**: `@dangel34/pqfile` and
-`@dangel34/pqfile-win32-x64-msvc` are published and live on npm. Getting there
-needed a manual bootstrap first, since npm's Trusted Publisher (unlike
-PyPI's "pending publisher") can only be configured from an *already-existing*
-package's settings page: a one-off, interactive `npm publish` per package
-from a maintainer's own npm login (`napi prepublish`'s own automated flow
-can't complete npm's browser-based OTP challenge, since it shells out to
-`npm publish` as a non-interactive subprocess). That bootstrap is also what
-surfaced two real bugs, both fixed: the package needed renaming from the
-unscoped `pqfile` (rejected as too similar to the existing `vfile` package,
-and separately hit npm's spam-detection heuristic on the platform-specific
-name) to the scoped `@dangel34/pqfile` - npm's own suggested remedy, which
-resolved both issues at once; and `napi prepublish` turned out to only ever
-publish the per-platform packages in its internal loop, never the root
-package itself, so `publish-node.yml` gained an explicit `npm publish` step
-after it.
+**Versioning**: since 4.3.5 the package is versioned in lockstep with the core
+`pqfile` crate. `scripts/bump-version.ps1` bumps `package.json` (including
+every `optionalDependencies` pin), `package-lock.json`, `Cargo.toml`/`Cargo.lock`,
+and the version checks embedded in `index.js`, and both `release.yml` and
+`publish-node.yml` fail if any of them disagree with the release tag. Before
+that the package sat at `0.1.0`, so the v4.3.3 and v4.3.4 publish runs both
+stopped at the "already on npm" guard and nothing new was ever published.
+
+**Bootstrap history**: `@dangel34/pqfile` and `@dangel34/pqfile-win32-x64-msvc`
+0.1.0 were published by hand for v4.3.3 (2026-07-24), since npm's Trusted
+Publisher (unlike PyPI's "pending publisher") can only be configured from an
+*already-existing* package's settings page: a one-off, interactive
+`npm publish` per package from a maintainer's own npm login (an automated
+`npm publish` can't complete npm's browser-based OTP challenge). That bootstrap
+also forced the rename from the unscoped `pqfile` (rejected as too similar to
+the existing `vfile` package, and separately hit npm's spam-detection
+heuristic on the platform-specific name) to the scoped `@dangel34/pqfile`.
 
 **Still open**: the other three platform packages (`@dangel34/pqfile-darwin-x64`,
 `@dangel34/pqfile-darwin-arm64`, `@dangel34/pqfile-linux-x64-gnu`) don't exist
-yet - each needs the same one-off manual bootstrap publish from a machine
-that can actually build for that platform before CI can take over publishing
-it automatically. Until then, `npm install @dangel34/pqfile` on macOS/Linux
-succeeds but has no working native binary (a soft `optionalDependencies`
-failure, not a hard install error). The macOS/Linux legs of the *build*
-matrix (as opposed to publish) have only ever been cross-checked by reading
-napi-rs's own source, not built on this repo's Windows dev machine.
-`aarch64-unknown-linux-gnu` is deliberately left out of `napi.triples` for
-now - cross-compiling it needs a zig toolchain step (`napi build --zig`) this
-hasn't been wired up for.
+yet - each needs the same one-off manual bootstrap publish before CI can take
+over publishing it; until then `publish-node.yml` skips them with a warning
+rather than failing the release. No Mac or Linux machine is needed for that:
+download the `bindings-<target>` artifact from any `publish-node.yml` run, drop
+the `.node` file into the matching `npm/<platform>/` directory created by
+`napi create-npm-dirs`, and `npm publish` it from there. Until then,
+`npm install @dangel34/pqfile` on macOS/Linux succeeds but has no working
+native binary (a soft `optionalDependencies` failure, not a hard install
+error). `aarch64-unknown-linux-gnu` is deliberately left out of `napi.targets`
+for now - cross-compiling it needs a zig toolchain step (`napi build --zig`)
+this hasn't been wired up for.

@@ -16,6 +16,8 @@ The project uses semantic versioning (`MAJOR.MINOR.PATCH`).
 
 All four crates (`pqfile`, `pqfile-cli`, `pqfile-gui`, `pqfile-desktop`) are versioned together and always share the same version number.
 
+The language bindings (`pqfile-python` on PyPI, `pqfile-node` on npm as `@dangel34/pqfile`, and `pqfile-mobile`) are versioned **in lockstep** with them as of 4.3.5, so every release republishes the bindings with whatever core changes it contains. Before that they sat at `0.1.0`, the publish workflows skipped a version that already existed, and the 4.3.4 binding fix never reached PyPI/npm.
+
 ---
 
 ## Step 1 - Bump versions, commit, and tag
@@ -36,8 +38,8 @@ The script does the following automatically, aborting early if anything fails:
 
 1. **Pre-flight**: verifies you are on `main` with a clean working tree and that the `vX.Y.Z` tag does not already exist locally or on the remote.
 2. **Checks**: runs `cargo fmt --check`, `cargo clippy --workspace --all-targets` (deny warnings), and `cargo test --workspace`; the bump will not proceed if any of them fails.
-3. **Version replacements**: updates all version fields across the codebase (`Cargo.toml` package versions, inter-crate dependency version constraints, Inno Setup `.iss`, RPM `.spec` version + changelog entry, `docs/BUILDING.md` example path, `docs/CHANGELOG.md` release-date stamp, `sonar-project.properties`). `pqfile-gui`'s `APP_VERSION` reads `env!("CARGO_PKG_VERSION")` and needs no manual update.
-4. **Lock file**: regenerates `Cargo.lock` via `cargo check --workspace`.
+3. **Version replacements**: updates all version fields across the codebase (`Cargo.toml` package versions, inter-crate dependency version constraints, Inno Setup `.iss`, RPM `.spec` version + changelog entry, `docs/BUILDING.md` example path, `docs/CHANGELOG.md` release-date stamp, `sonar-project.properties`), plus the language bindings: `pqfile-python`'s `Cargo.toml` and `pyproject.toml`, `pqfile-node`'s `Cargo.toml`, `package.json` (version and every per-platform `optionalDependencies` pin) and the version checks embedded in the generated `index.js`, and `pqfile-mobile`'s `Cargo.toml`. `pqfile-gui`'s `APP_VERSION` reads `env!("CARGO_PKG_VERSION")` and needs no manual update.
+4. **Lock files**: regenerates the root `Cargo.lock` via `cargo check --workspace`, the four workspace-excluded lockfiles (`fuzz`, `pqfile-python`, `pqfile-node`, `pqfile-mobile`) via an offline `cargo update -p pqfile` that moves only the path-dependency entries, and `pqfile-node/package-lock.json` via `npm install --package-lock-only`. CI runs the excluded crates with `--locked`, so skipping this fails CI after the tag is already pushed (which is what happened with v4.3.4).
 5. **Commit, tag, push**: creates a `chore: bump version to X.Y.Z` commit, tags it `vX.Y.Z`, and pushes both to `origin`.
 
 ---
@@ -50,7 +52,7 @@ Pushing to `main` and the tag triggers two workflows in parallel:
 
 Triggered by the `vX.Y.Z` tag. Runs the following jobs in order:
 
-1. Version consistency check across all `Cargo.toml`, `.iss`, and `.spec` (no separate test job: CI already ran fmt, clippy, and the full suite on the same commit).
+1. Version consistency check across all `Cargo.toml`, `.iss`, `.spec`, and the binding manifests (`pyproject.toml`, `package.json`) (no separate test job: CI already ran fmt, clippy, and the full suite on the same commit).
 2. Multi-platform builds: Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64 (CLI + desktop GUI), built with `cargo auditable` so the dependency tree is embedded in each binary (scannable via `cargo audit bin`).
 3. Native OS packages, built from the already-built binaries above rather than rebuilding: a Windows installer via Inno Setup, a Linux `.deb` (`cargo-deb`) and `.rpm` (`cargo-generate-rpm`), a Linux AppImage (`linuxdeploy`) for the desktop GUI, and a macOS `.app` bundle + DMG (`create-dmg`) for the desktop GUI. **None of these are code-signed or notarized** - Windows SmartScreen and macOS Gatekeeper will both warn on first launch until that's set up separately (tracked in `docs/ROADMAP.md`); users on macOS need to right-click → Open once to bypass Gatekeeper.
 4. WASM web app build, archived as `pqfile-web.tar.gz`.
@@ -103,6 +105,22 @@ Do **not** publish `pqfile-gui` or `pqfile-desktop`. They require system GUI lib
 - `pqfile`: <https://crates.io/crates/pqfile>
 - `pqfile-cli`: <https://crates.io/crates/pqfile-cli>
 - docs.rs (auto-built within a few minutes): <https://docs.rs/pqfile>
+
+---
+
+## Publishing the language bindings
+
+Also automated, and triggered by the same **Publish release** click as crates.io:
+
+- **PyPI** (`.github/workflows/publish-python.yml`): builds one wheel per platform (Windows x64, macOS x86_64/arm64, manylinux x86_64) plus an sdist with maturin and uploads them via PyPI Trusted Publishing (OIDC). It has a `workflow_dispatch` trigger taking a `tag` input for re-running against an already-published release.
+- **npm** (`.github/workflows/publish-node.yml`): builds the native addon for the four `napi.targets`, arranges the per-platform packages (`napi create-npm-dirs` + `napi artifacts`), publishes each one with `npm publish`, then publishes the root `@dangel34/pqfile` package, all via npm Trusted Publishing (OIDC). A platform package that has never existed on npm is skipped with a warning, because Trusted Publishing can only be configured on an existing package; see `pqfile-node/README.md` for the one-off manual bootstrap.
+
+Both workflows fail immediately if the binding manifest version doesn't match the release tag, rather than silently skipping as they did before 4.3.5. Both skip anything already published, so re-running after a partial failure is safe.
+
+### Verifying the binding publish
+
+- PyPI: <https://pypi.org/project/pqfile/>
+- npm: <https://www.npmjs.com/package/@dangel34/pqfile> (and `@dangel34/pqfile-win32-x64-msvc`)
 
 ---
 
