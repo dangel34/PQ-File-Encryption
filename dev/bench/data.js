@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788117051242,
+  "lastUpdate": 1790446801518,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -6119,6 +6119,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 48409,
             "range": "± 118",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "5482fb2dcbb2591644fc514e108bb0b4b23923f1",
+          "message": "fix(release): ship language bindings with every release\n\nThe Python/Node/mobile bindings were stuck at 0.1.0, so the v4.3.4 publish\nruns skipped a version that already existed and the 4.3.4 binding fix never\nreached PyPI or npm.\n\n- Version the bindings in lockstep with the core crate. bump-version.ps1\n  now bumps every binding manifest, pqfile-node's optionalDependencies pins\n  and index.js version checks, package-lock.json, and all four\n  workspace-excluded Cargo.lock files\n- release.yml's version gate covers the binding manifests; publish-python\n  and publish-node fail loudly on a tag/manifest mismatch\n- publish-node.yml still used @napi-rs/cli 2.x commands and the napi.triples\n  config, all removed in the 3.x CLI, so it could never have published.\n  Migrate to napi.targets + create-npm-dirs/artifacts and a per-package\n  npm publish loop that skips never-bootstrapped platform packages with\n  a warning\n- Regenerate index.js/index.d.ts with @napi-rs/cli 3.10.5\n- Document the binding release flow in RELEASING.md and the node README;\n  mark roadmap item 1 shipped",
+          "timestamp": "2026-09-26T14:15:59-04:00",
+          "tree_id": "9f2ce7693f268799e6dd2eb27040f1787d19494d",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/5482fb2dcbb2591644fc514e108bb0b4b23923f1"
+        },
+        "date": 1790446800503,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 57056,
+            "range": "± 302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 823419,
+            "range": "± 14731",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 91618228,
+            "range": "± 245197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 92093,
+            "range": "± 1200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 841722,
+            "range": "± 1339",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 81719381,
+            "range": "± 157816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 57133,
+            "range": "± 239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 847189,
+            "range": "± 1139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 86048696,
+            "range": "± 149129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 94114,
+            "range": "± 532",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 884227,
+            "range": "± 1251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 85850632,
+            "range": "± 184006",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 41684,
+            "range": "± 272",
             "unit": "ns/iter"
           }
         ]
