@@ -1,6 +1,6 @@
 [package]
 name = "pqfile-mobile"
-version = "0.1.0"
+version = "4.3.5"
 edition = "2021"
 publish = false
 description = "Kotlin/Swift bindings for pqfile: quantum-resistant file encryption"

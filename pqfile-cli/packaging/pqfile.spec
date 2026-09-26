@@ -1,5 +1,5 @@
 Name:           pqfile
-Version:        4.3.4
+Version:        4.3.5
 Release:        1%{?dist}
 Summary:        Quantum-resistant file encryption using ML-KEM-768 and ChaCha20-Poly1305
 
@@ -19,6 +19,9 @@ install -D -m 755 %{_builddir}/pqfile %{buildroot}%{_bindir}/pqfile
 %{_bindir}/pqfile
 
 %changelog
+* Sat Sep 26 2026 dangel34 <dma38091@protonmail.com> - 4.3.5-1
+- Ship language bindings with every release; dependency updates
+
 * Sun Aug 30 2026 dangel34 <dma38091@protonmail.com> - 4.3.4-1
 - Version bump
 

@@ -1,6 +1,6 @@
 [package]
 name = "pqfile-python"
-version = "0.1.0"
+version = "4.3.5"
 edition = "2021"
 publish = false
 description = "Python bindings for pqfile: quantum-resistant file encryption"

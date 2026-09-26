@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pqfile"
-version = "0.1.0"
+version = "4.3.5"
 description = "Quantum-resistant file encryption (ML-KEM, hybrid X25519+ML-KEM-768) - Python bindings"
 readme = "README.md"
 license = { text = "MIT" }

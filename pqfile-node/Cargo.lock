@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile"
-version = "4.3.4"
+version = "4.3.5"
 dependencies = [
  "aes-gcm",
  "apple-native-keyring-store",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "pqfile-node"
-version = "0.1.0"
+version = "4.3.5"
 dependencies = [
  "napi",
  "napi-build",

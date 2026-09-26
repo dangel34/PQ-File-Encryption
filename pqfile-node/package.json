@@ -1,6 +1,6 @@
 {
   "name": "@dangel34/pqfile",
-  "version": "0.1.0",
+  "version": "4.3.5",
   "description": "Quantum-resistant file encryption (ML-KEM, hybrid X25519+ML-KEM-768) - Node.js bindings",
   "license": "MIT",
   "repository": "https://github.com/dangel34/PQ-File-Encryption",
@@ -34,9 +34,9 @@
     "@napi-rs/cli": "^3"
   },
   "optionalDependencies": {
-    "@dangel34/pqfile-win32-x64-msvc": "0.1.0",
-    "@dangel34/pqfile-darwin-x64": "0.1.0",
-    "@dangel34/pqfile-linux-x64-gnu": "0.1.0",
-    "@dangel34/pqfile-darwin-arm64": "0.1.0"
+    "@dangel34/pqfile-win32-x64-msvc": "4.3.5",
+    "@dangel34/pqfile-darwin-x64": "4.3.5",
+    "@dangel34/pqfile-linux-x64-gnu": "4.3.5",
+    "@dangel34/pqfile-darwin-arm64": "4.3.5"
   }
 }
