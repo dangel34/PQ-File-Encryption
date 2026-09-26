@@ -22,9 +22,9 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1 (pinned for 1.98.0) # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1 (pinned for 1.98.1) # zizmor: ignore[ref-version-mismatch]
         with:
-          toolchain: 1.98.0
+          toolchain: 1.98.1
 
       # Idempotency guard: check crates.io REST API (not the sparse index, which lags).
       # Skips publishing any crate that is already present, so re-running the workflow
@@ -64,7 +64,7 @@ jobs:
 
       - name: Install cargo-semver-checks
         if: steps.check.outputs.pqfile_published == 'false'
-        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-semver-checks
 

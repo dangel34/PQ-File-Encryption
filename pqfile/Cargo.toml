@@ -24,7 +24,7 @@ zeroize = { version = "1", features = ["derive"] }
 pem = "4"
 thiserror = "2"
 sha3 = "0.12"
-argon2 = { version = "0.5", features = ["zeroize"] }
+argon2 = { version = "0.6", features = ["zeroize"] }
 aes-gcm = "0.11"
 # >=0.1.1 required: 0.1.0-rc.3 and earlier carry a Decompose timing side-channel
 # (RUSTSEC-2025-0144) and a signature-malleability regression (GHSA-5x2r-hc65-25f9),
@@ -70,7 +70,7 @@ getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 wasm-bindgen-test = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-zstd = { version = "0.13.3", features = ["zstdmt"] }
+zstd = { version = "0.14", features = ["zstdmt"] }
 # Core types for hardware-backed key credential storage.
 keyring-core = "1"
 # Memory-mapped I/O for zero-copy file encryption.
