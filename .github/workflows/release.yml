@@ -93,7 +93,7 @@ jobs:
       # provenance-attested binaries (zizmor cache-poisoning). Releases are
       # rare enough that a cold build is an acceptable price.
       - name: Install cargo-auditable
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-auditable
 
@@ -166,7 +166,7 @@ jobs:
       # binary from the steps above is what actually ships.
       - name: Install cargo-deb and cargo-generate-rpm
         if: matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-deb,cargo-generate-rpm
 
@@ -408,7 +408,7 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-cyclonedx
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-cyclonedx
 

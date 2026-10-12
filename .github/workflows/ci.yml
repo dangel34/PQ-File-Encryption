@@ -76,7 +76,7 @@ jobs:
           key-suffix: vet
 
       - name: Install cargo-vet
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           # Pinned: no GitHub release binary exists past v0.10.0, so an
           # unpinned "latest" silently resolves to that stale binary. Pinning
@@ -116,7 +116,7 @@ jobs:
           key-suffix: semver
 
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-semver-checks
 
@@ -284,7 +284,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: wasm-pack
 
