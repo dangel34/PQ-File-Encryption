@@ -4,6 +4,20 @@ All notable changes to pqfile are documented in this file. Versions follow seman
 
 ---
 
+## [Unreleased]
+
+### Dependency updates
+
+- **Nightly advisories scan fixed**: `rustls` 0.23.45 -> 0.23.46 (RUSTSEC-2026-0346/0347/0348/0349, reached via `drand_core` -> `ureq` in the optional `tlock` feature) and `yoke-derive` 0.8.3 -> 0.8.4 (yanked). `zvariant`, `zbus_names` and `zvariant_derive` were flagged unmaintained (RUSTSEC-2026-0370/0371/0372) after upstream folded them into zbus 6; they come in only through eframe's Linux AccessKit bridge (`accesskit_unix`), whose latest release still requires zbus 5, so they are ignored in `deny.toml` with a note to drop the ignores once accesskit moves to zbus 6.
+- **`eframe`/`egui_extras` 0.36 -> 0.37**: `egui::WidgetType` was renamed to `egui::Role` (an `accesskit::Role` re-export, with `Checkbox` now `CheckBox`) and `Id::new` was deprecated in favour of `Id::unique`, which hashes identically. Six call sites in `pqfile-gui` were migrated, with no behaviour change.
+- **`libcrux-ml-kem` 0.0.10 -> 0.0.11** (optional `kem-libcrux` backend plus the `kem_oracle` dev-dependency); the cross-implementation oracle test still agrees byte-for-byte with RustCrypto `ml-kem` (itself 0.3.2 -> 0.3.3).
+- **`pyo3` 0.29 -> 0.30** in `pqfile-python`, with no source changes needed; the pytest suite passes.
+- **`cargo update` across the root workspace and all four workspace-excluded crates**: ~60 patch/point releases (`tokio` 1.54, `zstd` 0.14.3, `zerocopy` 0.8.63, `zeroize` 1.9.1, `napi` 3.14.2, etc.). `generic-array` and `getrandom` 0.2/0.3 remain the permanent holds; `minicov` is still pinned upstream by `wasm-bindgen-test`.
+- **GitHub Actions pins refreshed**: `taiki-e/install-action` v2.87.21 -> v2.87.29, `SonarSource/sonarqube-scan-action` v8.2.2 -> v8.3.0, `actions/setup-node` v7.0.0 -> v7.1.0, `actions/upload-artifact` v7.0.1 -> v7.0.2, `actions/download-artifact` v8.0.1 -> v8.0.2, both `dtolnay/rust-toolchain` pins advanced to their current heads, and `publish.yml`'s `toolchain: 1.98.1` advanced to `1.99.1`.
+- **`cargo vet`**: imports refreshed and exemptions regenerated for the newly bumped versions.
+
+---
+
 ## [4.3.5] - 2026-09-26
 
 ### Fixes

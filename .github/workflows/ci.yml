@@ -67,7 +67,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
 
@@ -76,7 +76,7 @@ jobs:
           key-suffix: vet
 
       - name: Install cargo-vet
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           # Pinned: no GitHub release binary exists past v0.10.0, so an
           # unpinned "latest" silently resolves to that stale binary. Pinning
@@ -107,7 +107,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
 
@@ -116,7 +116,7 @@ jobs:
           key-suffix: semver
 
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-semver-checks
 
@@ -170,7 +170,7 @@ jobs:
       # benchmark history to it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
 
@@ -243,7 +243,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
           components: rustfmt, clippy
@@ -278,13 +278,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: wasm-pack
 
@@ -320,7 +320,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
 
@@ -367,11 +367,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
 
@@ -405,7 +405,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
 

@@ -51,7 +51,7 @@ impl Toasts {
             return;
         }
 
-        egui::Area::new(egui::Id::new("toast_area"))
+        egui::Area::new(egui::Id::unique("toast_area"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
             .order(egui::Order::Foreground)
             .interactable(false)

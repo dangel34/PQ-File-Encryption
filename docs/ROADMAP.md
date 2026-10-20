@@ -50,7 +50,7 @@ The `fec` feature depends on `reed-solomon` 0.2.1, whose last release was **2018
 ### Dependency watch (checked 2026-09-26)
 
 - `slh-dsa` is still `0.2.0-rc.5` (last release 2026-04-28); no stable 0.2.0 yet. Keep re-checking on each bump, per the comment in `pqfile/Cargo.toml`.
-- `ml-kem` 0.3.2 and `ml-dsa` 0.1.1 are current stable; `libcrux-ml-kem` 0.0.10 is current.
+- `ml-kem` 0.3.3 and `ml-dsa` 0.1.1 are current stable; `libcrux-ml-kem` 0.0.11 is current.
 - `tlock` 0.0.10 / `drand_core` 0.0.19 unchanged since 2026-07-12; the two upstream bugs fixed locally on 2026-07-15 should be re-checked against any new release before bumping.
 
 ### Standing guideline: BLAKE3 for new non-format hashing

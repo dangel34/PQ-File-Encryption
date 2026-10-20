@@ -34,7 +34,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable # zizmor: ignore[ref-version-mismatch]
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
 
@@ -42,7 +42,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y valgrind
 
       - name: Install iai-callgrind-runner
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           # Must exactly match the iai-callgrind version in pqfile/Cargo.toml
           # (dev-dependency) - a mismatch is a hard error at bench-run time.

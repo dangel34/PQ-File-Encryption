@@ -190,7 +190,7 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, label: &str, dark: bool) -> e
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label)
+        egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label)
     });
     if ui.is_rect_visible(rect) {
         let t = ui.ctx().animate_bool(response.id, *on);
@@ -1025,7 +1025,7 @@ pub(crate) fn copy_text_btn(ui: &mut egui::Ui, text: &str, dark: bool) -> bool {
         )
         .on_hover_text("Copy to clipboard");
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Copy to clipboard")
+        egui::WidgetInfo::labeled(egui::Role::Button, enabled, "Copy to clipboard")
     });
     response
         .clicked()

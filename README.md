@@ -1201,7 +1201,7 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 | bech32           | 0.12    | Bech32m encoding/decoding for compact recipient strings (`pqf1…`) |
 | rayon            | 1       | Parallel chunk processing (`--parallel`)                        |
 | thiserror        | 2       | Custom error type derivation                                    |
-| zstd             | 0.13    | Compression for v6 format (`--compress`)                        |
+| zstd             | 0.14    | Compression for v6 format (`--compress`)                        |
 | memmap2          | 0.9     | Memory-mapped I/O for zero-copy encrypt (`--mmap`, native only)  |
 | keyring-core     | 1       | Cross-platform OS credential store abstraction (hardware keys, native only) |
 | windows-native-keyring-store | 1 | Windows Credential Manager backend (Windows only)         |
@@ -1209,7 +1209,7 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 | linux-keyutils-keyring-store | 1 | Linux kernel keyutils session-keyring backend (Linux only) |
 | tokio            | 1       | Async runtime backing `async_io` (optional, feature `"async"`)  |
 | memsec           | 0.7     | `mlock`/`VirtualLock` for in-flight secrets (`secret.rs`'s `LockedSecret`)  |
-| libcrux-ml-kem   | 0.0.10  | Optional F*-verified ML-KEM backend (`kem-libcrux` feature); agrees byte-for-byte with the default RustCrypto `ml-kem` on FIPS 203, proven by a cross-implementation oracle test |
+| libcrux-ml-kem   | 0.0.11  | Optional F*-verified ML-KEM backend (`kem-libcrux` feature); agrees byte-for-byte with the default RustCrypto `ml-kem` on FIPS 203, proven by a cross-implementation oracle test |
 
 ### pqfile-cli (CLI binary, additional to the above)
 
@@ -1223,7 +1223,7 @@ Every push and pull request also runs `cargo clippy`, `cargo fmt --check`, `carg
 
 | Crate                    | Version | Purpose                                              |
 |--------------------------|---------|--------------------------------------------------------|
-| eframe                   | 0.36    | egui app framework (native rlib + WASM cdylib)         |
+| eframe                   | 0.37    | egui app framework (native rlib + WASM cdylib)         |
 | rfd                      | 0.17    | Native sync and WASM async file dialogs                |
 | image                    | 0.25    | PNG decoding for icons and QR codes                     |
 | qrcode                   | 0.14    | QR code generation (Shamir share air-gapped transfer)   |

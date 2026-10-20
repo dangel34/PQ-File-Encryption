@@ -39,6 +39,15 @@ ignore = [
     # compiled into a shipped binary or the WASM bundle, and never touches
     # attacker-controlled input. No safe upgrade exists per the advisory.
     "RUSTSEC-2025-0141",
+    # zvariant, zbus_names, and zvariant_derive are unmaintained as standalone
+    # crates (RUSTSEC-2026-0370/0371/0372); upstream folded them into zbus 6.
+    # Pulled in transitively by eframe -> egui-winit -> accesskit_winit ->
+    # accesskit_unix (Linux screen-reader bridge over AT-SPI/D-Bus). Even the
+    # latest accesskit_unix still requires zbus 5, so this cannot be updated
+    # from this repo; drop these once accesskit moves to zbus 6.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 # ---------------------------------------------------------------------------

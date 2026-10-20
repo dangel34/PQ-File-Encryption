@@ -1660,7 +1660,7 @@ fn recipient_row(
                 // is mouse-only tooltip text AccessKit never sees.
                 resp.widget_info(|| {
                     egui::WidgetInfo::labeled(
-                        egui::WidgetType::Button,
+                        egui::Role::Button,
                         ui.is_enabled(),
                         "Remove recipient",
                     )
@@ -1708,11 +1708,7 @@ fn file_entry_row(
                 // "x" alone isn't a useful accessible name, and on_hover_text
                 // is mouse-only tooltip text AccessKit never sees.
                 resp.widget_info(|| {
-                    egui::WidgetInfo::labeled(
-                        egui::WidgetType::Button,
-                        ui.is_enabled(),
-                        "Remove file",
-                    )
+                    egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Remove file")
                 });
                 remove = resp.clicked();
             }

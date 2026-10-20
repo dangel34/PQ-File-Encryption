@@ -80,7 +80,7 @@ memsec = { version = "0.7", default-features = false, features = ["use_os"] }
 # Optional F*-verified ML-KEM backend (`kem-libcrux` feature). Also listed
 # unconditionally below as a dev-dependency so tests/kem_oracle.rs runs on
 # every `cargo test` regardless of feature flags; Cargo unions the two.
-libcrux-ml-kem = { version = "0.0.10", optional = true }
+libcrux-ml-kem = { version = "0.0.11", optional = true }
 # Time-lock encryption (`tlock` feature): IBE over the drand beacon (tlock) and
 # a synchronous (ureq-based, no tokio) drand HTTP client (drand_core). This is
 # the only network-capable dependency in the workspace; both are optional so a
@@ -147,7 +147,7 @@ proptest = "1"
 # (tests/kem_oracle.rs) runs on every `cargo test`, independent of whether the
 # `kem-libcrux` feature (which also depends on this crate, see [dependencies]
 # above) is enabled.
-libcrux-ml-kem = "0.0.10"
+libcrux-ml-kem = "0.0.11"
 iai-callgrind = "0.16.1"
 
 [[bench]]

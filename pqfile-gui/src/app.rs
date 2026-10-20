@@ -902,7 +902,7 @@ impl eframe::App for PqfileApp {
             let accent = c_accent(dark);
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
-                egui::Id::new("drop_overlay"),
+                egui::Id::unique("drop_overlay"),
             ));
             let screen = ctx.viewport_rect();
             painter.rect_filled(screen, 0.0, Color32::from_black_alpha(140));
