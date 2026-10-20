@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790447922176,
+  "lastUpdate": 1792505812937,
   "repoUrl": "https://github.com/dangel34/PQ-File-Encryption",
   "entries": {
     "Benchmark": [
@@ -6323,6 +6323,108 @@ window.BENCHMARK_DATA = {
             "name": "keygen",
             "value": 49287,
             "range": "± 253",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "committer": {
+            "email": "dma38091@protonmail.com",
+            "name": "dangel34",
+            "username": "dma38091"
+          },
+          "distinct": true,
+          "id": "fc2096016a3b1af74f387d18d063419441d1707f",
+          "message": "chore(deps): update dependencies and GitHub Actions pins\n\n- Bumped `eframe` from 0.36 to 0.37, reflecting changes in `egui` with the renaming of `WidgetType` to `Role`.\n- Updated `libcrux-ml-kem` from 0.0.10 to 0.0.11.\n- Incremented various dependencies across the project, including `zstd` (0.13 to 0.14), `pyo3` (0.29 to 0.30), and others.\n- Refreshed GitHub Actions pins for `taiki-e/install-action`, `SonarSource/sonarqube-scan-action`, and others to their latest versions.\n- Addressed security advisories and updated `deny.toml` to ignore unmaintained crates until upstream dependencies are updated.",
+          "timestamp": "2026-10-20T10:13:00-04:00",
+          "tree_id": "615453c3df9956befeeea41c9e6ee96e57eba36a",
+          "url": "https://github.com/dangel34/PQ-File-Encryption/commit/fc2096016a3b1af74f387d18d063419441d1707f"
+        },
+        "date": 1792505812032,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "encrypt_bytes/1024",
+            "value": 51616,
+            "range": "± 1036",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/1048576",
+            "value": 820652,
+            "range": "± 2043",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_bytes/104857600",
+            "value": 92805064,
+            "range": "± 908704",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1024",
+            "value": 82599,
+            "range": "± 588",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/1048576",
+            "value": 828559,
+            "range": "± 5126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_bytes/104857600",
+            "value": 82004075,
+            "range": "± 104949",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1024",
+            "value": 51583,
+            "range": "± 186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/1048576",
+            "value": 842268,
+            "range": "± 19572",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "encrypt_stream/104857600",
+            "value": 87816727,
+            "range": "± 395788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1024",
+            "value": 83495,
+            "range": "± 824",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/1048576",
+            "value": 874620,
+            "range": "± 1739",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "decrypt_stream/104857600",
+            "value": 87106996,
+            "range": "± 219821",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "keygen",
+            "value": 36790,
+            "range": "± 170",
             "unit": "ns/iter"
           }
         ]
